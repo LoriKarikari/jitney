@@ -6,7 +6,7 @@ This record contains identifiers needed to reproduce the first deployment. It do
 
 - Worker: `jitney`
 - Endpoint: `https://jitney.lori-karikari.workers.dev/webhooks/github`
-- Worker version: `3ba78791-8bf6-4f71-99d7-d1fea7595408`
+- Worker version: `9bca53da-0c63-48d1-8b94-a4417384463e`
 - Container application: `jitney-runner`
 - Container image digest: `sha256:a092aeb711ad79d013212a3d3eb98ac7b099310a849c99405310688d1f03232c`
 - Container instance type: `standard-2` (1 vCPU, 6 GiB memory, 12 GB disk)

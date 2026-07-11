@@ -1,7 +1,7 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
 import { ProvisioningError } from "../src/github";
 import type { ProvisionRequest } from "../src/provisioning";
@@ -268,7 +268,61 @@ describe("Scheduler admission", () => {
     ]);
   });
 
-  it("records a typed provisioning failure", async () => {
+  it("reconstructs one lifecycle from correlated structured events", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("observable-lifecycle");
+    const event = queuedEvent(5003, "delivery-observable");
+    const accepted = await scheduler.accept(event);
+    if (accepted.runnerName === undefined) throw new Error("accepted attempt has no runner name");
+
+    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
+      const db = drizzle(state.storage, {
+        schema: { deliveries, jobs, attempts, assignments, pending },
+      });
+      await drainPending(db, () => Effect.void, "deployment-test");
+    });
+    await scheduler.accept({
+      ...event,
+      action: "in_progress",
+      deliveryId: "delivery-in-progress",
+      runnerName: accepted.runnerName,
+    });
+    await scheduler.accept({
+      ...event,
+      action: "completed",
+      deliveryId: "delivery-completed",
+      conclusion: "success",
+    });
+
+    const records = logged.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .filter((record) => record.workflowJobId === event.workflowJobId);
+    expect(records.map(({ event: name, action, outcome }) => ({ name, action, outcome }))).toEqual([
+      { name: "scheduler_transition", action: "queued", outcome: "accepted" },
+      { name: "runner_provisioning_started", action: undefined, outcome: undefined },
+      { name: "runner_provisioning_succeeded", action: undefined, outcome: undefined },
+      { name: "scheduler_transition", action: "in_progress", outcome: "recorded" },
+      { name: "scheduler_transition", action: "completed", outcome: "recorded" },
+    ]);
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          deliveryId: "delivery-observable",
+          deploymentId: "deployment-test",
+          installationId: 123,
+          repositoryId: 456,
+          workflowJobId: 5003,
+          runnerName: "jitney-456-5003-1",
+          containerName: "attempt-456-5003-1",
+        }),
+      ]),
+    );
+    logged.mockRestore();
+  });
+
+  it("records a typed provisioning failure without rendering its cause", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const canary = `ghs_${"SECRET_CANARY".repeat(4)}`;
     const scheduler = env.SCHEDULER.getByName("provisioning-failure");
     const event = queuedEvent(5002, "delivery-queued");
     await scheduler.accept(event);
@@ -278,7 +332,7 @@ describe("Scheduler admission", () => {
         schema: { deliveries, jobs, attempts, assignments, pending },
       });
       await drainPending(db, () =>
-        Effect.fail(new ProvisioningError({ step: "container_start", cause: "secret-value" })),
+        Effect.fail(new ProvisioningError({ step: "container_start", cause: canary })),
       );
     });
 
@@ -287,6 +341,8 @@ describe("Scheduler admission", () => {
       pending: false,
     });
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "failed" }]);
+    expect(String(logged.mock.calls[0]?.[0])).not.toContain(canary);
+    logged.mockRestore();
   });
 
   it("persists separate assignment and runtime deadlines", async () => {

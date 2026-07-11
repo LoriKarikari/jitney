@@ -35,7 +35,14 @@ export function createProvisioner(env: Env): Provision {
               env.RUNNER_CONTAINERS.getByName(
                 request.containerName,
               ) as DurableObjectStub<RunnerContainer>
-            ).startAttempt(jitConfig),
+            ).startAttempt({
+              jitConfig,
+              installationId: request.installationId,
+              repositoryId: request.repositoryId,
+              workflowJobId: request.workflowJobId,
+              runnerName: request.runnerName,
+              containerName: request.containerName,
+            }),
           catch: (cause) => new ProvisioningError({ step: "container_start", cause }),
         }),
       ),

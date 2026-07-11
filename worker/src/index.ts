@@ -1,3 +1,4 @@
+import { verify } from "@octokit/webhooks-methods";
 import { parseWorkflowEvent } from "./domain";
 
 export { RunnerContainer } from "./runner-container";
@@ -12,24 +13,9 @@ async function fetch(request: Request, env: Env): Promise<Response> {
   const body = await request.arrayBuffer();
   if (body.byteLength > 1_048_576) return new Response(null, { status: 413 });
 
-  const signatureHeader = request.headers.get("X-Hub-Signature-256");
-  if (!signatureHeader?.startsWith("sha256=")) return new Response(null, { status: 401 });
-
-  const hex = signatureHeader.slice(7);
-  if (hex.length !== 64 || !/^[0-9a-f]+$/i.test(hex)) return new Response(null, { status: 401 });
-
-  const supplied = Uint8Array.from({ length: 32 }, (_, i) =>
-    Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16),
-  );
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(env.GITHUB_WEBHOOK_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const expected = await crypto.subtle.sign("HMAC", key, body);
-  if (!crypto.subtle.timingSafeEqual(expected, supplied)) {
+  const signature = request.headers.get("X-Hub-Signature-256");
+  const bodyText = new TextDecoder().decode(body);
+  if (!signature || !(await verify(env.GITHUB_WEBHOOK_SECRET, bodyText, signature))) {
     return new Response(null, { status: 401 });
   }
 

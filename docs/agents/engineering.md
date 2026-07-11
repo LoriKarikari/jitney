@@ -200,22 +200,37 @@ The project uses five triage labels:
 - Run the full test suite before opening a PR. If tests are slow, filter to
   the relevant package, but run the full suite before requesting review.
 
-## Go tooling
+## Tooling
 
-Go code (the runner supervisor, future CLI work) uses this toolchain. The
-control plane (Ingress Worker, Scheduler DO) is TypeScript because Durable
-Object classes require the JavaScript runtime; its tooling arrives with that
-code.
+The repository has two self-contained modules. Go code and its module tooling
+live under `supervisor/`. TypeScript control-plane code and its package tooling
+live under `worker/`. The root Taskfile delegates to both.
 
 - **Taskfile** drives local automation: `task ci` runs the same checks as CI
   (verify, lint, race tests, govulncheck, gosec).
-- **golangci-lint** with the repo's `.golangci.yml` is the lint source of
+- **golangci-lint** with `supervisor/.golangci.yml` is the lint source of
   truth. Run `task lint` after every significant change.
 - CI runs tests with `-race -shuffle=on`, checks `go mod tidy` drift, and
   runs govulncheck, gosec, and CodeQL on every PR.
 - The supervisor builds as a static `CGO_ENABLED=0` linux/amd64 binary; it
   ships inside the runner image, not as a released archive.
 - `//nolint` directives must name the linter and carry a justification.
+
+### TypeScript
+
+- The control plane lives under `worker/` and uses pnpm with a committed
+  lockfile. Run `task ts:install` for a reproducible install.
+- Wrangler generates binding and runtime declarations in
+  `worker/worker-configuration.d.ts`. Regenerate them after changing
+  `wrangler.jsonc`.
+- TypeScript uses strict mode, including unchecked-index and exact-optional
+  checks.
+- Oxfmt is the formatter. Oxlint, including its type-aware rules, is the lint
+  source of truth. Use `pnpm fmt` to write formatting and `pnpm lint` to lint.
+- Vitest tests execute inside workerd through Cloudflare's Workers pool rather
+  than a Node.js approximation.
+- `task ts:check` runs generated types, typechecking, formatting checks,
+  linting, and tests. The same sequence runs in CI.
 
 ## Git hygiene
 

@@ -1,11 +1,12 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/durable-sqlite";
+import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { DurableObject } from "cloudflare:workers";
 import { Either, Effect } from "effect";
 import { attempts, deliveries, jobs, pending, schema } from "./schema";
 import type { WorkflowEvent } from "./domain";
-import { generateJitConfig, ProvisioningError } from "./github";
-import type { RunnerContainer } from "./runner-container";
+import type { Provision } from "./provisioning";
+import { createProvisioner } from "./provisioning";
+import { ProvisioningError } from "./github";
 
 const maxPendingJobs = 10;
 const maxActiveAttempts = 25;
@@ -230,93 +231,90 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   override async alarm(): Promise<void> {
-    const db = this.#db;
-    const pendingRow = db.select().from(pending).orderBy(pending.workflowJobId).all()[0];
-    if (pendingRow === undefined) return;
-
-    const event = JSON.parse(pendingRow.payload) as WorkflowEvent;
-
-    db.update(jobs)
-      .set({ state: "provisioning", updatedAt: Date.now() })
-      .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
-      .run();
-
-    const result = await Effect.runPromise(
-      generateJitConfig({
-        appId: this.env.GITHUB_APP_ID,
-        privateKey: this.env.GITHUB_APP_PRIVATE_KEY,
-        installationId: event.installationId,
-        repositoryId: event.repositoryId,
-        repositoryOwner: event.repositoryOwner,
-        repositoryName: event.repositoryName,
-        runnerName: pendingRow.runnerName,
-      }).pipe(
-        Effect.andThen((jitConfig) =>
-          Effect.tryPromise({
-            try: () =>
-              (
-                this.env.RUNNER_CONTAINERS.getByName(
-                  pendingRow.containerName,
-                ) as DurableObjectStub<RunnerContainer>
-              ).startAttempt(jitConfig),
-            catch: (cause) => new ProvisioningError({ step: "container_start", cause }),
-          }),
-        ),
-        Effect.either,
-      ),
-    );
-
-    if (Either.isRight(result)) {
-      db.update(jobs)
-        .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
-        .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
-        .run();
-      db.update(attempts)
-        .set({ state: "waiting_for_assignment" })
-        .where(
-          and(
-            eq(attempts.workflowJobId, pendingRow.workflowJobId),
-            eq(attempts.runnerName, pendingRow.runnerName),
-          ),
-        )
-        .run();
-      db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
-    } else {
-      const error = result.left;
-      const step = error instanceof ProvisioningError ? error.step : "installation_mismatch";
-
-      db.update(jobs)
-        .set({ state: "queued", updatedAt: Date.now() })
-        .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
-        .run();
-      db.update(attempts)
-        .set({ state: "failed" })
-        .where(
-          and(
-            eq(attempts.workflowJobId, pendingRow.workflowJobId),
-            eq(attempts.runnerName, pendingRow.runnerName),
-          ),
-        )
-        .run();
-      db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
-
-      console.error(
-        JSON.stringify({
-          event: "runner_provisioning_failed",
-          workflowJobId: pendingRow.workflowJobId,
-          runnerName: pendingRow.runnerName,
-          containerName: pendingRow.containerName,
-          step,
-        }),
-      );
-    }
-
-    const remaining = db
-      .select({ count: sql<number>`count(*)` })
-      .from(pending)
-      .all()[0];
-    if (remaining !== undefined && remaining.count > 0) {
+    if (await drainPending(this.#db, createProvisioner(this.env))) {
       await this.ctx.storage.setAlarm(Date.now() + 1_000);
     }
   }
+}
+
+type SchedulerSchema = {
+  deliveries: typeof deliveries;
+  jobs: typeof jobs;
+  attempts: typeof attempts;
+  pending: typeof pending;
+};
+
+export async function drainPending(
+  db: DrizzleSqliteDODatabase<SchedulerSchema>,
+  provision: Provision,
+): Promise<boolean> {
+  const pendingRow = db.select().from(pending).orderBy(pending.workflowJobId).all()[0];
+  if (pendingRow === undefined) return false;
+
+  const event = JSON.parse(pendingRow.payload) as WorkflowEvent;
+  db.update(jobs)
+    .set({ state: "provisioning", updatedAt: Date.now() })
+    .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+    .run();
+
+  const result = await Effect.runPromise(
+    provision({
+      installationId: event.installationId,
+      repositoryId: event.repositoryId,
+      repositoryOwner: event.repositoryOwner,
+      repositoryName: event.repositoryName,
+      workflowJobId: event.workflowJobId,
+      runnerName: pendingRow.runnerName,
+      containerName: pendingRow.containerName,
+    }).pipe(Effect.either),
+  );
+
+  if (Either.isRight(result)) {
+    db.update(jobs)
+      .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
+      .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+      .run();
+    db.update(attempts)
+      .set({ state: "waiting_for_assignment" })
+      .where(
+        and(
+          eq(attempts.workflowJobId, pendingRow.workflowJobId),
+          eq(attempts.runnerName, pendingRow.runnerName),
+        ),
+      )
+      .run();
+  } else {
+    const error = result.left;
+    const step = error instanceof ProvisioningError ? error.step : "installation_mismatch";
+
+    db.update(jobs)
+      .set({ state: "queued", updatedAt: Date.now() })
+      .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+      .run();
+    db.update(attempts)
+      .set({ state: "failed" })
+      .where(
+        and(
+          eq(attempts.workflowJobId, pendingRow.workflowJobId),
+          eq(attempts.runnerName, pendingRow.runnerName),
+        ),
+      )
+      .run();
+    console.error(
+      JSON.stringify({
+        event: "runner_provisioning_failed",
+        workflowJobId: pendingRow.workflowJobId,
+        runnerName: pendingRow.runnerName,
+        containerName: pendingRow.containerName,
+        step,
+      }),
+    );
+  }
+
+  db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
+  const remaining = db
+    .select({ count: sql<number>`count(*)` })
+    .from(pending)
+    .all()[0];
+  return remaining !== undefined && remaining.count > 0;
 }

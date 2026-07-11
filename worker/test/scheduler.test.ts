@@ -1,7 +1,12 @@
 import { env, runInDurableObject } from "cloudflare:test";
+import { drizzle } from "drizzle-orm/durable-sqlite";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
-import { Scheduler } from "../src/scheduler";
+import { ProvisioningError } from "../src/github";
+import type { ProvisionRequest } from "../src/provisioning";
+import { attempts, deliveries, jobs, pending } from "../src/schema";
+import { drainPending, Scheduler } from "../src/scheduler";
 
 function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
   return {
@@ -116,6 +121,71 @@ describe("Scheduler admission", () => {
     const rejected = queuedEvent(4026, "delivery-26");
     expect(await scheduler.accept(rejected)).toEqual({ outcome: "capacity_limited" });
     expect(await scheduler.getAttempts(rejected.workflowJobId)).toEqual([]);
+
+    let privilegedCalls = 0;
+    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
+      const db = drizzle(state.storage, { schema: { deliveries, jobs, attempts, pending } });
+      await drainPending(db, () => {
+        privilegedCalls++;
+        return Effect.void;
+      });
+    });
+    expect(privilegedCalls).toBe(0);
+  });
+
+  it("drains pending work through one privileged provisioning seam", async () => {
+    const scheduler = env.SCHEDULER.getByName("provisioning-seam");
+    const event = queuedEvent(5001, "delivery-queued");
+    await scheduler.accept(event);
+    const requests: ProvisionRequest[] = [];
+
+    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
+      const db = drizzle(state.storage, { schema: { deliveries, jobs, attempts, pending } });
+      expect(
+        await drainPending(db, (request) => {
+          requests.push(request);
+          return Effect.void;
+        }),
+      ).toBe(false);
+    });
+
+    expect(requests).toEqual([
+      {
+        installationId: 123,
+        repositoryId: 456,
+        repositoryOwner: "LoriKarikari",
+        repositoryName: "jitney-test",
+        workflowJobId: 5001,
+        runnerName: "jitney-456-5001-1",
+        containerName: "attempt-456-5001-1",
+      },
+    ]);
+    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+      state: "waiting_for_assignment",
+      pending: false,
+    });
+    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([
+      { state: "waiting_for_assignment" },
+    ]);
+  });
+
+  it("records a typed provisioning failure", async () => {
+    const scheduler = env.SCHEDULER.getByName("provisioning-failure");
+    const event = queuedEvent(5002, "delivery-queued");
+    await scheduler.accept(event);
+
+    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
+      const db = drizzle(state.storage, { schema: { deliveries, jobs, attempts, pending } });
+      await drainPending(db, () =>
+        Effect.fail(new ProvisioningError({ step: "container_start", cause: "secret-value" })),
+      );
+    });
+
+    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+      state: "queued",
+      pending: false,
+    });
+    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "failed" }]);
   });
 
   it("persists separate assignment and runtime deadlines", async () => {

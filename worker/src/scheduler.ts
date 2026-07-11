@@ -48,153 +48,181 @@ export class Scheduler extends DurableObject<Env> {
 
   async accept(event: WorkflowEvent): Promise<AcceptResult> {
     const now = Date.now();
-    const db = this.#db;
-    const delivery = db
-      .select({ deliveryId: deliveries.deliveryId })
-      .from(deliveries)
-      .where(eq(deliveries.deliveryId, event.deliveryId))
+    if (!this.#recordDelivery(event, now)) return { outcome: "duplicate" };
+
+    const job = this.#db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.workflowJobId, event.workflowJobId))
       .all()[0];
-    if (delivery !== undefined) return { outcome: "duplicate" };
-
-    db.insert(deliveries)
-      .values({ deliveryId: event.deliveryId, workflowJobId: event.workflowJobId, receivedAt: now })
-      .run();
-
-    const job = db.select().from(jobs).where(eq(jobs.workflowJobId, event.workflowJobId)).all()[0];
     if (job !== undefined && terminalJobStates.includes(job.state)) {
       return { outcome: "duplicate", ...(job.runnerName && { runnerName: job.runnerName }) };
     }
 
-    if (event.action === "queued") {
-      const viableAttempt = db
-        .select({ runnerName: attempts.runnerName })
-        .from(attempts)
-        .where(
-          and(
-            eq(attempts.workflowJobId, event.workflowJobId),
-            inArray(attempts.state, viableAttemptStates),
-          ),
-        )
-        .all()[0];
-      if (viableAttempt !== undefined) {
-        return { outcome: "duplicate", runnerName: viableAttempt.runnerName };
-      }
-
-      const pendingCount =
-        db
-          .select({ count: sql<number>`count(*)` })
-          .from(pending)
-          .all()[0]?.count ?? 0;
-      const activeCount =
-        db
-          .select({ count: sql<number>`count(*)` })
-          .from(attempts)
-          .where(inArray(attempts.state, viableAttemptStates))
-          .all()[0]?.count ?? 0;
-      if (pendingCount >= maxPendingJobs || activeCount >= maxActiveAttempts) {
-        db.insert(jobs)
-          .values({
-            workflowJobId: event.workflowJobId,
-            state: "capacity_limited",
-            repositoryId: event.repositoryId,
-            updatedAt: now,
-          })
-          .onConflictDoUpdate({
-            target: jobs.workflowJobId,
-            set: { state: "capacity_limited", updatedAt: now },
-          })
-          .run();
-        return { outcome: "capacity_limited" };
-      }
-
-      const previousAttempt = db
-        .select({ attempt: attempts.attempt })
-        .from(attempts)
-        .where(eq(attempts.workflowJobId, event.workflowJobId))
-        .orderBy(desc(attempts.attempt))
-        .all()[0];
-      const attempt = (previousAttempt?.attempt ?? 0) + 1;
-      const runnerName = `jitney-${event.repositoryId}-${event.workflowJobId}-${attempt}`;
-      const containerName = `attempt-${event.repositoryId}-${event.workflowJobId}-${attempt}`;
-
-      db.insert(jobs)
-        .values({
-          workflowJobId: event.workflowJobId,
-          state: "queued",
-          repositoryId: event.repositoryId,
-          updatedAt: now,
-        })
-        .onConflictDoUpdate({
-          target: jobs.workflowJobId,
-          set: { state: "queued", updatedAt: now },
-        })
-        .run();
-
-      db.insert(attempts)
-        .values({
-          workflowJobId: event.workflowJobId,
-          attempt,
-          state: "created",
-          runnerName,
-          containerName,
-          assignmentDeadline: now + assignmentTimeout,
-          runtimeDeadline: null,
-        })
-        .run();
-
-      db.insert(pending)
-        .values({
-          workflowJobId: event.workflowJobId,
-          payload: JSON.stringify(event),
-          runnerName,
-          containerName,
-        })
-        .onConflictDoUpdate({
-          target: pending.workflowJobId,
-          set: { payload: JSON.stringify(event), runnerName, containerName },
-        })
-        .run();
-
-      await this.ctx.storage.setAlarm(now + 1_000);
-      return { outcome: "accepted", runnerName };
-    }
-
+    if (event.action === "queued") return this.#acceptQueued(event, now);
     if (event.action === "in_progress" && event.runnerName !== undefined) {
-      db.update(jobs)
-        .set({ state: "running", runnerName: event.runnerName, updatedAt: now })
-        .where(eq(jobs.workflowJobId, event.workflowJobId))
-        .run();
-      db.update(attempts)
-        .set({ state: "running", runtimeDeadline: now + runtimeTimeout })
-        .where(eq(attempts.runnerName, event.runnerName))
-        .run();
-      return { outcome: "recorded", runnerName: event.runnerName };
+      return this.#recordAssignment(event, event.runnerName, now);
     }
-
-    if (event.action === "completed") {
-      const state =
-        event.conclusion === "cancelled"
-          ? "cancelled"
-          : event.conclusion === "success"
-            ? "completed"
-            : "failed";
-      db.update(jobs)
-        .set({ state, conclusion: event.conclusion ?? "unknown", updatedAt: now })
-        .where(eq(jobs.workflowJobId, event.workflowJobId))
-        .run();
-      db.update(attempts)
-        .set({ state: "stopped" })
-        .where(
-          and(
-            eq(attempts.workflowJobId, event.workflowJobId),
-            inArray(attempts.state, ["created", "starting", "waiting_for_assignment"]),
-          ),
-        )
-        .run();
-      db.delete(pending).where(eq(pending.workflowJobId, event.workflowJobId)).run();
-    }
-
+    if (event.action === "completed") this.#recordCompletion(event, now);
     return { outcome: "recorded" };
+  }
+
+  #recordDelivery(event: WorkflowEvent, now: number): boolean {
+    const delivery = this.#db
+      .select({ deliveryId: deliveries.deliveryId })
+      .from(deliveries)
+      .where(eq(deliveries.deliveryId, event.deliveryId))
+      .all()[0];
+    if (delivery !== undefined) return false;
+
+    this.#db
+      .insert(deliveries)
+      .values({ deliveryId: event.deliveryId, workflowJobId: event.workflowJobId, receivedAt: now })
+      .run();
+    return true;
+  }
+
+  async #acceptQueued(event: WorkflowEvent, now: number): Promise<AcceptResult> {
+    const viableAttempt = this.#db
+      .select({ runnerName: attempts.runnerName })
+      .from(attempts)
+      .where(
+        and(
+          eq(attempts.workflowJobId, event.workflowJobId),
+          inArray(attempts.state, viableAttemptStates),
+        ),
+      )
+      .all()[0];
+    if (viableAttempt !== undefined) {
+      return { outcome: "duplicate", runnerName: viableAttempt.runnerName };
+    }
+    if (!this.#hasCapacity()) {
+      this.#recordCapacityLimit(event, now);
+      return { outcome: "capacity_limited" };
+    }
+
+    const runnerName = this.#createAttempt(event, now);
+    await this.ctx.storage.setAlarm(now + 1_000);
+    return { outcome: "accepted", runnerName };
+  }
+
+  #hasCapacity(): boolean {
+    const pendingCount =
+      this.#db
+        .select({ count: sql<number>`count(*)` })
+        .from(pending)
+        .all()[0]?.count ?? 0;
+    const activeCount =
+      this.#db
+        .select({ count: sql<number>`count(*)` })
+        .from(attempts)
+        .where(inArray(attempts.state, viableAttemptStates))
+        .all()[0]?.count ?? 0;
+    return pendingCount < maxPendingJobs && activeCount < maxActiveAttempts;
+  }
+
+  #recordCapacityLimit(event: WorkflowEvent, now: number): void {
+    this.#db
+      .insert(jobs)
+      .values({
+        workflowJobId: event.workflowJobId,
+        state: "capacity_limited",
+        repositoryId: event.repositoryId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: jobs.workflowJobId,
+        set: { state: "capacity_limited", updatedAt: now },
+      })
+      .run();
+  }
+
+  #createAttempt(event: WorkflowEvent, now: number): string {
+    const previousAttempt = this.#db
+      .select({ attempt: attempts.attempt })
+      .from(attempts)
+      .where(eq(attempts.workflowJobId, event.workflowJobId))
+      .orderBy(desc(attempts.attempt))
+      .all()[0];
+    const attempt = (previousAttempt?.attempt ?? 0) + 1;
+    const runnerName = `jitney-${event.repositoryId}-${event.workflowJobId}-${attempt}`;
+    const containerName = `attempt-${event.repositoryId}-${event.workflowJobId}-${attempt}`;
+
+    this.#db
+      .insert(jobs)
+      .values({
+        workflowJobId: event.workflowJobId,
+        state: "queued",
+        repositoryId: event.repositoryId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({ target: jobs.workflowJobId, set: { state: "queued", updatedAt: now } })
+      .run();
+    this.#db
+      .insert(attempts)
+      .values({
+        workflowJobId: event.workflowJobId,
+        attempt,
+        state: "created",
+        runnerName,
+        containerName,
+        assignmentDeadline: now + assignmentTimeout,
+        runtimeDeadline: null,
+      })
+      .run();
+    this.#db
+      .insert(pending)
+      .values({
+        workflowJobId: event.workflowJobId,
+        payload: JSON.stringify(event),
+        runnerName,
+        containerName,
+      })
+      .onConflictDoUpdate({
+        target: pending.workflowJobId,
+        set: { payload: JSON.stringify(event), runnerName, containerName },
+      })
+      .run();
+    return runnerName;
+  }
+
+  #recordAssignment(event: WorkflowEvent, runnerName: string, now: number): AcceptResult {
+    this.#db
+      .update(jobs)
+      .set({ state: "running", runnerName, updatedAt: now })
+      .where(eq(jobs.workflowJobId, event.workflowJobId))
+      .run();
+    this.#db
+      .update(attempts)
+      .set({ state: "running", runtimeDeadline: now + runtimeTimeout })
+      .where(eq(attempts.runnerName, runnerName))
+      .run();
+    return { outcome: "recorded", runnerName };
+  }
+
+  #recordCompletion(event: WorkflowEvent, now: number): void {
+    const state =
+      event.conclusion === "cancelled"
+        ? "cancelled"
+        : event.conclusion === "success"
+          ? "completed"
+          : "failed";
+    this.#db
+      .update(jobs)
+      .set({ state, conclusion: event.conclusion ?? "unknown", updatedAt: now })
+      .where(eq(jobs.workflowJobId, event.workflowJobId))
+      .run();
+    this.#db
+      .update(attempts)
+      .set({ state: "stopped" })
+      .where(
+        and(
+          eq(attempts.workflowJobId, event.workflowJobId),
+          inArray(attempts.state, ["created", "starting", "waiting_for_assignment"]),
+        ),
+      )
+      .run();
+    this.#db.delete(pending).where(eq(pending.workflowJobId, event.workflowJobId)).run();
   }
 
   getJob(workflowJobId: number): JobSnapshot | undefined {
@@ -244,6 +272,8 @@ type SchedulerSchema = {
   pending: typeof pending;
 };
 
+type PendingRow = typeof pending.$inferSelect;
+
 export async function drainPending(
   db: DrizzleSqliteDODatabase<SchedulerSchema>,
   provision: Provision,
@@ -270,45 +300,9 @@ export async function drainPending(
   );
 
   if (Either.isRight(result)) {
-    db.update(jobs)
-      .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
-      .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
-      .run();
-    db.update(attempts)
-      .set({ state: "waiting_for_assignment" })
-      .where(
-        and(
-          eq(attempts.workflowJobId, pendingRow.workflowJobId),
-          eq(attempts.runnerName, pendingRow.runnerName),
-        ),
-      )
-      .run();
+    finishProvisioning(db, pendingRow);
   } else {
-    const error = result.left;
-    const step = error instanceof ProvisioningError ? error.step : "installation_mismatch";
-
-    db.update(jobs)
-      .set({ state: "queued", updatedAt: Date.now() })
-      .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
-      .run();
-    db.update(attempts)
-      .set({ state: "failed" })
-      .where(
-        and(
-          eq(attempts.workflowJobId, pendingRow.workflowJobId),
-          eq(attempts.runnerName, pendingRow.runnerName),
-        ),
-      )
-      .run();
-    console.error(
-      JSON.stringify({
-        event: "runner_provisioning_failed",
-        workflowJobId: pendingRow.workflowJobId,
-        runnerName: pendingRow.runnerName,
-        containerName: pendingRow.containerName,
-        step,
-      }),
-    );
+    failProvisioning(db, pendingRow, result.left);
   }
 
   db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
@@ -317,4 +311,52 @@ export async function drainPending(
     .from(pending)
     .all()[0];
   return remaining !== undefined && remaining.count > 0;
+}
+
+function finishProvisioning(
+  db: DrizzleSqliteDODatabase<SchedulerSchema>,
+  pendingRow: PendingRow,
+): void {
+  db.update(jobs)
+    .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
+    .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+    .run();
+  db.update(attempts)
+    .set({ state: "waiting_for_assignment" })
+    .where(
+      and(
+        eq(attempts.workflowJobId, pendingRow.workflowJobId),
+        eq(attempts.runnerName, pendingRow.runnerName),
+      ),
+    )
+    .run();
+}
+
+function failProvisioning(
+  db: DrizzleSqliteDODatabase<SchedulerSchema>,
+  pendingRow: PendingRow,
+  error: Effect.Effect.Error<ReturnType<Provision>>,
+): void {
+  db.update(jobs)
+    .set({ state: "queued", updatedAt: Date.now() })
+    .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+    .run();
+  db.update(attempts)
+    .set({ state: "failed" })
+    .where(
+      and(
+        eq(attempts.workflowJobId, pendingRow.workflowJobId),
+        eq(attempts.runnerName, pendingRow.runnerName),
+      ),
+    )
+    .run();
+  console.error(
+    JSON.stringify({
+      event: "runner_provisioning_failed",
+      workflowJobId: pendingRow.workflowJobId,
+      runnerName: pendingRow.runnerName,
+      containerName: pendingRow.containerName,
+      step: error instanceof ProvisioningError ? error.step : "installation_mismatch",
+    }),
+  );
 }

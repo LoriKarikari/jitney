@@ -16,7 +16,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: stable
-          cache-dependency-path: go.mod
+          cache-dependency-path: supervisor/go.mod
       - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
+          working-directory: supervisor

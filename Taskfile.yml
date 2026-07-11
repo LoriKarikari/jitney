@@ -19,16 +19,19 @@ tasks:
 
   fmt:
     desc: Format Go code
+    dir: supervisor
     cmds:
       - gofmt -w $(find . -name '*.go' -not -path './vendor/*')
 
   tidy:
     desc: Tidy Go modules
+    dir: supervisor
     cmds:
       - go mod tidy
 
   verify:
     desc: Verify module checksums and tidy state
+    dir: supervisor
     cmds:
       - go mod verify
       - go mod tidy
@@ -36,37 +39,62 @@ tasks:
 
   lint:
     desc: Run golangci-lint
+    dir: supervisor
     cmds:
       - golangci-lint run ./...
 
   test:
     desc: Run unit tests
+    dir: supervisor
     cmds:
       - go test ./...
 
   test:race:
     desc: Run unit tests with race detector
+    dir: supervisor
     cmds:
       - go test -race -shuffle=on -coverprofile=coverage.out ./...
 
   test:integration:
     desc: Run integration tests
+    dir: supervisor
     cmds:
       - go test -tags=integration -count=1 ./...
 
   vuln:
     desc: Run govulncheck
+    dir: supervisor
     cmds:
       - govulncheck ./...
 
   security:
     desc: Run security checks
+    dir: supervisor
     cmds:
       - gosec ./...
       - govulncheck ./...
 
+  ts:install:
+    desc: Install control-plane dependencies from the lockfile
+    dir: worker
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  ts:fmt:
+    desc: Format control-plane TypeScript
+    dir: worker
+    cmds:
+      - pnpm fmt
+
+  ts:check:
+    desc: Generate bindings, typecheck, format-check, lint, and test the control plane
+    dir: worker
+    cmds:
+      - pnpm check
+
   build:
     desc: Build the supervisor (static linux/amd64, as shipped in the runner image)
+    dir: supervisor
     env:
       CGO_ENABLED: '0'
       GOOS: linux
@@ -82,3 +110,4 @@ tasks:
       - task: test:race
       - task: vuln
       - task: security
+      - task: ts:check

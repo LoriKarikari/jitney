@@ -12,6 +12,9 @@ jobs:
   test:
     name: Go ${{ matrix.go }}
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: supervisor
     strategy:
       fail-fast: false
       matrix:
@@ -21,7 +24,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
-          cache-dependency-path: go.mod
+          cache-dependency-path: supervisor/go.mod
       - run: go mod tidy
       - run: git diff --exit-code -- go.mod go.sum
       - run: go mod verify

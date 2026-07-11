@@ -1,0 +1,44 @@
+name: TypeScript
+
+on:
+  pull_request:
+    paths:
+      - "worker/**"
+      - ".github/workflows/typescript.yml"
+  push:
+    branches: [main]
+    paths:
+      - "worker/**"
+      - ".github/workflows/typescript.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typescript-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, lint, and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.8.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: worker/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm types
+      - run: git diff --exit-code -- worker-configuration.d.ts
+      - run: pnpm typecheck
+      - run: pnpm fmt:check
+      - run: pnpm lint
+      - run: pnpm test

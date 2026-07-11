@@ -1,0 +1,33 @@
+{
+  "name": "jitney-worker",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Jitney control plane: ingress Worker, Scheduler Durable Object, runner Container Durable Objects",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --type-aware --deny-warnings .",
+    "lint:fix": "oxlint --type-aware --fix .",
+    "fmt": "oxfmt --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "types": "wrangler types",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "fmt:check": "oxfmt --check .",
+    "check": "pnpm types && pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm test"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.73.0",
+    "oxlint-tsgolint": "^0.24.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.110.0"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.8.0"
+}

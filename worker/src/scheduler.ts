@@ -219,18 +219,19 @@ export class Scheduler extends DurableObject<Env> {
         runtimeDeadline: null,
       })
       .run();
+    const intent = {
+      deliveryId: event.deliveryId,
+      installationId: event.installationId,
+      repositoryId: event.repositoryId,
+      repositoryOwner: event.repositoryOwner,
+      repositoryName: event.repositoryName,
+      runnerName,
+      containerName,
+    };
     this.#db
       .insert(pending)
-      .values({
-        workflowJobId: event.workflowJobId,
-        payload: JSON.stringify(event),
-        runnerName,
-        containerName,
-      })
-      .onConflictDoUpdate({
-        target: pending.workflowJobId,
-        set: { payload: JSON.stringify(event), runnerName, containerName },
-      })
+      .values({ workflowJobId: event.workflowJobId, ...intent })
+      .onConflictDoUpdate({ target: pending.workflowJobId, set: intent })
       .run();
     return runnerName;
   }
@@ -405,13 +406,12 @@ export async function drainPending(
   const pendingRow = db.select().from(pending).orderBy(pending.workflowJobId).all()[0];
   if (pendingRow === undefined) return false;
 
-  const event = JSON.parse(pendingRow.payload) as WorkflowEvent;
   emit("info", "runner_provisioning_started", {
-    deliveryId: event.deliveryId,
+    deliveryId: pendingRow.deliveryId,
     deploymentId,
-    installationId: event.installationId,
-    repositoryId: event.repositoryId,
-    workflowJobId: event.workflowJobId,
+    installationId: pendingRow.installationId,
+    repositoryId: pendingRow.repositoryId,
+    workflowJobId: pendingRow.workflowJobId,
     runnerName: pendingRow.runnerName,
     containerName: pendingRow.containerName,
   });
@@ -422,11 +422,11 @@ export async function drainPending(
 
   const result = await Effect.runPromise(
     provision({
-      installationId: event.installationId,
-      repositoryId: event.repositoryId,
-      repositoryOwner: event.repositoryOwner,
-      repositoryName: event.repositoryName,
-      workflowJobId: event.workflowJobId,
+      installationId: pendingRow.installationId,
+      repositoryId: pendingRow.repositoryId,
+      repositoryOwner: pendingRow.repositoryOwner,
+      repositoryName: pendingRow.repositoryName,
+      workflowJobId: pendingRow.workflowJobId,
       runnerName: pendingRow.runnerName,
       containerName: pendingRow.containerName,
     }).pipe(Effect.either),
@@ -435,16 +435,16 @@ export async function drainPending(
   if (Either.isRight(result)) {
     finishProvisioning(db, pendingRow);
     emit("info", "runner_provisioning_succeeded", {
-      deliveryId: event.deliveryId,
+      deliveryId: pendingRow.deliveryId,
       deploymentId,
-      installationId: event.installationId,
-      repositoryId: event.repositoryId,
-      workflowJobId: event.workflowJobId,
+      installationId: pendingRow.installationId,
+      repositoryId: pendingRow.repositoryId,
+      workflowJobId: pendingRow.workflowJobId,
       runnerName: pendingRow.runnerName,
       containerName: pendingRow.containerName,
     });
   } else {
-    failProvisioning(db, pendingRow, result.left, event, deploymentId);
+    failProvisioning(db, pendingRow, result.left, deploymentId);
   }
 
   db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
@@ -478,7 +478,6 @@ function failProvisioning(
   db: DrizzleSqliteDODatabase<SchedulerSchema>,
   pendingRow: PendingRow,
   error: Effect.Effect.Error<ReturnType<Provision>>,
-  event: WorkflowEvent,
   deploymentId?: string,
 ): void {
   db.update(jobs)
@@ -495,10 +494,10 @@ function failProvisioning(
     )
     .run();
   emit("error", "runner_provisioning_failed", {
-    deliveryId: event.deliveryId,
+    deliveryId: pendingRow.deliveryId,
     deploymentId,
-    installationId: event.installationId,
-    repositoryId: event.repositoryId,
+    installationId: pendingRow.installationId,
+    repositoryId: pendingRow.repositoryId,
     workflowJobId: pendingRow.workflowJobId,
     runnerName: pendingRow.runnerName,
     containerName: pendingRow.containerName,

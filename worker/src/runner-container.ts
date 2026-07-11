@@ -32,7 +32,7 @@ export class RunnerContainer extends Container<Env> {
       JSON.stringify({
         event: "runner_container_failed",
         containerId: this.ctx.id.toString(),
-        error: error instanceof Error ? error.message : "unknown error",
+        outcome: error instanceof Error ? "classified_error" : "unknown_error",
       }),
     );
     throw error;

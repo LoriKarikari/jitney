@@ -84,7 +84,7 @@ export async function generateJitConfig(input: ProvisioningInput): Promise<strin
     {
       method: "POST",
       body: JSON.stringify({
-        repositories: [input.repositoryName],
+        repository_ids: [input.repositoryId],
         permissions: { administration: "write", actions: "read" },
       }),
     },

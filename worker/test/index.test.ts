@@ -19,7 +19,7 @@ async function signature(body: string): Promise<string> {
   return `sha256=${hex}`;
 }
 
-function queuedPayload(): string {
+function queuedPayload(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
     action: "queued",
     installation: { id: 123 },
@@ -30,6 +30,7 @@ function queuedPayload(): string {
       owner: { login: "LoriKarikari" },
     },
     workflow_job: { id: 789, labels: ["jitney"], runner_name: null, conclusion: null },
+    ...overrides,
   });
 }
 
@@ -61,6 +62,48 @@ describe("worker entrypoint", () => {
         "X-Hub-Signature-256": await signature(body),
         "X-GitHub-Event": "ping",
         "X-GitHub-Delivery": "delivery-ping",
+      },
+      body,
+    });
+    expect(response.status).toBe(204);
+  });
+
+  it("returns 400 for a signed malformed workflow job", async () => {
+    const body = JSON.stringify({ action: "queued" });
+    const response = await exports.default.fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "X-Hub-Signature-256": await signature(body),
+        "X-GitHub-Event": "workflow_job",
+        "X-GitHub-Delivery": "delivery-malformed",
+      },
+      body,
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it.each([
+    [
+      "public repositories",
+      {
+        repository: {
+          id: 456,
+          name: "jitney-test",
+          private: false,
+          owner: { login: "LoriKarikari" },
+        },
+      },
+    ],
+    ["unsupported labels", { workflow_job: { id: 789, labels: ["ubuntu-latest"] } }],
+    ["additional unsatisfied labels", { workflow_job: { id: 789, labels: ["jitney", "gpu"] } }],
+  ])("ignores %s", async (_case, override) => {
+    const body = queuedPayload(override);
+    const response = await exports.default.fetch(webhookUrl, {
+      method: "POST",
+      headers: {
+        "X-Hub-Signature-256": await signature(body),
+        "X-GitHub-Event": "workflow_job",
+        "X-GitHub-Delivery": `delivery-${_case}`,
       },
       body,
     });

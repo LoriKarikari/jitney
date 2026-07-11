@@ -152,7 +152,8 @@ export class Scheduler extends DurableObject<Env> {
       .exec<PendingRow>(
         "SELECT workflow_job_id, payload, runner_name, container_name FROM pending ORDER BY workflow_job_id LIMIT 1",
       )
-      .one();
+      .toArray()[0];
+    if (pending === undefined) return;
     const event = JSON.parse(pending.payload) as WorkflowEvent;
 
     try {
@@ -193,13 +194,21 @@ export class Scheduler extends DurableObject<Env> {
         Date.now(),
         pending.workflow_job_id,
       );
+      this.ctx.storage.sql.exec(
+        "UPDATE attempts SET state = 'failed' WHERE workflow_job_id = ? AND attempt = 1",
+        pending.workflow_job_id,
+      );
+      this.ctx.storage.sql.exec(
+        "DELETE FROM pending WHERE workflow_job_id = ?",
+        pending.workflow_job_id,
+      );
       console.error(
         JSON.stringify({
           event: "runner_provisioning_failed",
           workflowJobId: pending.workflow_job_id,
           runnerName: pending.runner_name,
           containerName: pending.container_name,
-          error: error instanceof Error ? error.message : "unknown error",
+          outcome: error instanceof Error ? "classified_error" : "unknown_error",
         }),
       );
     }

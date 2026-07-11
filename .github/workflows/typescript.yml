@@ -22,6 +22,10 @@ jobs:
   check:
     name: Typecheck, lint, and test
     runs-on: ubuntu-latest
+    env:
+      GITHUB_WEBHOOK_SECRET: ci-placeholder
+      GITHUB_APP_ID: ci-placeholder
+      GITHUB_APP_PRIVATE_KEY: ci-placeholder
     defaults:
       run:
         working-directory: worker

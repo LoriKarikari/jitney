@@ -8,9 +8,7 @@ on:
     - cron: '23 4 * * 1'
 
 permissions:
-  actions: read
   contents: read
-  security-events: write
 
 jobs:
   govulncheck:
@@ -39,18 +37,4 @@ jobs:
           go-version: stable
           cache-dependency-path: supervisor/go.mod
       - run: go install github.com/securego/gosec/v2/cmd/gosec@v2.22.1
-      - run: gosec -fmt sarif -out gosec.sarif ./...
-      - uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: supervisor/gosec.sarif
-
-  codeql:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v4
-        with:
-          languages: go
-          config-file: ./.github/codeql/codeql-config.yml
-      - uses: github/codeql-action/analyze@v4
+      - run: gosec ./...

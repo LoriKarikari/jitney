@@ -26,6 +26,15 @@ export const attempts = sqliteTable("attempts", {
   runtimeDeadline: integer("runtime_deadline"),
 });
 
+export const assignments = sqliteTable("assignments", {
+  workflowJobId: integer("workflow_job_id").primaryKey(),
+  triggeringWorkflowJobId: integer("triggering_workflow_job_id").notNull(),
+  attempt: integer("attempt").notNull(),
+  runnerName: text("runner_name").notNull().unique(),
+  containerName: text("container_name").notNull(),
+  assignedAt: integer("assigned_at").notNull(),
+});
+
 export const pending = sqliteTable("pending", {
   workflowJobId: integer("workflow_job_id").primaryKey(),
   payload: text("payload").notNull(),
@@ -56,6 +65,14 @@ export const schema = sql`
     assignment_deadline INTEGER NOT NULL,
     runtime_deadline INTEGER,
     PRIMARY KEY (workflow_job_id, attempt)
+  );
+  CREATE TABLE IF NOT EXISTS assignments (
+    workflow_job_id INTEGER PRIMARY KEY,
+    triggering_workflow_job_id INTEGER NOT NULL,
+    attempt INTEGER NOT NULL,
+    runner_name TEXT NOT NULL UNIQUE,
+    container_name TEXT NOT NULL,
+    assigned_at INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS pending (
     workflow_job_id INTEGER PRIMARY KEY,

@@ -1,8 +1,10 @@
 import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
+import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import { DurableObject } from "cloudflare:workers";
 import { Either, Effect } from "effect";
-import { assignments, attempts, deliveries, jobs, pending, schema } from "./schema";
+import migrations from "../drizzle/migrations";
+import { assignments, attempts, deliveries, jobs, pending } from "./schema";
 import type { WorkflowEvent } from "./domain";
 import type { Provision } from "./provisioning";
 import { createProvisioner } from "./provisioning";
@@ -52,7 +54,7 @@ export class Scheduler extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     void ctx.blockConcurrencyWhile(async () => {
-      this.#db.run(schema);
+      await migrate(this.#db, migrations);
     });
   }
 

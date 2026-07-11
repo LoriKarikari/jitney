@@ -9,6 +9,7 @@ import type { WorkflowEvent } from "./domain";
 import type { Provision } from "./provisioning";
 import { createProvisioner } from "./provisioning";
 import { ProvisioningError } from "./github";
+import { emit } from "./log";
 
 const maxPendingJobs = 10;
 const maxActiveAttempts = 25;
@@ -59,26 +60,60 @@ export class Scheduler extends DurableObject<Env> {
 
   async accept(event: WorkflowEvent): Promise<AcceptResult> {
     const now = Date.now();
-    if (!this.#recordDelivery(event, now)) return { outcome: "duplicate" };
+    let result: AcceptResult;
 
+    if (!this.#recordDelivery(event, now)) {
+      result = { outcome: "duplicate" };
+    } else {
+      const job = this.#db
+        .select()
+        .from(jobs)
+        .where(eq(jobs.workflowJobId, event.workflowJobId))
+        .all()[0];
+      if (job !== undefined && terminalJobStates.includes(job.state)) {
+        result = { outcome: "duplicate", ...(job.runnerName && { runnerName: job.runnerName }) };
+      } else if (event.action === "queued" && job?.state === "running") {
+        result = { outcome: "duplicate", ...(job.runnerName && { runnerName: job.runnerName }) };
+      } else if (event.action === "queued") {
+        result = await this.#acceptQueued(event, now);
+      } else if (event.action === "in_progress" && event.runnerName !== undefined) {
+        result = this.#recordAssignment(event, event.runnerName, now);
+      } else {
+        if (event.action === "completed") this.#recordCompletion(event, now);
+        result = { outcome: "recorded" };
+      }
+    }
+
+    this.#emitTransition(event, result);
+    return result;
+  }
+
+  #emitTransition(event: WorkflowEvent, result: AcceptResult): void {
+    const runnerName = result.runnerName ?? event.runnerName;
+    const attempt =
+      runnerName === undefined
+        ? undefined
+        : this.#db.select().from(attempts).where(eq(attempts.runnerName, runnerName)).all()[0];
     const job = this.#db
-      .select()
+      .select({ state: jobs.state })
       .from(jobs)
       .where(eq(jobs.workflowJobId, event.workflowJobId))
       .all()[0];
-    if (job !== undefined && terminalJobStates.includes(job.state)) {
-      return { outcome: "duplicate", ...(job.runnerName && { runnerName: job.runnerName }) };
-    }
-    if (event.action === "queued" && job?.state === "running") {
-      return { outcome: "duplicate", ...(job.runnerName && { runnerName: job.runnerName }) };
-    }
 
-    if (event.action === "queued") return this.#acceptQueued(event, now);
-    if (event.action === "in_progress" && event.runnerName !== undefined) {
-      return this.#recordAssignment(event, event.runnerName, now);
-    }
-    if (event.action === "completed") this.#recordCompletion(event, now);
-    return { outcome: "recorded" };
+    emit("info", "scheduler_transition", {
+      deliveryId: event.deliveryId,
+      deploymentId: this.env.CF_VERSION_METADATA.id,
+      installationId: event.installationId,
+      repositoryId: event.repositoryId,
+      workflowJobId: event.workflowJobId,
+      attempt: attempt?.attempt,
+      runnerName,
+      containerName: attempt?.containerName,
+      action: event.action,
+      outcome: result.outcome,
+      state: job?.state,
+      conclusion: event.conclusion,
+    });
   }
 
   #recordDelivery(event: WorkflowEvent, now: number): boolean {
@@ -344,7 +379,9 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   override async alarm(): Promise<void> {
-    if (await drainPending(this.#db, createProvisioner(this.env))) {
+    if (
+      await drainPending(this.#db, createProvisioner(this.env), this.env.CF_VERSION_METADATA.id)
+    ) {
       await this.ctx.storage.setAlarm(Date.now() + 1_000);
     }
   }
@@ -363,11 +400,21 @@ type PendingRow = typeof pending.$inferSelect;
 export async function drainPending(
   db: DrizzleSqliteDODatabase<SchedulerSchema>,
   provision: Provision,
+  deploymentId?: string,
 ): Promise<boolean> {
   const pendingRow = db.select().from(pending).orderBy(pending.workflowJobId).all()[0];
   if (pendingRow === undefined) return false;
 
   const event = JSON.parse(pendingRow.payload) as WorkflowEvent;
+  emit("info", "runner_provisioning_started", {
+    deliveryId: event.deliveryId,
+    deploymentId,
+    installationId: event.installationId,
+    repositoryId: event.repositoryId,
+    workflowJobId: event.workflowJobId,
+    runnerName: pendingRow.runnerName,
+    containerName: pendingRow.containerName,
+  });
   db.update(jobs)
     .set({ state: "provisioning", updatedAt: Date.now() })
     .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
@@ -387,8 +434,17 @@ export async function drainPending(
 
   if (Either.isRight(result)) {
     finishProvisioning(db, pendingRow);
+    emit("info", "runner_provisioning_succeeded", {
+      deliveryId: event.deliveryId,
+      deploymentId,
+      installationId: event.installationId,
+      repositoryId: event.repositoryId,
+      workflowJobId: event.workflowJobId,
+      runnerName: pendingRow.runnerName,
+      containerName: pendingRow.containerName,
+    });
   } else {
-    failProvisioning(db, pendingRow, result.left);
+    failProvisioning(db, pendingRow, result.left, event, deploymentId);
   }
 
   db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
@@ -422,6 +478,8 @@ function failProvisioning(
   db: DrizzleSqliteDODatabase<SchedulerSchema>,
   pendingRow: PendingRow,
   error: Effect.Effect.Error<ReturnType<Provision>>,
+  event: WorkflowEvent,
+  deploymentId?: string,
 ): void {
   db.update(jobs)
     .set({ state: "queued", updatedAt: Date.now() })
@@ -436,13 +494,14 @@ function failProvisioning(
       ),
     )
     .run();
-  console.error(
-    JSON.stringify({
-      event: "runner_provisioning_failed",
-      workflowJobId: pendingRow.workflowJobId,
-      runnerName: pendingRow.runnerName,
-      containerName: pendingRow.containerName,
-      step: error instanceof ProvisioningError ? error.step : "installation_mismatch",
-    }),
-  );
+  emit("error", "runner_provisioning_failed", {
+    deliveryId: event.deliveryId,
+    deploymentId,
+    installationId: event.installationId,
+    repositoryId: event.repositoryId,
+    workflowJobId: pendingRow.workflowJobId,
+    runnerName: pendingRow.runnerName,
+    containerName: pendingRow.containerName,
+    step: error instanceof ProvisioningError ? error.step : "installation_mismatch",
+  });
 }

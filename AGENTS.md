@@ -2,12 +2,16 @@
 
 ### Issue tracker
 
-Issues and PRDs live as GitHub issues. External PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues using the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Five default labels: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
+Triage labels use the default Matt Pocock skills vocabulary. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context layout. See `docs/agents/domain.md`.
+This repo uses a single-context domain docs layout. See `docs/agents/domain.md`.
+
+### Engineering conventions
+
+Branch naming, conventional commits, PR process, testing, and git hygiene. See `docs/agents/engineering.md`.

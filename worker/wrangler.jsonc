@@ -3,7 +3,29 @@
   "name": "jitney",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": ["GITHUB_WEBHOOK_SECRET", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"],
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "SCHEDULER", "class_name": "Scheduler" },
+      { "name": "RUNNER_CONTAINERS", "class_name": "RunnerContainer" },
+    ],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Scheduler", "RunnerContainer"] }],
+  "containers": [
+    {
+      "name": "jitney-runner",
+      "class_name": "RunnerContainer",
+      "image": "../runner/Dockerfile",
+      "image_build_context": "..",
+      "instance_type": "standard-2",
+      "max_instances": 5,
+    },
+  ],
   "observability": {
     "enabled": true,
+    "head_sampling_rate": 1,
   },
 }

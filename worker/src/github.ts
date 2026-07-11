@@ -1,7 +1,7 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
 
-export interface ProvisioningInput {
+export type ProvisioningInput = {
   appId: string;
   privateKey: string;
   installationId: number;
@@ -9,7 +9,7 @@ export interface ProvisioningInput {
   repositoryOwner: string;
   repositoryName: string;
   runnerName: string;
-}
+};
 
 export async function generateJitConfig(input: ProvisioningInput): Promise<string> {
   const auth = createAppAuth({ appId: input.appId, privateKey: input.privateKey });

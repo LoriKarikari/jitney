@@ -3,18 +3,18 @@ import type { WorkflowEvent } from "./domain";
 import { generateJitConfig } from "./github";
 import type { RunnerContainer } from "./runner-container";
 
-export interface AcceptResult {
+export type AcceptResult = {
   outcome: "accepted" | "recorded";
   runnerName?: string;
-}
+};
 
-export interface JobSnapshot {
+export type JobSnapshot = {
   workflowJobId: number;
   state: string;
   repositoryId: number;
   runnerName?: string;
   pending: boolean;
-}
+};
 
 type PendingRow = Record<string, SqlStorageValue> & {
   workflow_job_id: number;

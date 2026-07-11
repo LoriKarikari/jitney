@@ -1,6 +1,6 @@
 export type WorkflowAction = "queued" | "in_progress" | "completed";
 
-export interface WorkflowEvent {
+export type WorkflowEvent = {
   deliveryId: string;
   action: WorkflowAction;
   installationId: number;
@@ -12,7 +12,7 @@ export interface WorkflowEvent {
   labels: string[];
   runnerName?: string;
   conclusion?: string;
-}
+};
 
 export type ParseResult =
   | { kind: "accepted"; event: WorkflowEvent }

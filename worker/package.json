@@ -17,6 +17,9 @@
     "fmt:check": "oxfmt --check .",
     "check": "pnpm types && pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm test"
   },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.4",
     "oxfmt": "^0.58.0",

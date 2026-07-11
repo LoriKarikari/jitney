@@ -11,7 +11,7 @@ export type LifecycleEvent =
   | "runner_container_stopped"
   | "runner_container_failed";
 
-type StringField =
+type StringFieldName =
   | "runnerName"
   | "containerName"
   | "containerId"
@@ -23,12 +23,12 @@ type StringField =
   | "conclusion"
   | "stopReason";
 
-type NumberField = "installationId" | "repositoryId" | "workflowJobId" | "attempt" | "exitCode";
+type NumberFieldName = "installationId" | "repositoryId" | "workflowJobId" | "attempt" | "exitCode";
 
 type OptionalRecord<Key extends PropertyKey, Value> = Partial<Record<Key, Value | undefined>>;
 
-export type LifecycleFields = OptionalRecord<StringField, string> &
-  OptionalRecord<NumberField, number> &
+export type LifecycleFields = OptionalRecord<StringFieldName, string> &
+  OptionalRecord<NumberFieldName, number> &
   OptionalRecord<"deliveryId", string | null>;
 
 const allowedFields = [

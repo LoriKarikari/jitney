@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -44,6 +45,7 @@ func run() error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start runner: %w", err)
 	}
+	logEvent("runner_process_started", cmd.Process.Pid, "started", 0)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
@@ -53,8 +55,10 @@ func run() error {
 
 	select {
 	case err := <-done:
+		logEvent("runner_process_exited", cmd.Process.Pid, "exit", exitCode(err))
 		return exitResult(err)
-	case <-signals:
+	case signal := <-signals:
+		logEvent("runner_shutdown_started", cmd.Process.Pid, signal.String(), 0)
 		return shutdown(cmd.Process.Pid, done)
 	}
 }
@@ -64,18 +68,45 @@ func shutdown(pid int, done <-chan error) error {
 		return err
 	}
 	if exited, err := wait(done, gracefulTimeout); exited {
+		logEvent("runner_process_exited", pid, "sigint", exitCode(err))
 		return exitResult(err)
 	}
+	logEvent("runner_shutdown_escalated", pid, "sigterm", 0)
 	if err := signalSession(pid, syscall.SIGTERM); err != nil {
 		return err
 	}
 	if exited, err := wait(done, terminateWait); exited {
+		logEvent("runner_process_exited", pid, "sigterm", exitCode(err))
 		return exitResult(err)
 	}
+	logEvent("runner_shutdown_escalated", pid, "sigkill", 0)
 	if err := signalSession(pid, syscall.SIGKILL); err != nil {
 		return err
 	}
-	return exitResult(<-done)
+	err := <-done
+	logEvent("runner_process_exited", pid, "sigkill", exitCode(err))
+	return exitResult(err)
+}
+
+func logEvent(event string, pid int, reason string, code int) {
+	record := struct {
+		Event    string `json:"event"`
+		PID      int    `json:"pid"`
+		Reason   string `json:"reason"`
+		ExitCode int    `json:"exitCode,omitempty"`
+	}{Event: event, PID: pid, Reason: reason, ExitCode: code}
+	_ = json.NewEncoder(os.Stdout).Encode(record)
+}
+
+func exitCode(err error) int {
+	if err == nil {
+		return 0
+	}
+	var exitError *exec.ExitError
+	if errors.As(err, &exitError) {
+		return exitError.ExitCode()
+	}
+	return -1
 }
 
 func signalSession(pid int, sig syscall.Signal) error {

@@ -35,7 +35,7 @@ async function fetch(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 204 });
   }
 
-  const result = await env.SCHEDULER.getByName("global").accept(parsed.event);
+  const result = await env.SCHEDULER.getByName("global-v2").accept(parsed.event);
   console.log(
     JSON.stringify({
       event: "webhook_classified",

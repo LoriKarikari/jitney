@@ -27,7 +27,10 @@ export function generateJitConfig(
 ): Effect.Effect<string, InstallationMismatch | ProvisioningError> {
   return Effect.gen(function* () {
     const auth = createAppAuth({ appId: input.appId, privateKey: input.privateKey });
-    const app = new Octokit({ authStrategy: auth, auth: { type: "app" } });
+    const app = new Octokit({
+      authStrategy: createAppAuth,
+      auth: { appId: input.appId, privateKey: input.privateKey },
+    });
 
     const installation = yield* Effect.tryPromise({
       try: () =>

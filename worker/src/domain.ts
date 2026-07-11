@@ -19,80 +19,75 @@ export type ParseResult =
   | { kind: "ignored" }
   | { kind: "malformed" };
 
-type RecordValue = Record<string, unknown>;
-
-function record(value: unknown): RecordValue | undefined {
-  return typeof value === "object" && value !== null ? (value as RecordValue) : undefined;
-}
-
-function integer(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
-}
-
-function string(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 export function parseWorkflowEvent(
   eventName: string | null,
   deliveryId: string | null,
   body: ArrayBuffer,
 ): ParseResult {
   if (eventName !== "workflow_job") return { kind: "ignored" };
-  if (deliveryId === null || deliveryId.length === 0) return { kind: "malformed" };
+  if (!deliveryId) return { kind: "malformed" };
 
-  let decoded: unknown;
+  let payload: Record<string, unknown>;
   try {
-    decoded = JSON.parse(new TextDecoder().decode(body));
+    payload = JSON.parse(new TextDecoder().decode(body));
   } catch {
     return { kind: "malformed" };
   }
 
-  const payload = record(decoded);
-  const repository = record(payload?.repository);
-  const owner = record(repository?.owner);
-  const installation = record(payload?.installation);
-  const job = record(payload?.workflow_job);
-  const action = string(payload?.action);
-
+  const action = payload.action;
   if (action !== "queued" && action !== "in_progress" && action !== "completed") {
     return { kind: "ignored" };
   }
 
+  const repository = payload.repository as Record<string, unknown> | undefined;
+  const owner = repository?.owner as Record<string, unknown> | undefined;
+  const installation = payload.installation as Record<string, unknown> | undefined;
+  const job = payload.workflow_job as Record<string, unknown> | undefined;
+
   const rawLabels = job?.labels;
-  if (!Array.isArray(rawLabels) || !rawLabels.every((label) => typeof label === "string")) {
+  if (!Array.isArray(rawLabels) || !rawLabels.every((l) => typeof l === "string")) {
     return { kind: "malformed" };
+  }
+
+  const installationId = installation?.id;
+  const repositoryId = repository?.id;
+  const repositoryOwner = owner?.login;
+  const repositoryName = repository?.name;
+  const workflowJobId = job?.id;
+
+  if (
+    typeof installationId !== "number" ||
+    typeof repositoryId !== "number" ||
+    typeof repositoryOwner !== "string" ||
+    typeof repositoryName !== "string" ||
+    typeof workflowJobId !== "number"
+  ) {
+    return { kind: "malformed" };
+  }
+
+  if (repository?.private !== true || rawLabels.length !== 1 || rawLabels[0] !== "jitney") {
+    return { kind: "ignored" };
   }
 
   const event: WorkflowEvent = {
     deliveryId,
     action,
-    installationId: integer(installation?.id) ?? 0,
-    repositoryId: integer(repository?.id) ?? 0,
-    repositoryOwner: string(owner?.login) ?? "",
-    repositoryName: string(repository?.name) ?? "",
-    repositoryPrivate: repository?.private === true,
-    workflowJobId: integer(job?.id) ?? 0,
+    installationId,
+    repositoryId,
+    repositoryOwner,
+    repositoryName,
+    repositoryPrivate: true,
+    workflowJobId,
     labels: rawLabels,
   };
 
-  const runnerName = string(job?.runner_name);
-  if (action === "in_progress" && runnerName !== undefined) event.runnerName = runnerName;
-  const conclusion = string(job?.conclusion);
-  if (action === "completed" && conclusion !== undefined) event.conclusion = conclusion;
-
-  if (
-    event.installationId === 0 ||
-    event.repositoryId === 0 ||
-    event.repositoryOwner.length === 0 ||
-    event.repositoryName.length === 0 ||
-    event.workflowJobId === 0
-  ) {
-    return { kind: "malformed" };
+  if (action === "in_progress") {
+    const runnerName = job?.runner_name;
+    if (typeof runnerName === "string") event.runnerName = runnerName;
   }
-
-  if (!event.repositoryPrivate || rawLabels.length !== 1 || rawLabels[0] !== "jitney") {
-    return { kind: "ignored" };
+  if (action === "completed") {
+    const conclusion = job?.conclusion;
+    if (typeof conclusion === "string") event.conclusion = conclusion;
   }
 
   return { kind: "accepted", event };

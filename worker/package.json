@@ -18,7 +18,9 @@
     "check": "pnpm types && pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm test"
   },
   "dependencies": {
-    "@cloudflare/containers": "^0.3.7"
+    "@cloudflare/containers": "^0.3.7",
+    "@octokit/auth-app": "^8.2.0",
+    "octokit": "^5.0.5"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.4",

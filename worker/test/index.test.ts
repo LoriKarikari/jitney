@@ -128,7 +128,7 @@ describe("worker entrypoint", () => {
     });
 
     expect(response.status).toBe(202);
-    const job = await env.SCHEDULER.getByName("global").getJob(789);
+    const job = await env.SCHEDULER.getByName("global-v2").getJob(789);
     expect(job).toEqual({ workflowJobId: 789, state: "queued", repositoryId: 456, pending: true });
   });
 });

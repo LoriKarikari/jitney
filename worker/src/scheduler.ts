@@ -1,8 +1,8 @@
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { DurableObject } from "cloudflare:workers";
 import { Either, Effect } from "effect";
-import { attempts, deliveries, jobs, pending, schema } from "./schema";
+import { assignments, attempts, deliveries, jobs, pending, schema } from "./schema";
 import type { WorkflowEvent } from "./domain";
 import type { Provision } from "./provisioning";
 import { createProvisioner } from "./provisioning";
@@ -12,11 +12,18 @@ const maxPendingJobs = 10;
 const maxActiveAttempts = 25;
 const assignmentTimeout = 5 * 60_000;
 const runtimeTimeout = 60 * 60_000;
-const viableAttemptStates = ["created", "starting", "waiting_for_assignment", "running"];
+const viableAttemptStates = ["created", "starting", "waiting_for_assignment"];
+const activeAttemptStates = [...viableAttemptStates, "running"];
 const terminalJobStates = ["completed", "cancelled", "failed"];
 
 export type AcceptResult = {
-  outcome: "accepted" | "recorded" | "duplicate" | "capacity_limited";
+  outcome:
+    | "accepted"
+    | "recorded"
+    | "duplicate"
+    | "capacity_limited"
+    | "unknown_assignment"
+    | "conflicting_assignment";
   runnerName?: string;
 };
 
@@ -36,8 +43,10 @@ export type AttemptSnapshot = {
   runtimeDeadline: number | null;
 };
 
+export type AssignmentSnapshot = typeof assignments.$inferSelect;
+
 export class Scheduler extends DurableObject<Env> {
-  #db = drizzle(this.ctx.storage, { schema: { deliveries, jobs, attempts, pending } });
+  #db = drizzle(this.ctx.storage, { schema: { deliveries, jobs, attempts, assignments, pending } });
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -56,6 +65,9 @@ export class Scheduler extends DurableObject<Env> {
       .where(eq(jobs.workflowJobId, event.workflowJobId))
       .all()[0];
     if (job !== undefined && terminalJobStates.includes(job.state)) {
+      return { outcome: "duplicate", ...(job.runnerName && { runnerName: job.runnerName }) };
+    }
+    if (event.action === "queued" && job?.state === "running") {
       return { outcome: "duplicate", ...(job.runnerName && { runnerName: job.runnerName }) };
     }
 
@@ -116,7 +128,7 @@ export class Scheduler extends DurableObject<Env> {
       this.#db
         .select({ count: sql<number>`count(*)` })
         .from(attempts)
-        .where(inArray(attempts.state, viableAttemptStates))
+        .where(inArray(attempts.state, activeAttemptStates))
         .all()[0]?.count ?? 0;
     return pendingCount < maxPendingJobs && activeCount < maxActiveAttempts;
   }
@@ -187,6 +199,44 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   #recordAssignment(event: WorkflowEvent, runnerName: string, now: number): AcceptResult {
+    const attempt = this.#db
+      .select()
+      .from(attempts)
+      .where(eq(attempts.runnerName, runnerName))
+      .all()[0];
+    if (attempt === undefined) return { outcome: "unknown_assignment", runnerName };
+
+    const jobAssignment = this.#db
+      .select()
+      .from(assignments)
+      .where(eq(assignments.workflowJobId, event.workflowJobId))
+      .all()[0];
+    const runnerAssignment = this.#db
+      .select()
+      .from(assignments)
+      .where(eq(assignments.runnerName, runnerName))
+      .all()[0];
+    if (
+      jobAssignment?.runnerName === runnerName &&
+      runnerAssignment?.workflowJobId === event.workflowJobId
+    ) {
+      return { outcome: "duplicate", runnerName };
+    }
+    if (jobAssignment !== undefined || runnerAssignment !== undefined) {
+      return { outcome: "conflicting_assignment", runnerName };
+    }
+
+    this.#db
+      .insert(assignments)
+      .values({
+        workflowJobId: event.workflowJobId,
+        triggeringWorkflowJobId: attempt.workflowJobId,
+        attempt: attempt.attempt,
+        runnerName,
+        containerName: attempt.containerName,
+        assignedAt: now,
+      })
+      .run();
     this.#db
       .update(jobs)
       .set({ state: "running", runnerName, updatedAt: now })
@@ -197,6 +247,28 @@ export class Scheduler extends DurableObject<Env> {
       .set({ state: "running", runtimeDeadline: now + runtimeTimeout })
       .where(eq(attempts.runnerName, runnerName))
       .run();
+    this.#db
+      .delete(pending)
+      .where(inArray(pending.workflowJobId, [event.workflowJobId, attempt.workflowJobId]))
+      .run();
+    this.#db
+      .update(attempts)
+      .set({ state: "stopped" })
+      .where(
+        and(
+          eq(attempts.workflowJobId, event.workflowJobId),
+          inArray(attempts.state, viableAttemptStates),
+          ne(attempts.runnerName, runnerName),
+        ),
+      )
+      .run();
+    if (attempt.workflowJobId !== event.workflowJobId) {
+      this.#db
+        .update(jobs)
+        .set({ state: "queued", updatedAt: now })
+        .where(eq(jobs.workflowJobId, attempt.workflowJobId))
+        .run();
+    }
     return { outcome: "recorded", runnerName };
   }
 
@@ -212,16 +284,19 @@ export class Scheduler extends DurableObject<Env> {
       .set({ state, conclusion: event.conclusion ?? "unknown", updatedAt: now })
       .where(eq(jobs.workflowJobId, event.workflowJobId))
       .run();
-    this.#db
-      .update(attempts)
-      .set({ state: "stopped" })
-      .where(
-        and(
-          eq(attempts.workflowJobId, event.workflowJobId),
-          inArray(attempts.state, ["created", "starting", "waiting_for_assignment"]),
-        ),
-      )
-      .run();
+
+    const assignment = this.#db
+      .select()
+      .from(assignments)
+      .where(eq(assignments.workflowJobId, event.workflowJobId))
+      .all()[0];
+    if (assignment !== undefined) {
+      this.#db
+        .update(attempts)
+        .set({ state: "stopped" })
+        .where(eq(attempts.runnerName, assignment.runnerName))
+        .run();
+    }
     this.#db.delete(pending).where(eq(pending.workflowJobId, event.workflowJobId)).run();
   }
 
@@ -258,6 +333,14 @@ export class Scheduler extends DurableObject<Env> {
       .all();
   }
 
+  getAssignment(workflowJobId: number): AssignmentSnapshot | undefined {
+    return this.#db
+      .select()
+      .from(assignments)
+      .where(eq(assignments.workflowJobId, workflowJobId))
+      .all()[0];
+  }
+
   override async alarm(): Promise<void> {
     if (await drainPending(this.#db, createProvisioner(this.env))) {
       await this.ctx.storage.setAlarm(Date.now() + 1_000);
@@ -269,6 +352,7 @@ type SchedulerSchema = {
   deliveries: typeof deliveries;
   jobs: typeof jobs;
   attempts: typeof attempts;
+  assignments: typeof assignments;
   pending: typeof pending;
 };
 

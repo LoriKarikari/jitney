@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
 import { ProvisioningError } from "../src/github";
 import type { ProvisionRequest } from "../src/provisioning";
-import { attempts, deliveries, jobs, pending } from "../src/schema";
+import { assignments, attempts, deliveries, jobs, pending } from "../src/schema";
 import { drainPending, Scheduler } from "../src/scheduler";
 
 function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
@@ -81,7 +81,7 @@ describe("Scheduler admission", () => {
       state: expectedState,
       pending: false,
     });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "stopped" }]);
+    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "created" }]);
   });
 
   it("rejects work durably when pending-work capacity is exhausted", async () => {
@@ -124,13 +124,110 @@ describe("Scheduler admission", () => {
 
     let privilegedCalls = 0;
     await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-      const db = drizzle(state.storage, { schema: { deliveries, jobs, attempts, pending } });
+      const db = drizzle(state.storage, {
+        schema: { deliveries, jobs, attempts, assignments, pending },
+      });
       await drainPending(db, () => {
         privilegedCalls++;
         return Effect.void;
       });
     });
     expect(privilegedCalls).toBe(0);
+  });
+
+  it("binds a job to its assigned Runner Attempt", async () => {
+    const scheduler = env.SCHEDULER.getByName("same-job-assignment");
+    const event = queuedEvent(4501, "delivery-queued");
+    const accepted = await scheduler.accept(event);
+    const runnerName = accepted.runnerName;
+    if (runnerName === undefined) throw new Error("accepted attempt has no runner name");
+
+    expect(
+      await scheduler.accept({
+        ...event,
+        action: "in_progress",
+        deliveryId: "delivery-running",
+        runnerName,
+      }),
+    ).toEqual({ outcome: "recorded", runnerName });
+    expect(await scheduler.getAssignment(event.workflowJobId)).toMatchObject({
+      workflowJobId: 4501,
+      triggeringWorkflowJobId: 4501,
+      attempt: 1,
+      runnerName,
+      containerName: "attempt-456-4501-1",
+    });
+  });
+
+  it("binds a job to a Runner Attempt triggered by another job", async () => {
+    const scheduler = env.SCHEDULER.getByName("cross-assignment");
+    const jobA = queuedEvent(4601, "delivery-a-queued");
+    const jobB = queuedEvent(4602, "delivery-b-queued");
+    const attemptA = await scheduler.accept(jobA);
+    await scheduler.accept(jobB);
+    const runnerName = attemptA.runnerName;
+    if (runnerName === undefined) throw new Error("accepted attempt has no runner name");
+
+    await scheduler.accept({
+      ...jobB,
+      action: "in_progress",
+      deliveryId: "delivery-b-running",
+      runnerName,
+    });
+
+    expect(await scheduler.getAssignment(jobB.workflowJobId)).toMatchObject({
+      workflowJobId: 4602,
+      triggeringWorkflowJobId: 4601,
+      runnerName,
+      containerName: "attempt-456-4601-1",
+    });
+    expect(await scheduler.getJob(jobA.workflowJobId)).toMatchObject({ state: "queued" });
+    expect(await scheduler.getJob(jobB.workflowJobId)).toMatchObject({
+      state: "running",
+      runnerName,
+    });
+
+    await scheduler.accept({
+      ...jobB,
+      action: "completed",
+      conclusion: "success",
+      deliveryId: "delivery-b-completed",
+    });
+    expect(await scheduler.getAttempts(jobA.workflowJobId)).toMatchObject([{ state: "stopped" }]);
+    expect(await scheduler.getAttempts(jobB.workflowJobId)).toMatchObject([{ state: "stopped" }]);
+  });
+
+  it("classifies duplicate, conflicting, and unknown assignments", async () => {
+    const scheduler = env.SCHEDULER.getByName("assignment-conflicts");
+    const jobA = queuedEvent(4701, "delivery-a-queued");
+    const jobB = queuedEvent(4702, "delivery-b-queued");
+    const runnerA = (await scheduler.accept(jobA)).runnerName;
+    const runnerB = (await scheduler.accept(jobB)).runnerName;
+    if (runnerA === undefined || runnerB === undefined) {
+      throw new Error("accepted attempt has no runner name");
+    }
+
+    const assignment = { ...jobB, action: "in_progress" as const, runnerName: runnerA };
+    await scheduler.accept({ ...assignment, deliveryId: "delivery-assigned" });
+    expect(await scheduler.accept({ ...assignment, deliveryId: "delivery-duplicate" })).toEqual({
+      outcome: "duplicate",
+      runnerName: runnerA,
+    });
+    expect(
+      await scheduler.accept({
+        ...assignment,
+        deliveryId: "delivery-conflicting",
+        runnerName: runnerB,
+      }),
+    ).toEqual({ outcome: "conflicting_assignment", runnerName: runnerB });
+    expect(
+      await scheduler.accept({
+        ...jobA,
+        action: "in_progress",
+        deliveryId: "delivery-unknown",
+        runnerName: "unknown-runner",
+      }),
+    ).toEqual({ outcome: "unknown_assignment", runnerName: "unknown-runner" });
   });
 
   it("drains pending work through one privileged provisioning seam", async () => {
@@ -140,7 +237,9 @@ describe("Scheduler admission", () => {
     const requests: ProvisionRequest[] = [];
 
     await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-      const db = drizzle(state.storage, { schema: { deliveries, jobs, attempts, pending } });
+      const db = drizzle(state.storage, {
+        schema: { deliveries, jobs, attempts, assignments, pending },
+      });
       expect(
         await drainPending(db, (request) => {
           requests.push(request);
@@ -175,7 +274,9 @@ describe("Scheduler admission", () => {
     await scheduler.accept(event);
 
     await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-      const db = drizzle(state.storage, { schema: { deliveries, jobs, attempts, pending } });
+      const db = drizzle(state.storage, {
+        schema: { deliveries, jobs, attempts, assignments, pending },
+      });
       await drainPending(db, () =>
         Effect.fail(new ProvisioningError({ step: "container_start", cause: "secret-value" })),
       );

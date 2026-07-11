@@ -232,6 +232,14 @@ live under `worker/`. The root Taskfile delegates to both.
 - `task ts:check` runs generated types, typechecking, formatting checks,
   linting, and tests. The same sequence runs in CI.
 
+### SDK-first integrations
+
+Before writing an API call, helper, or adapter, check whether Octokit or the
+Cloudflare SDK already provides it. Prefer generated, typed methods such as
+`octokit.rest.*` and native Cloudflare binding APIs over generic
+`octokit.request()`, raw `fetch()`, or a hand-written wrapper. Use the generic
+interface only when the installed SDK has no suitable typed operation.
+
 ## Git hygiene
 
 - **Never push directly to `main`.** Every change goes through a PR.

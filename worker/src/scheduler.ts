@@ -1,9 +1,10 @@
 import { eq, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { DurableObject } from "cloudflare:workers";
+import { Either, Effect } from "effect";
 import { attempts, deliveries, jobs, pending, schema } from "./schema";
 import type { WorkflowEvent } from "./domain";
-import { generateJitConfig } from "./github";
+import { generateJitConfig, ProvisioningError } from "./github";
 import type { RunnerContainer } from "./runner-container";
 
 export type AcceptResult = {
@@ -31,14 +32,10 @@ export class Scheduler extends DurableObject<Env> {
 
   async accept(event: WorkflowEvent): Promise<AcceptResult> {
     const now = Date.now();
+    const db = this.#db;
 
-    this.#db
-      .insert(deliveries)
-      .values({
-        deliveryId: event.deliveryId,
-        workflowJobId: event.workflowJobId,
-        receivedAt: now,
-      })
+    db.insert(deliveries)
+      .values({ deliveryId: event.deliveryId, workflowJobId: event.workflowJobId, receivedAt: now })
       .onConflictDoNothing()
       .run();
 
@@ -46,8 +43,7 @@ export class Scheduler extends DurableObject<Env> {
       const runnerName = `jitney-${event.repositoryId}-${event.workflowJobId}-1`;
       const containerName = `attempt-${event.repositoryId}-${event.workflowJobId}-1`;
 
-      this.#db
-        .insert(jobs)
+      db.insert(jobs)
         .values({
           workflowJobId: event.workflowJobId,
           state: "queued",
@@ -57,8 +53,7 @@ export class Scheduler extends DurableObject<Env> {
         .onConflictDoNothing()
         .run();
 
-      this.#db
-        .insert(attempts)
+      db.insert(attempts)
         .values({
           workflowJobId: event.workflowJobId,
           attempt: 1,
@@ -70,8 +65,7 @@ export class Scheduler extends DurableObject<Env> {
         .onConflictDoNothing()
         .run();
 
-      this.#db
-        .insert(pending)
+      db.insert(pending)
         .values({
           workflowJobId: event.workflowJobId,
           payload: JSON.stringify(event),
@@ -86,8 +80,7 @@ export class Scheduler extends DurableObject<Env> {
     }
 
     if (event.action === "in_progress" && event.runnerName !== undefined) {
-      this.#db
-        .update(jobs)
+      db.update(jobs)
         .set({ state: "running", runnerName: event.runnerName, updatedAt: now })
         .where(eq(jobs.workflowJobId, event.workflowJobId))
         .run();
@@ -95,8 +88,7 @@ export class Scheduler extends DurableObject<Env> {
     }
 
     if (event.action === "completed") {
-      this.#db
-        .update(jobs)
+      db.update(jobs)
         .set({ state: "completed", conclusion: event.conclusion ?? "unknown", updatedAt: now })
         .where(eq(jobs.workflowJobId, event.workflowJobId))
         .run();
@@ -130,19 +122,19 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   override async alarm(): Promise<void> {
-    const pendingRow = this.#db.select().from(pending).orderBy(pending.workflowJobId).all()[0];
+    const db = this.#db;
+    const pendingRow = db.select().from(pending).orderBy(pending.workflowJobId).all()[0];
     if (pendingRow === undefined) return;
 
     const event = JSON.parse(pendingRow.payload) as WorkflowEvent;
 
-    try {
-      this.#db
-        .update(jobs)
-        .set({ state: "provisioning", updatedAt: Date.now() })
-        .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
-        .run();
+    db.update(jobs)
+      .set({ state: "provisioning", updatedAt: Date.now() })
+      .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+      .run();
 
-      const jitConfig = await generateJitConfig({
+    const result = await Effect.runPromise(
+      generateJitConfig({
         appId: this.env.GITHUB_APP_ID,
         privateKey: this.env.GITHUB_APP_PRIVATE_KEY,
         installationId: event.installationId,
@@ -150,40 +142,49 @@ export class Scheduler extends DurableObject<Env> {
         repositoryOwner: event.repositoryOwner,
         repositoryName: event.repositoryName,
         runnerName: pendingRow.runnerName,
-      });
+      }).pipe(
+        Effect.andThen((jitConfig) =>
+          Effect.tryPromise({
+            try: () =>
+              (
+                this.env.RUNNER_CONTAINERS.getByName(
+                  pendingRow.containerName,
+                ) as DurableObjectStub<RunnerContainer>
+              ).startAttempt(jitConfig),
+            catch: (cause) => new ProvisioningError({ step: "container_start", cause }),
+          }),
+        ),
+        Effect.either,
+      ),
+    );
 
-      const container = this.env.RUNNER_CONTAINERS.getByName(
-        pendingRow.containerName,
-      ) as DurableObjectStub<RunnerContainer>;
-      await container.startAttempt(jitConfig);
-
-      this.#db
-        .update(jobs)
+    if (Either.isRight(result)) {
+      db.update(jobs)
         .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
         .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
         .run();
 
-      this.#db
-        .update(attempts)
+      db.update(attempts)
         .set({ state: "starting" })
         .where(eq(attempts.workflowJobId, pendingRow.workflowJobId))
         .run();
 
-      this.#db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
-    } catch (error) {
-      this.#db
-        .update(jobs)
+      db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
+    } else {
+      const error = result.left;
+      const step = error instanceof ProvisioningError ? error.step : "installation_mismatch";
+
+      db.update(jobs)
         .set({ state: "failed", updatedAt: Date.now() })
         .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
         .run();
 
-      this.#db
-        .update(attempts)
+      db.update(attempts)
         .set({ state: "failed" })
         .where(eq(attempts.workflowJobId, pendingRow.workflowJobId))
         .run();
 
-      this.#db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
+      db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
 
       console.error(
         JSON.stringify({
@@ -191,16 +192,17 @@ export class Scheduler extends DurableObject<Env> {
           workflowJobId: pendingRow.workflowJobId,
           runnerName: pendingRow.runnerName,
           containerName: pendingRow.containerName,
-          outcome: error instanceof Error ? "classified_error" : "unknown_error",
+          step,
         }),
       );
     }
 
-    const remaining = this.#db
+    const remaining = db
       .select({ count: sql<number>`count(*)` })
       .from(pending)
       .all()[0];
-    if (remaining !== undefined && remaining.count > 0)
+    if (remaining !== undefined && remaining.count > 0) {
       await this.ctx.storage.setAlarm(Date.now() + 1_000);
+    }
   }
 }

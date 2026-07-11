@@ -1,5 +1,16 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
+import { Data, Effect } from "effect";
+
+export class InstallationMismatch extends Data.TaggedError("InstallationMismatch")<{
+  expected: number;
+  actual: number;
+}> {}
+
+export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
+  step: string;
+  cause: unknown;
+}> {}
 
 export type ProvisioningInput = {
   appId: string;
@@ -11,37 +22,52 @@ export type ProvisioningInput = {
   runnerName: string;
 };
 
-export async function generateJitConfig(input: ProvisioningInput): Promise<string> {
-  const auth = createAppAuth({ appId: input.appId, privateKey: input.privateKey });
-  const app = new Octokit({ authStrategy: auth, auth: { type: "app" } });
+export function generateJitConfig(
+  input: ProvisioningInput,
+): Effect.Effect<string, InstallationMismatch | ProvisioningError> {
+  return Effect.gen(function* () {
+    const auth = createAppAuth({ appId: input.appId, privateKey: input.privateKey });
+    const app = new Octokit({ authStrategy: auth, auth: { type: "app" } });
 
-  const { data: installation } = await app.request(
-    "GET /repositories/{repository_id}/installation",
-    { repository_id: input.repositoryId },
-  );
-  if (installation.id !== input.installationId) {
-    throw new Error("repository is not owned by the payload installation");
-  }
+    const installation = yield* Effect.tryPromise({
+      try: () =>
+        app.request("GET /repositories/{repository_id}/installation", {
+          repository_id: input.repositoryId,
+        }),
+      catch: (cause) => new ProvisioningError({ step: "installation_verification", cause }),
+    });
 
-  const { token } = await auth({
-    type: "installation",
-    installationId: input.installationId,
-    repositoryIds: [input.repositoryId],
-    permissions: { administration: "write", actions: "read" },
+    if (installation.data.id !== input.installationId) {
+      return yield* Effect.fail(
+        new InstallationMismatch({ expected: input.installationId, actual: installation.data.id }),
+      );
+    }
+
+    const { token } = yield* Effect.tryPromise({
+      try: () =>
+        auth({
+          type: "installation",
+          installationId: input.installationId,
+          repositoryIds: [input.repositoryId],
+          permissions: { administration: "write", actions: "read" },
+        }),
+      catch: (cause) => new ProvisioningError({ step: "installation_token", cause }),
+    });
+
+    const repo = new Octokit({ auth: token });
+    const { data } = yield* Effect.tryPromise({
+      try: () =>
+        repo.request("POST /repos/{owner}/{repo}/actions/runners/generate-jitconfig", {
+          owner: input.repositoryOwner,
+          repo: input.repositoryName,
+          name: input.runnerName,
+          runner_group_id: 1,
+          labels: ["jitney"],
+          work_folder: "_work",
+        }),
+      catch: (cause) => new ProvisioningError({ step: "jit_config", cause }),
+    });
+
+    return data.encoded_jit_config;
   });
-
-  const repo = new Octokit({ auth: token });
-  const { data } = await repo.request(
-    "POST /repos/{owner}/{repo}/actions/runners/generate-jitconfig",
-    {
-      owner: input.repositoryOwner,
-      repo: input.repositoryName,
-      name: input.runnerName,
-      runner_group_id: 1,
-      labels: ["jitney"],
-      work_folder: "_work",
-    },
-  );
-
-  return data.encoded_jit_config;
 }

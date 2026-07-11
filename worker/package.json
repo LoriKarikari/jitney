@@ -21,11 +21,13 @@
     "@cloudflare/containers": "^0.3.7",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/webhooks-methods": "^6.0.0",
+    "drizzle-orm": "^0.45.2",
     "octokit": "^5.0.5"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.4",
     "@types/node": "^26.1.1",
+    "drizzle-zod": "^0.8.3",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.73.0",
     "oxlint-tsgolint": "^0.24.0",

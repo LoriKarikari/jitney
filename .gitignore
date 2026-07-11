@@ -1,0 +1,14 @@
+.pi-subagents/
+node_modules/
+dist/
+coverage/
+.wrangler/
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store

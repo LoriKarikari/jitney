@@ -1,5 +1,6 @@
-import { env, exports } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
+import handler from "../src";
 
 const webhookUrl = "https://example.com/webhooks/github";
 const webhookSecret = "test-webhook-secret";
@@ -34,19 +35,23 @@ function queuedPayload(overrides: Record<string, unknown> = {}): string {
   });
 }
 
+async function fetch(url: string, init?: RequestInit): Promise<Response> {
+  return handler.fetch(new Request(url, init), env);
+}
+
 describe("worker entrypoint", () => {
   it("answers unknown routes with 404", async () => {
-    const response = await exports.default.fetch("https://example.com/anything");
+    const response = await fetch("https://example.com/anything");
     expect(response.status).toBe(404);
   });
 
   it("rejects a GitHub webhook without a signature", async () => {
-    const response = await exports.default.fetch(webhookUrl, { method: "POST", body: "{}" });
+    const response = await fetch(webhookUrl, { method: "POST", body: "{}" });
     expect(response.status).toBe(401);
   });
 
   it("rejects a webhook whose signature belongs to different raw bytes", async () => {
-    const response = await exports.default.fetch(webhookUrl, {
+    const response = await fetch(webhookUrl, {
       method: "POST",
       headers: { "X-Hub-Signature-256": await signature('{"action":"queued"}') },
       body: '{ "action": "queued" }',
@@ -56,7 +61,7 @@ describe("worker entrypoint", () => {
 
   it("ignores a signed unrelated GitHub event", async () => {
     const body = "{}";
-    const response = await exports.default.fetch(webhookUrl, {
+    const response = await fetch(webhookUrl, {
       method: "POST",
       headers: {
         "X-Hub-Signature-256": await signature(body),
@@ -70,7 +75,7 @@ describe("worker entrypoint", () => {
 
   it("returns 400 for a signed malformed workflow job", async () => {
     const body = JSON.stringify({ action: "queued" });
-    const response = await exports.default.fetch(webhookUrl, {
+    const response = await fetch(webhookUrl, {
       method: "POST",
       headers: {
         "X-Hub-Signature-256": await signature(body),
@@ -98,7 +103,7 @@ describe("worker entrypoint", () => {
     ["additional unsatisfied labels", { workflow_job: { id: 789, labels: ["jitney", "gpu"] } }],
   ])("ignores %s", async (_case, override) => {
     const body = queuedPayload(override);
-    const response = await exports.default.fetch(webhookUrl, {
+    const response = await fetch(webhookUrl, {
       method: "POST",
       headers: {
         "X-Hub-Signature-256": await signature(body),
@@ -112,7 +117,7 @@ describe("worker entrypoint", () => {
 
   it("durably accepts a signed private queued job before returning 202", async () => {
     const body = queuedPayload();
-    const response = await exports.default.fetch(webhookUrl, {
+    const response = await fetch(webhookUrl, {
       method: "POST",
       headers: {
         "X-Hub-Signature-256": await signature(body),

@@ -200,6 +200,23 @@ The project uses five triage labels:
 - Run the full test suite before opening a PR. If tests are slow, filter to
   the relevant package, but run the full suite before requesting review.
 
+## Go tooling
+
+Go code (the runner supervisor, future CLI work) uses this toolchain. The
+control plane (Ingress Worker, Scheduler DO) is TypeScript because Durable
+Object classes require the JavaScript runtime; its tooling arrives with that
+code.
+
+- **Taskfile** drives local automation: `task ci` runs the same checks as CI
+  (verify, lint, race tests, govulncheck, gosec).
+- **golangci-lint** with the repo's `.golangci.yml` is the lint source of
+  truth. Run `task lint` after every significant change.
+- CI runs tests with `-race -shuffle=on`, checks `go mod tidy` drift, and
+  runs govulncheck, gosec, and CodeQL on every PR.
+- The supervisor builds as a static `CGO_ENABLED=0` linux/amd64 binary; it
+  ships inside the runner image, not as a released archive.
+- `//nolint` directives must name the linter and carry a justification.
+
 ## Git hygiene
 
 - **Never push directly to `main`.** Every change goes through a PR.

@@ -12,3 +12,6 @@ coverage/
 *.p12
 *.pfx
 .DS_Store
+coverage.out
+*.test
+bin/

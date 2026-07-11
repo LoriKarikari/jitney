@@ -99,7 +99,12 @@ export async function generateJitConfig(input: ProvisioningInput): Promise<strin
     installationToken.token,
     {
       method: "POST",
-      body: JSON.stringify({ name: input.runnerName, runner_group_id: 1, labels: ["jitney"] }),
+      body: JSON.stringify({
+        name: input.runnerName,
+        runner_group_id: 1,
+        labels: ["jitney"],
+        work_folder: "_work",
+      }),
     },
   );
   const jit = await expectJson<JitConfigResponse>(jitResponse, "JIT configuration creation");

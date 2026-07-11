@@ -1,0 +1,83 @@
+version: '3'
+
+vars:
+  BINARY: supervisor
+  MAIN: ./cmd/supervisor
+
+set:
+  - errexit
+  - nounset
+  - pipefail
+
+silent: false
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - gofmt -w $(find . -name '*.go' -not -path './vendor/*')
+
+  tidy:
+    desc: Tidy Go modules
+    cmds:
+      - go mod tidy
+
+  verify:
+    desc: Verify module checksums and tidy state
+    cmds:
+      - go mod verify
+      - go mod tidy
+      - git diff --exit-code -- go.mod
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - go test ./...
+
+  test:race:
+    desc: Run unit tests with race detector
+    cmds:
+      - go test -race -shuffle=on -coverprofile=coverage.out ./...
+
+  test:integration:
+    desc: Run integration tests
+    cmds:
+      - go test -tags=integration -count=1 ./...
+
+  vuln:
+    desc: Run govulncheck
+    cmds:
+      - govulncheck ./...
+
+  security:
+    desc: Run security checks
+    cmds:
+      - gosec ./...
+      - govulncheck ./...
+
+  build:
+    desc: Build the supervisor (static linux/amd64, as shipped in the runner image)
+    env:
+      CGO_ENABLED: '0'
+      GOOS: linux
+      GOARCH: amd64
+    cmds:
+      - go build -trimpath -ldflags='-s -w' -o dist/{{.BINARY}} {{.MAIN}}
+
+  ci:
+    desc: Run local CI checks
+    cmds:
+      - task: verify
+      - task: lint
+      - task: test:race
+      - task: vuln
+      - task: security

@@ -31,8 +31,9 @@ export function generateJitConfig(
 
     const installation = yield* Effect.tryPromise({
       try: () =>
-        app.request("GET /repositories/{repository_id}/installation", {
-          repository_id: input.repositoryId,
+        app.rest.apps.getRepoInstallation({
+          owner: input.repositoryOwner,
+          repo: input.repositoryName,
         }),
       catch: (cause) => new ProvisioningError({ step: "installation_verification", cause }),
     });
@@ -57,7 +58,7 @@ export function generateJitConfig(
     const repo = new Octokit({ auth: token });
     const { data } = yield* Effect.tryPromise({
       try: () =>
-        repo.request("POST /repos/{owner}/{repo}/actions/runners/generate-jitconfig", {
+        repo.rest.actions.generateRunnerJitconfigForRepo({
           owner: input.repositoryOwner,
           repo: input.repositoryName,
           name: input.runnerName,

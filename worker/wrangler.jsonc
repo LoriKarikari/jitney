@@ -3,6 +3,10 @@
   "name": "jitney",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": {
+    "required": ["GITHUB_WEBHOOK_SECRET"],
+  },
   "observability": {
     "enabled": true,
   },

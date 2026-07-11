@@ -1,5 +1,4 @@
 name: codeql-config
 
 queries:
-  - uses: security-extended
   - uses: security-and-quality

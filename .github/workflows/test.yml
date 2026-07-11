@@ -21,8 +21,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
-          cache: true
+          cache-dependency-path: go.mod
       - run: go mod tidy
-      - run: git diff --exit-code -- go.mod
+      - run: git diff --exit-code -- go.mod go.sum
       - run: go mod verify
       - run: go test -race -shuffle=on -coverprofile=coverage.out ./...

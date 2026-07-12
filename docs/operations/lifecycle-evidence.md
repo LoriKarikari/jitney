@@ -21,7 +21,7 @@ The lifecycle event names are:
 | Boundary | Events |
 | --- | --- |
 | Ingress | `webhook_received`, `webhook_classified` |
-| Scheduler | `scheduler_transition`, `runner_provisioning_started`, `runner_provisioning_succeeded`, `runner_provisioning_failed` |
+| Scheduler | `scheduler_transition`, `runner_provisioning_started`, `runner_provisioning_succeeded`, `runner_provisioning_failed`, `runner_attempt_expired`, `runner_reclaim_failed` |
 | Container | `runner_container_started`, `runner_container_stopped`, `runner_container_failed` |
 | Supervisor | `runner_process_started`, `runner_shutdown_started`, `runner_shutdown_escalated`, `runner_process_exited` |
 
@@ -86,3 +86,40 @@ The private fixture workflow at `.github/workflows/secret-containment.yml`
 keeps this boundary under test. A future Runner release that supports reading
 JIT configuration from a protected file descriptor could narrow the exposure;
 with the current `--jitconfig` interface, it cannot be removed completely.
+
+## Assignment expiry
+
+The probe for issue #25 ran in the private fixture repository on 2026-07-12. It
+dispatched a real workflow, then deleted the freshly registered runner from
+GitHub before it could claim the queued job. That leaves an unassigned Runner
+Attempt that only the Scheduler's deadline sweep can clean up.
+
+| Field | Value |
+| --- | --- |
+| Workflow run | `29193843969` |
+| Job | `86653163595` |
+| Runner | `jitney-1297261275-86653163595-1` |
+| Container identity | `attempt-1297261275-86653163595-1` |
+| Worker deployment | `68ad9a92-69bb-4024-9807-5d14357ffd3c` |
+| Stop reason | `assignment_deadline` |
+
+Observed sequence:
+
+- The queued delivery was accepted, the runner provisioned, and the container
+  started.
+- The runner registration was deleted while `busy=false`; GitHub kept the job
+  queued with no assigned runner.
+- Five minutes after acceptance, the sweep emitted `runner_attempt_expired`
+  with the correlation identifiers above and invoked `destroy` on the Runner
+  Container.
+- GitHub reported zero registered runners and the container instance reported
+  `stopped`.
+
+The deliberately orphaned job stays queued on GitHub because no new `queued`
+delivery arrives for it; re-provisioning such jobs is reconciliation work
+(issue #27), so the probe run is cancelled manually afterwards.
+
+An earlier fixture design used GitHub concurrency groups to hold a job
+unassigned. That cannot work: GitHub keeps a concurrency-blocked job in
+`pending` and only emits `workflow_job: queued` once the lock releases, so the
+control plane never sees the job while it is blocked.

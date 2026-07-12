@@ -135,3 +135,7 @@ The repo has two codebases: `worker/` (TypeScript control plane) and
 `supervisor/` (Go process supervisor that owns the runner session inside the
 container). Engineering conventions are in
 [docs/agents/engineering.md](docs/agents/engineering.md).
+
+## License
+
+[MIT](LICENSE)

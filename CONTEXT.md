@@ -31,9 +31,10 @@ or be stopped after the job completes.
 _Avoid_: container instance, runner instance
 
 **Assignment**:
-The binding between a GitHub Workflow Job and a runner name, established when
-GitHub reports `workflow_job.in_progress` with a `runner_name`. Cleanup
-follows the assignment, not the job that triggered provisioning.
+The binding between a GitHub Workflow Job and the Runner Attempt that claimed
+it, established when GitHub reports `workflow_job.in_progress` with a
+`runner_name`. Cleanup follows the assigned Attempt, not the Job that
+triggered provisioning.
 _Avoid_: mapping, association
 
 **Runner Attempt Operations**:
@@ -106,13 +107,22 @@ _Avoid_: tag, selector
 ## Architecture
 
 ```text
-GitHub webhook
-  → Ingress Worker (HMAC verify, normalize, durable submit, 202)
-    → Scheduler DO (idempotency, queue, admission, JIT mint, start container)
-      → Runner Container DO (one JIT runner, one job, exit)
-    ← workflow_job.in_progress (binds job to runner_name)
-    ← workflow_job.completed (terminal state, natural exit)
-  → Reconciler (scheduled: repair failed deliveries, stale attempts)
+GitHub workflow_job webhook
+  → Ingress Worker (HMAC verify, normalize, durable accept, 202)
+    → Scheduler.accept(Delivery-backed Workflow Event)
+
+Cloudflare cron
+  → GitHub queued-job discovery
+    → Scheduler.reconcile(queued Job without Delivery identity)
+
+Scheduler Job Intake
+  → admission + Runner Attempt creation
+    → JIT mint + Runner Container start
+      ← workflow_job.in_progress (bind Job to Runner Attempt)
+      ← workflow_job.completed (terminal state, natural exit)
+
+Scheduler alarms
+  → assignment and runtime deadline enforcement
 ```
 
 ## Security model

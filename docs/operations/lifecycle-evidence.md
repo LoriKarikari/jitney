@@ -115,14 +115,46 @@ Observed sequence:
 - GitHub reported zero registered runners and the container instance reported
   `stopped`.
 
-The deliberately orphaned job stays queued on GitHub because no new `queued`
-delivery arrives for it; re-provisioning such jobs is reconciliation work
-(issue #27), so the probe run is cancelled manually afterwards.
+The deliberately orphaned job stayed queued because no new `queued` delivery
+arrived for it, so this deadline probe was cancelled manually. The later
+[webhook-loss recovery](#webhook-loss-recovery) probe proves that scheduled
+reconciliation now recovers this class of queued job.
 
 An earlier fixture design used GitHub concurrency groups to hold a job
 unassigned. That cannot work: GitHub keeps a concurrency-blocked job in
 `pending` and only emits `workflow_job: queued` once the lock releases, so the
 control plane never sees the job while it is blocked.
+
+## Webhook-loss recovery
+
+The reconciliation probe ran in the private fixture repository on 2026-07-12
+against Worker deployment `aeb97d5f-3fc6-43a3-a644-203641036aa1`. The GitHub
+App webhook URL was temporarily changed to an unreachable host before the
+workflow was dispatched. GitHub recorded the resulting `workflow_job`
+delivery at `17:58:53Z` with HTTP 502. The original webhook URL was then
+restored while the job remained queued.
+
+| Field | Value |
+| --- | --- |
+| Workflow run | `29203003654` |
+| Job | `86677443701` |
+| Runner | `jitney-1297261275-86677443701-1` |
+| Worker deployment | `aeb97d5f-3fc6-43a3-a644-203641036aa1` |
+
+Observed sequence:
+
+- The job remained queued with no runner after the failed webhook delivery.
+- The scheduled reconciliation pass started at `18:00:45Z`, discovered one
+  queued job, and admitted it at `18:00:47Z` without a Delivery identity.
+- Provisioning started at `18:00:48Z` and succeeded at `18:00:50Z`.
+- GitHub assigned the job to the reconciled Runner Attempt at `18:00:55Z`.
+- The workflow completed successfully at `18:01:08Z`.
+- The final GitHub runner inventory was zero. The GitHub App webhook URL was
+  also verified to match its original value after the probe.
+
+This proves that the cron trigger, GitHub discovery adapter, reconciled Job
+Intake, provisioning, and cleanup recover a queued job whose webhook never
+reached Jitney.
 
 ## Runtime expiry
 

@@ -1,6 +1,8 @@
 # Jitney v1 architecture review
 
-Review completed 2026-07-11 after flare-runner surfaced. This supersedes conflicting lifecycle, sizing, trust, and routing assumptions in earlier briefs.
+Review completed 2026-07-11 after flare-runner surfaced. This is the design
+record that introduced the durable Scheduler; [CONTEXT.md](../../CONTEXT.md)
+is authoritative where the deployed design has since become more precise.
 
 ## Verdict
 
@@ -12,11 +14,11 @@ Keep the product premise: a GitHub App provisions ephemeral, one-job runners on 
 
 The webhook handler has one narrow job: verify the raw-body HMAC, validate and normalize the event, submit it durably, and return `202` within GitHub's ten-second deadline. It does not call GitHub or start a container inline.
 
-GitHub does not automatically retry failed webhook deliveries. Operators can manually redeliver them, so duplicate handling is still mandatory. A scheduled reconciler should inspect failed App deliveries and stale local state.
+GitHub does not automatically retry failed webhook deliveries. Operators can manually redeliver them, so duplicate handling is still mandatory. The deployed scheduled reconciler discovers queued jobs through GitHub's installation, repository, workflow-run, and workflow-job APIs. It submits them without fabricating Delivery identity.
 
 ### Scheduler Durable Object
 
-V1 uses one global Scheduler Durable Object. Its small interface is `accept(workflowEvent)`. Its implementation owns:
+V1 uses one global Scheduler Durable Object. Its Job Intake interface accepts Delivery-backed Workflow Events through `accept()` and discovered queued Jobs through `reconcile()`. Its implementation owns:
 
 - delivery and event idempotency;
 - terminal-state dominance;
@@ -60,7 +62,11 @@ Natural one-job runner exit remains the normal path. `workflow_job.completed` st
 
 ### Reconciliation
 
-A scheduled path repairs failed webhook deliveries, stale runner attempts, containers alive after terminal jobs, and local state that disagrees with GitHub. All repair operations use the same idempotent scheduler transitions as normal delivery.
+A scheduled path discovers private-repository jobs that remain queued after a
+webhook is lost. Both intake sources use the same admission, idempotency,
+capacity, and Runner Attempt creation rules, but only a real Workflow Event
+has a Delivery. Scheduler alarms separately enforce assignment and runtime
+deadlines.
 
 ## Security decisions
 

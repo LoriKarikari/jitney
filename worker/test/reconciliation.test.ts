@@ -3,7 +3,9 @@ import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { QueuedJobCandidate } from "../src/domain";
 import { ProvisioningError } from "../src/github";
-import { reconcile, type Submit } from "../src/reconciliation";
+import { reconcile } from "../src/reconciliation";
+
+type Submit = Parameters<typeof reconcile>[1];
 
 function candidate(workflowJobId: number, overrides?: Partial<QueuedJobCandidate>) {
   return {

@@ -4,9 +4,9 @@ import type { DiscoveryResult, ProvisioningError } from "./github";
 import type { AcceptResult } from "./lifecycle";
 import { emit } from "./log";
 
-export type Discover = Effect.Effect<DiscoveryResult, ProvisioningError>;
+type Discover = Effect.Effect<DiscoveryResult, ProvisioningError>;
 
-export type Submit = (candidate: QueuedJobCandidate) => Promise<AcceptResult>;
+type Submit = (candidate: QueuedJobCandidate) => Promise<AcceptResult>;
 
 export async function reconcile(
   discover: Discover,

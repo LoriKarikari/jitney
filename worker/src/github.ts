@@ -13,7 +13,7 @@ export class ProvisioningError extends Data.TaggedError("ProvisioningError")<{
   cause: unknown;
 }> {}
 
-export type ProvisioningInput = {
+type ProvisioningInput = {
   appId: string;
   privateKey: string;
   installationId: number;
@@ -23,7 +23,7 @@ export type ProvisioningInput = {
   runnerName: string;
 };
 
-export type RunnerCleanupInput = {
+type RunnerCleanupInput = {
   appId: string;
   privateKey: string;
   installationId: number;
@@ -33,7 +33,7 @@ export type RunnerCleanupInput = {
   runnerName: string;
 };
 
-export type DiscoveryInput = {
+type DiscoveryInput = {
   appId: string;
   privateKey: string;
 };

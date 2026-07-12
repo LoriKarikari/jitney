@@ -16,7 +16,7 @@ export type WorkflowEvent = {
   conclusion?: string;
 };
 
-export type ParseResult =
+type ParseResult =
   | { kind: "accepted"; event: WorkflowEvent }
   | { kind: "ignored" }
   | { kind: "malformed" };

@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-deploy
+  group: deploy
   cancel-in-progress: false
 
 jobs:

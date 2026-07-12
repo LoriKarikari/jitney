@@ -8,34 +8,48 @@ and exits. No standing fleet, no idle capacity, no servers to manage.
 
 ## Status
 
-The control plane is deployed and runs real jobs end to end: a `runs-on:
-jitney` job moves from queued to completed on a fresh container, the runner
-exits after one job, and GitHub's runner inventory returns to zero.
+The control plane is deployed in a maintainer test environment and runs real
+jobs end to end. A `runs-on: jitney` job moves from queued to completed on a
+fresh container, the runner exits after one job, and GitHub's runner inventory
+returns to zero.
 
 Proven so far:
 
-- Automatic webhook-to-completion lifecycle on the live deployment
-- Durable acceptance, delivery replay suppression, and admission limits
+- Automatic webhook-to-completion lifecycle on the live test deployment
+- Durable acceptance, replay suppression, admission limits, and relational
+  lifecycle state in Durable Object SQLite
 - Assignment-based cleanup that follows the runner GitHub actually assigns
+- Separate assignment and runtime deadlines that reclaim the Runner Container
+- Scheduled recovery of a queued job after its webhook delivery failed
 - Node.js, Python, Go, and Java workloads through their official setup
   actions ([evidence](docs/operations/workload-compatibility.md))
 - Secret containment in the runner's environment and readable `/proc`
   ([evidence](docs/operations/lifecycle-evidence.md))
 
 Docker workloads do not work yet: the runner image ships the client but no
-daemon. Deadline enforcement and webhook-loss reconciliation are tracked in
-issues #25–#27.
+daemon. Public repositories also remain outside Jitney's execution trust
+boundary.
 
 ## How it works
 
 ```text
-GitHub webhook
-  → Ingress Worker (HMAC verify, normalize, durable submit, 202)
-    → Scheduler DO (idempotency, admission, JIT mint, start container)
-      → Runner Container DO (one JIT runner, one job, exit)
+GitHub workflow_job webhook
+  → Ingress Worker (HMAC verify, normalize, durable accept, 202)
+    → Scheduler DO
+
+Cloudflare cron
+  → GitHub queued-job discovery
+    → Scheduler DO
+
+Scheduler DO (Job Intake, idempotency, admission, deadlines)
+  → GitHub JIT config + Runner Container DO
+    → one JIT runner, one job, exit
 ```
 
-The Scheduler owns all Job and Runner Attempt state in Durable Object SQLite.
+Webhook events and reconciled queued jobs converge on the same Scheduler-owned
+Job Intake. Reconciliation never invents a Delivery identity for a webhook
+that did not arrive. The Scheduler owns all Job and Runner Attempt state in
+Durable Object SQLite.
 Runner Containers receive only a single-use JIT config; App credentials,
 webhook secrets, and installation tokens never enter the data plane. The
 domain vocabulary and security model live in [CONTEXT.md](CONTEXT.md).

@@ -115,9 +115,10 @@ Observed sequence:
 - GitHub reported zero registered runners and the container instance reported
   `stopped`.
 
-The deliberately orphaned job stays queued on GitHub because no new `queued`
-delivery arrives for it; re-provisioning such jobs is reconciliation work
-(issue #27), so the probe run is cancelled manually afterwards.
+The deliberately orphaned job stayed queued because no new `queued` delivery
+arrived for it, so this deadline probe was cancelled manually. The later
+[webhook-loss recovery](#webhook-loss-recovery) probe proves that scheduled
+reconciliation now recovers this class of queued job.
 
 An earlier fixture design used GitHub concurrency groups to hold a job
 unassigned. That cannot work: GitHub keeps a concurrency-blocked job in

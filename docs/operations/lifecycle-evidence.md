@@ -123,3 +123,40 @@ An earlier fixture design used GitHub concurrency groups to hold a job
 unassigned. That cannot work: GitHub keeps a concurrency-blocked job in
 `pending` and only emits `workflow_job: queued` once the lock releases, so the
 control plane never sees the job while it is blocked.
+
+## Runtime expiry
+
+The probe for issue #26 ran in the private fixture repository on 2026-07-12.
+The deployment was overridden with `RUNTIME_TIMEOUT_MS=120000`, and a fixture
+job slept for ten minutes.
+
+| Field | Value |
+| --- | --- |
+| Workflow run | `29195490505` |
+| Job | `86657587633` |
+| Runner | `jitney-1297261275-86657587633-1` |
+| Container identity | `attempt-1297261275-86657587633-1` |
+| Worker deployment | `f1fe9cac-379c-42a1-9804-11e1fbbf3d99` |
+| Stop reason | `runtime_deadline` |
+
+Observed sequence:
+
+- The job started at `14:02:08Z` and would have run for ten minutes.
+- The sweep emitted `runner_attempt_expired` with
+  `stopReason: runtime_deadline` at `14:07:00Z` and destroyed the Runner
+  Container; the instance reported `stopped`.
+- Deleting the runner registration failed with `runner_reclaim_failed` at step
+  `runner_deletion`: GitHub refuses to delete a busy runner. The container was
+  already destroyed because reclaim bounds the paid resource first.
+- GitHub detected the lost runner and reported the job `completed: failure` at
+  `14:12Z`, then removed the JIT registration itself. The end state was zero
+  registered runners with no manual cleanup: a failed busy-runner deletion is
+  self-healing for single-use JIT runners.
+
+Termination fired about three minutes after the two-minute deadline: the
+pending assignment-deadline alarm was later than the runtime deadline, and
+accepting the assignment did not pull the alarm forward. With the default
+one-hour runtime timeout the ordering hides this, because the five-minute
+assignment alarm always fires first and rearms on the runtime deadline. The
+fix rearms the alarm on assignment whenever the runtime deadline precedes the
+scheduled wake-up.

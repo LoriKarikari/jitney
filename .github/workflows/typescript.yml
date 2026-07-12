@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   check:
-    name: Typecheck, lint, and test
+    name: Worker checks
     runs-on: ubuntu-latest
     env:
       GITHUB_WEBHOOK_SECRET: ci-placeholder
@@ -39,10 +39,19 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: worker/pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm types
-      - run: git diff --exit-code -- worker-configuration.d.ts
-      - run: pnpm typecheck
-      - run: pnpm fmt:check
-      - run: pnpm lint
-      - run: pnpm test
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Generate Cloudflare types
+        run: pnpm types
+      - name: Check generated types
+        run: git diff --exit-code -- worker-configuration.d.ts
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Check formatting
+        run: pnpm fmt:check
+      - name: Lint
+        run: pnpm lint
+      - name: Check unused code
+        run: pnpm knip
+      - name: Test
+        run: pnpm test

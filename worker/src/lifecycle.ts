@@ -82,12 +82,10 @@ export class SchedulerLifecycle {
     }
 
     this.#emitTransition(event, result);
-    if (
-      event.action === "in_progress" &&
-      result.outcome === "recorded" &&
-      (await this.storage.getAlarm()) === null
-    ) {
-      await this.storage.setAlarm(now + this.runtimeTimeout);
+    if (event.action === "in_progress" && result.outcome === "recorded") {
+      const deadline = now + this.runtimeTimeout;
+      const alarm = await this.storage.getAlarm();
+      if (alarm === null || alarm > deadline) await this.storage.setAlarm(deadline);
     }
     return result;
   }

@@ -1,0 +1,13 @@
+name: Jitney CodeQL configuration
+
+queries:
+  - uses: security-extended
+
+paths:
+  - supervisor
+  - worker/src
+
+paths-ignore:
+  - "**/*_test.go"
+  - "worker/test"
+  - "worker/worker-configuration.d.ts"

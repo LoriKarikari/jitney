@@ -1,12 +1,20 @@
 import { env, runInDurableObject } from "cloudflare:test";
-import { drizzle } from "drizzle-orm/durable-sqlite";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
 import { ProvisioningError } from "../src/github";
+import { SchedulerLifecycle } from "../src/lifecycle";
 import type { ProvisionRequest } from "../src/provisioning";
-import { assignments, attempts, deliveries, jobs, pending } from "../src/schema";
-import { drainPending, Scheduler } from "../src/scheduler";
+import { Scheduler } from "../src/scheduler";
+
+function withLifecycle<Result>(
+  scheduler: DurableObjectStub<Scheduler>,
+  use: (lifecycle: SchedulerLifecycle) => Promise<Result>,
+): Promise<Result> {
+  return runInDurableObject(scheduler, (_instance, state) =>
+    use(new SchedulerLifecycle(state.storage, "deployment-test")),
+  );
+}
 
 function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
   return {
@@ -40,13 +48,11 @@ describe("Scheduler admission", () => {
     const event = queuedEvent(1002, "delivery-1");
     await scheduler.accept(event);
 
-    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-      state.storage.sql.exec(
-        "UPDATE attempts SET state = 'failed' WHERE workflow_job_id = ?",
-        event.workflowJobId,
-      );
-      state.storage.sql.exec("DELETE FROM pending WHERE workflow_job_id = ?", event.workflowJobId);
-    });
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.drain(() =>
+        Effect.fail(new ProvisioningError({ step: "container_start", cause: "failed" })),
+      ),
+    );
 
     expect(await scheduler.accept({ ...event, deliveryId: "delivery-2" })).toEqual({
       outcome: "accepted",
@@ -106,16 +112,7 @@ describe("Scheduler admission", () => {
     for (let job = 1; job <= 25; job++) {
       const event = queuedEvent(4000 + job, `delivery-${job}`);
       expect(await scheduler.accept(event)).toMatchObject({ outcome: "accepted" });
-      await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-        state.storage.sql.exec(
-          "UPDATE attempts SET state = 'waiting_for_assignment' WHERE workflow_job_id = ?",
-          event.workflowJobId,
-        );
-        state.storage.sql.exec(
-          "DELETE FROM pending WHERE workflow_job_id = ?",
-          event.workflowJobId,
-        );
-      });
+      await withLifecycle(scheduler, (lifecycle) => lifecycle.drain(() => Effect.void));
     }
 
     const rejected = queuedEvent(4026, "delivery-26");
@@ -123,15 +120,12 @@ describe("Scheduler admission", () => {
     expect(await scheduler.getAttempts(rejected.workflowJobId)).toEqual([]);
 
     let privilegedCalls = 0;
-    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-      const db = drizzle(state.storage, {
-        schema: { deliveries, jobs, attempts, assignments, pending },
-      });
-      await drainPending(db, () => {
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.drain(() => {
         privilegedCalls++;
         return Effect.void;
-      });
-    });
+      }),
+    );
     expect(privilegedCalls).toBe(0);
   });
 
@@ -236,17 +230,12 @@ describe("Scheduler admission", () => {
     await scheduler.accept(event);
     const requests: ProvisionRequest[] = [];
 
-    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-      const db = drizzle(state.storage, {
-        schema: { deliveries, jobs, attempts, assignments, pending },
-      });
-      expect(
-        await drainPending(db, (request) => {
-          requests.push(request);
-          return Effect.void;
-        }),
-      ).toBe(false);
-    });
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.drain((request) => {
+        requests.push(request);
+        return Effect.void;
+      }),
+    );
 
     expect(requests).toEqual([
       {
@@ -275,12 +264,7 @@ describe("Scheduler admission", () => {
     const accepted = await scheduler.accept(event);
     if (accepted.runnerName === undefined) throw new Error("accepted attempt has no runner name");
 
-    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-      const db = drizzle(state.storage, {
-        schema: { deliveries, jobs, attempts, assignments, pending },
-      });
-      await drainPending(db, () => Effect.void, "deployment-test");
-    });
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.drain(() => Effect.void));
     await scheduler.accept({
       ...event,
       action: "in_progress",
@@ -327,14 +311,11 @@ describe("Scheduler admission", () => {
     const event = queuedEvent(5002, "delivery-queued");
     await scheduler.accept(event);
 
-    await runInDurableObject(scheduler, async (_instance: Scheduler, state) => {
-      const db = drizzle(state.storage, {
-        schema: { deliveries, jobs, attempts, assignments, pending },
-      });
-      await drainPending(db, () =>
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.drain(() =>
         Effect.fail(new ProvisioningError({ step: "container_start", cause: canary })),
-      );
-    });
+      ),
+    );
 
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
       state: "queued",

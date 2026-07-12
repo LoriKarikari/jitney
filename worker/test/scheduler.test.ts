@@ -2,9 +2,12 @@ import { env, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
-import { ProvisioningError } from "../src/github";
 import { SchedulerLifecycle } from "../src/lifecycle";
-import type { ProvisionRequest } from "../src/provisioning";
+import {
+  RunnerAttemptFailure,
+  type RunnerAttemptOperations,
+  type RunnerAttemptRequest,
+} from "../src/runner-attempt-operations";
 import { Scheduler } from "../src/scheduler";
 
 function withLifecycle<Result>(
@@ -14,6 +17,13 @@ function withLifecycle<Result>(
   return runInDurableObject(scheduler, (_instance, state) =>
     use(new SchedulerLifecycle(state.storage, "deployment-test")),
   );
+}
+
+function operations(
+  provision: RunnerAttemptOperations["provision"] = () => Effect.void,
+  reclaim: RunnerAttemptOperations["reclaim"] = () => Effect.void,
+): RunnerAttemptOperations {
+  return { provision, reclaim };
 }
 
 function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
@@ -50,8 +60,10 @@ describe("Scheduler admission", () => {
 
     await withLifecycle(scheduler, (lifecycle) =>
       lifecycle.sweep(
-        () => Effect.fail(new ProvisioningError({ step: "container_start", cause: "failed" })),
-        () => Effect.void,
+        operations(
+          () => Effect.fail(new RunnerAttemptFailure({ step: "container_start", cause: "failed" })),
+          () => Effect.void,
+        ),
       ),
     );
 
@@ -113,12 +125,7 @@ describe("Scheduler admission", () => {
     for (let job = 1; job <= 25; job++) {
       const event = queuedEvent(4000 + job, `delivery-${job}`);
       expect(await scheduler.accept(event)).toMatchObject({ outcome: "accepted" });
-      await withLifecycle(scheduler, (lifecycle) =>
-        lifecycle.sweep(
-          () => Effect.void,
-          () => Effect.void,
-        ),
-      );
+      await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
     }
 
     const rejected = queuedEvent(4026, "delivery-26");
@@ -128,11 +135,13 @@ describe("Scheduler admission", () => {
     let privilegedCalls = 0;
     await withLifecycle(scheduler, (lifecycle) =>
       lifecycle.sweep(
-        () => {
-          privilegedCalls++;
-          return Effect.void;
-        },
-        () => Effect.void,
+        operations(
+          () => {
+            privilegedCalls++;
+            return Effect.void;
+          },
+          () => Effect.void,
+        ),
       ),
     );
     expect(privilegedCalls).toBe(0);
@@ -237,15 +246,17 @@ describe("Scheduler admission", () => {
     const scheduler = env.SCHEDULER.getByName("provisioning-seam");
     const event = queuedEvent(5001, "delivery-queued");
     await scheduler.accept(event);
-    const requests: ProvisionRequest[] = [];
+    const requests: RunnerAttemptRequest[] = [];
 
     await withLifecycle(scheduler, (lifecycle) =>
       lifecycle.sweep(
-        (request) => {
-          requests.push(request);
-          return Effect.void;
-        },
-        () => Effect.void,
+        operations(
+          (request) => {
+            requests.push(request);
+            return Effect.void;
+          },
+          () => Effect.void,
+        ),
       ),
     );
 
@@ -276,12 +287,7 @@ describe("Scheduler admission", () => {
     const accepted = await scheduler.accept(event);
     if (accepted.runnerName === undefined) throw new Error("accepted attempt has no runner name");
 
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-      ),
-    );
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
     await scheduler.accept({
       ...event,
       action: "in_progress",
@@ -330,8 +336,10 @@ describe("Scheduler admission", () => {
 
     await withLifecycle(scheduler, (lifecycle) =>
       lifecycle.sweep(
-        () => Effect.fail(new ProvisioningError({ step: "container_start", cause: canary })),
-        () => Effect.void,
+        operations(
+          () => Effect.fail(new RunnerAttemptFailure({ step: "container_start", cause: canary })),
+          () => Effect.void,
+        ),
       ),
     );
 
@@ -352,16 +360,15 @@ describe("Scheduler admission", () => {
     const reclaimed: string[] = [];
 
     await withLifecycle(scheduler, async (lifecycle) => {
+      await lifecycle.sweep(operations());
       await lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-      );
-      await lifecycle.sweep(
-        () => Effect.void,
-        (request) => {
-          reclaimed.push(request.runnerName);
-          return Effect.void;
-        },
+        operations(
+          () => Effect.void,
+          (request) => {
+            reclaimed.push(request.runnerName);
+            return Effect.void;
+          },
+        ),
         Date.now() + 6 * 60_000,
       );
     });
@@ -387,12 +394,7 @@ describe("Scheduler admission", () => {
     const acceptedAssigned = await scheduler.accept(assigned);
     if (acceptedAssigned.runnerName === undefined) throw new Error("missing runner name");
 
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-      ),
-    );
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
     await scheduler.accept({
       ...assigned,
       action: "in_progress",
@@ -403,11 +405,13 @@ describe("Scheduler admission", () => {
     const reclaimed: string[] = [];
     await withLifecycle(scheduler, (lifecycle) =>
       lifecycle.sweep(
-        () => Effect.void,
-        (request) => {
-          reclaimed.push(request.runnerName);
-          return Effect.void;
-        },
+        operations(
+          () => Effect.void,
+          (request) => {
+            reclaimed.push(request.runnerName);
+            return Effect.void;
+          },
+        ),
         Date.now() + 6 * 60_000,
       ),
     );
@@ -426,13 +430,12 @@ describe("Scheduler admission", () => {
     await scheduler.accept(event);
 
     await withLifecycle(scheduler, async (lifecycle) => {
+      await lifecycle.sweep(operations());
       await lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-      );
-      await lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.fail(new ProvisioningError({ step: "runner_deletion", cause: "boom" })),
+        operations(
+          () => Effect.void,
+          () => Effect.fail(new RunnerAttemptFailure({ step: "runner_deletion", cause: "boom" })),
+        ),
         Date.now() + 6 * 60_000,
       );
     });
@@ -451,12 +454,7 @@ describe("Scheduler admission", () => {
     const accepted = await scheduler.accept(event);
     if (accepted.runnerName === undefined) throw new Error("missing runner name");
 
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-      ),
-    );
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
     await scheduler.accept({
       ...event,
       action: "in_progress",
@@ -467,11 +465,13 @@ describe("Scheduler admission", () => {
     const reclaimed: string[] = [];
     await withLifecycle(scheduler, async (lifecycle) => {
       await lifecycle.sweep(
-        () => Effect.void,
-        (request) => {
-          reclaimed.push(request.runnerName);
-          return Effect.void;
-        },
+        operations(
+          () => Effect.void,
+          (request) => {
+            reclaimed.push(request.runnerName);
+            return Effect.void;
+          },
+        ),
         Date.now() + 61 * 60_000,
       );
     });
@@ -503,12 +503,7 @@ describe("Scheduler admission", () => {
     const accepted = await scheduler.accept(event);
     if (accepted.runnerName === undefined) throw new Error("missing runner name");
 
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-      ),
-    );
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
     await scheduler.accept({
       ...event,
       action: "in_progress",
@@ -519,11 +514,13 @@ describe("Scheduler admission", () => {
     const reclaimed: string[] = [];
     await withLifecycle(scheduler, (lifecycle) =>
       lifecycle.sweep(
-        () => Effect.void,
-        (request) => {
-          reclaimed.push(request.runnerName);
-          return Effect.void;
-        },
+        operations(
+          () => Effect.void,
+          (request) => {
+            reclaimed.push(request.runnerName);
+            return Effect.void;
+          },
+        ),
         Date.now() + 30 * 60_000,
       ),
     );
@@ -540,12 +537,7 @@ describe("Scheduler admission", () => {
     const accepted = await scheduler.accept(event);
     if (accepted.runnerName === undefined) throw new Error("missing runner name");
 
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-      ),
-    );
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
     await scheduler.accept({
       ...event,
       action: "in_progress",
@@ -553,11 +545,7 @@ describe("Scheduler admission", () => {
       runnerName: accepted.runnerName,
     });
     await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-        Date.now() + 61 * 60_000,
-      ),
+      lifecycle.sweep(operations(), Date.now() + 61 * 60_000),
     );
 
     const expirations = logged.mock.calls
@@ -575,10 +563,7 @@ describe("Scheduler admission", () => {
       const lifecycle = new SchedulerLifecycle(state.storage, "deployment-test", 120_000);
       const accepted = await lifecycle.accept(event);
       if (accepted.runnerName === undefined) throw new Error("missing runner name");
-      await lifecycle.sweep(
-        () => Effect.void,
-        () => Effect.void,
-      );
+      await lifecycle.sweep(operations());
       const armed = await state.storage.getAlarm();
       if (armed === null) throw new Error("expected an assignment alarm");
 

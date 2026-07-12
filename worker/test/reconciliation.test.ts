@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { QueuedJobCandidate } from "../src/domain";
-import { ProvisioningError } from "../src/github";
+import { DiscoveryError } from "../src/github";
 import { reconcile } from "../src/reconciliation";
 
 type Submit = Parameters<typeof reconcile>[1];
@@ -150,7 +150,7 @@ describe("reconciliation", () => {
     const submit = vi.fn<Submit>();
 
     await reconcile(
-      Effect.fail(new ProvisioningError({ step: "run_listing", cause: "boom" })),
+      Effect.fail(new DiscoveryError({ step: "run_listing", cause: "boom" })),
       submit,
       "deployment-test",
     );

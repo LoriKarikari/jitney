@@ -10,7 +10,7 @@ import {
   type AttemptSnapshot,
   type JobSnapshot,
 } from "./lifecycle";
-import { createProvisioner, createReclaimer } from "./provisioning";
+import { createRunnerAttemptOperations } from "./runner-attempt-operations";
 import { assignments, attempts, deliveries, jobs, pending } from "./schema";
 
 export type { AcceptResult, AssignmentSnapshot, AttemptSnapshot, JobSnapshot } from "./lifecycle";
@@ -54,6 +54,6 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   override async alarm(): Promise<void> {
-    await this.#lifecycle.sweep(createProvisioner(this.env), createReclaimer(this.env));
+    await this.#lifecycle.sweep(createRunnerAttemptOperations(this.env));
   }
 }

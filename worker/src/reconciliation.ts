@@ -1,11 +1,11 @@
 import { Effect, Either } from "effect";
 import type { QueuedJobCandidate } from "./domain";
-import type { DiscoveryResult, ProvisioningError } from "./github";
+import type { DiscoveryError, DiscoveryResult } from "./github";
 import type { AcceptResult } from "./lifecycle";
 import { emit } from "./log";
 
 export async function reconcile(
-  discover: Effect.Effect<DiscoveryResult, ProvisioningError>,
+  discover: Effect.Effect<DiscoveryResult, DiscoveryError>,
   submit: (candidate: QueuedJobCandidate) => Promise<AcceptResult>,
   deploymentId: string,
 ): Promise<void> {

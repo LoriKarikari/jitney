@@ -211,7 +211,10 @@ live under `worker/`. The root Taskfile delegates to both.
 - **golangci-lint** with `supervisor/.golangci.yml` is the lint source of
   truth. Run `task lint` after every significant change.
 - CI runs tests with `-race -shuffle=on`, checks `go mod tidy` drift, and
-  runs govulncheck, gosec, and CodeQL on every PR.
+  runs govulncheck and gosec on every PR that touches Go code. CodeQL stays
+  disabled while the repository is private.
+- Workflows are path-scoped: Go checks run only when `supervisor/**` changes,
+  TypeScript checks only when `worker/**` changes.
 - The supervisor builds as a static `CGO_ENABLED=0` linux/amd64 binary; it
   ships inside the runner image, not as a released archive.
 - `//nolint` directives must name the linter and carry a justification.
@@ -227,10 +230,19 @@ live under `worker/`. The root Taskfile delegates to both.
   checks.
 - Oxfmt is the formatter. Oxlint, including its type-aware rules, is the lint
   source of truth. Use `pnpm fmt` to write formatting and `pnpm lint` to lint.
+- Knip fails the build on unused files, exports, and dependencies. Run
+  `pnpm knip` before opening a PR.
+- The Durable Object schema authority is `worker/src/schema.ts`. After
+  changing it, run `pnpm exec drizzle-kit generate` and commit the generated
+  migration; the Scheduler applies migrations on construction. Never edit an
+  already-merged migration.
 - Vitest tests execute inside workerd through Cloudflare's Workers pool rather
   than a Node.js approximation.
 - `task ts:check` runs generated types, typechecking, formatting checks,
-  linting, and tests. The same sequence runs in CI.
+  linting, Knip, and tests. CI runs the same commands as separate PR checks.
+- Scheduler tests exercise lifecycle behavior through `SchedulerLifecycle` and
+  fake provisioning adapters; they should not import table declarations or
+  construct a Drizzle database directly.
 
 ### SDK-first integrations
 

@@ -34,19 +34,22 @@ export function discoverQueuedJobs(input: {
   return Effect.gen(function* () {
     const app = new Octokit({ authStrategy: createAppAuth, auth: { appId, privateKey } });
     const installations = yield* Effect.tryPromise({
-      try: () => app.rest.apps.listInstallations(),
+      try: () => app.paginate(app.rest.apps.listInstallations, { per_page: 100 }),
       catch: (cause) => new DiscoveryError({ step: "installation_listing", cause }),
     });
 
     const result: DiscoveryResult = { candidates: [], failures: [] };
-    for (const { id: installationId } of installations.data) {
+    for (const { id: installationId } of installations) {
       const installation = new Octokit({
         authStrategy: createAppAuth,
         auth: { appId, privateKey, installationId },
       });
       const repositories = yield* Effect.either(
         Effect.tryPromise({
-          try: () => installation.rest.apps.listReposAccessibleToInstallation(),
+          try: () =>
+            installation.paginate(installation.rest.apps.listReposAccessibleToInstallation, {
+              per_page: 100,
+            }),
           catch: (cause) => new DiscoveryError({ step: "repository_listing", cause }),
         }),
       );
@@ -55,7 +58,7 @@ export function discoverQueuedJobs(input: {
         continue;
       }
 
-      for (const repository of repositories.right.data.repositories) {
+      for (const repository of repositories.right) {
         if (!repository.private) continue;
         const { id: repositoryId, name: repositoryName, private: repositoryPrivate } = repository;
         const repositoryOwner = repository.owner.login;
@@ -63,10 +66,11 @@ export function discoverQueuedJobs(input: {
         const runs = yield* Effect.either(
           Effect.tryPromise({
             try: () =>
-              installation.rest.actions.listWorkflowRunsForRepo({
+              installation.paginate(installation.rest.actions.listWorkflowRunsForRepo, {
                 owner: repositoryOwner,
                 repo: repositoryName,
                 status: "queued",
+                per_page: 100,
               }),
             catch: (cause) => new DiscoveryError({ step: "run_listing", cause }),
           }),
@@ -76,14 +80,15 @@ export function discoverQueuedJobs(input: {
           continue;
         }
 
-        for (const run of runs.right.data.workflow_runs) {
+        for (const run of runs.right) {
           const jobs = yield* Effect.either(
             Effect.tryPromise({
               try: () =>
-                installation.rest.actions.listJobsForWorkflowRun({
+                installation.paginate(installation.rest.actions.listJobsForWorkflowRun, {
                   owner: repositoryOwner,
                   repo: repositoryName,
                   run_id: run.id,
+                  per_page: 100,
                 }),
               catch: (cause) => new DiscoveryError({ step: "job_listing", cause }),
             }),
@@ -93,7 +98,7 @@ export function discoverQueuedJobs(input: {
             continue;
           }
 
-          for (const job of jobs.right.data.jobs) {
+          for (const job of jobs.right) {
             if (job.status !== "queued") continue;
             result.candidates.push({
               ...correlation,

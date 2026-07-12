@@ -36,16 +36,28 @@ GitHub reports `workflow_job.in_progress` with a `runner_name`. Cleanup
 follows the assignment, not the job that triggered provisioning.
 _Avoid_: mapping, association
 
+**Runner Attempt Operations**:
+The privileged control-plane work that provisions or reclaims a Runner
+Attempt. It owns GitHub App authentication, repository-scoped credentials,
+Runner Container operations, their required ordering, and failure
+classification.
+_Avoid_: GitHub helper, container helper
+
 **Runner Container**:
 The ephemeral Cloudflare Container that executes one JIT runner process. Its
 disk is fresh per boot, its state is owned by the Scheduler, and it exits
 after one job.
 _Avoid_: VM, instance, pod
 
+**Job Intake**:
+A queued Job presented to the Scheduler from either a Delivery-backed Workflow
+Event or reconciliation. Both sources share admission, idempotency, capacity,
+and Runner Attempt creation. Only a Workflow Event carries Delivery identity.
+_Avoid_: synthetic webhook, fabricated delivery
+
 **Scheduler**:
-The global Durable Object that owns job lifecycle, runner attempts, admission
-control, deadlines, and reconciliation. Its interface is
-`accept(workflowEvent)`.
+The global Durable Object that owns Job Intake, job lifecycle, Runner Attempts,
+admission control, deadlines, and reconciliation.
 _Avoid_: queue, controller, orchestrator
 
 **Ingress Worker**:
@@ -81,6 +93,8 @@ _Avoid_: tag, selector
 ## Relationships
 
 - A **Delivery** carries one **Workflow Event**.
+- **Job Intake** receives either a Delivery-backed **Workflow Event** or a
+  reconciled queued **Job**.
 - A **Job** has zero or more **Runner Attempts**.
 - An **Assignment** binds one **Job** to one runner name, reported by
   `workflow_job.in_progress`.

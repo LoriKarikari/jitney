@@ -16,10 +16,24 @@ export type WorkflowEvent = {
   conclusion?: string;
 };
 
-export type ParseResult =
+type ParseResult =
   | { kind: "accepted"; event: WorkflowEvent }
   | { kind: "ignored" }
   | { kind: "malformed" };
+
+export type QueuedJobCandidate = {
+  installationId: number;
+  repositoryId: number;
+  repositoryOwner: string;
+  repositoryName: string;
+  repositoryPrivate: boolean;
+  workflowJobId: number;
+  labels: string[];
+};
+
+export function isAdmissible(repositoryPrivate: boolean, labels: readonly string[]): boolean {
+  return repositoryPrivate && labels.length === 1 && labels[0] === "jitney";
+}
 
 const Payload = Schema.Struct({
   action: Schema.Literal("queued", "in_progress", "completed"),
@@ -55,11 +69,7 @@ export function parseWorkflowEvent(deliveryId: string, body: ArrayBuffer): Parse
   if (Either.isLeft(decoded)) return { kind: "malformed" };
   const payload = decoded.right;
 
-  if (
-    !payload.repository.private ||
-    payload.workflow_job.labels.length !== 1 ||
-    payload.workflow_job.labels[0] !== "jitney"
-  ) {
+  if (!isAdmissible(payload.repository.private, payload.workflow_job.labels)) {
     return { kind: "ignored" };
   }
 

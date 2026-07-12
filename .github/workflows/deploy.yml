@@ -2,6 +2,13 @@ name: Deploy
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - worker/**
+      - runner/**
+      - supervisor/**
+      - .github/workflows/deploy.yml
 
 permissions:
   contents: read
@@ -13,6 +20,9 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://jitney.lori-karikari.workers.dev
     defaults:
       run:
         working-directory: worker
@@ -35,4 +45,4 @@ jobs:
       - run: pnpm exec wrangler deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}

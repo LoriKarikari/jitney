@@ -20,8 +20,24 @@ concurrency:
 
 jobs:
   check:
-    name: Worker checks
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Generated types
+            command: pnpm types && git diff --exit-code -- worker-configuration.d.ts
+          - name: Typecheck
+            command: pnpm typecheck
+          - name: Formatting
+            command: pnpm fmt:check
+          - name: Oxlint
+            command: pnpm lint
+          - name: Knip
+            command: pnpm knip
+          - name: Worker tests
+            command: pnpm test
     env:
       GITHUB_WEBHOOK_SECRET: ci-placeholder
       GITHUB_APP_ID: ci-placeholder
@@ -39,19 +55,5 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: worker/pnpm-lock.yaml
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Generate Cloudflare types
-        run: pnpm types
-      - name: Check generated types
-        run: git diff --exit-code -- worker-configuration.d.ts
-      - name: Typecheck
-        run: pnpm typecheck
-      - name: Check formatting
-        run: pnpm fmt:check
-      - name: Lint
-        run: pnpm lint
-      - name: Check unused code
-        run: pnpm knip
-      - name: Test
-        run: pnpm test
+      - run: pnpm install --frozen-lockfile
+      - run: ${{ matrix.command }}

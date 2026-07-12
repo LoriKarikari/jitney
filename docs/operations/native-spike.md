@@ -1,6 +1,11 @@
 # Native spike deployment record
 
-This record contains identifiers needed to reproduce the first deployment. It does not contain credentials or payload bodies.
+This is a point-in-time record of the first end-to-end deployment on
+2026-07-11. It contains the identifiers needed to reproduce that baseline, not
+credentials or payload bodies. The Worker version below is the one that ran
+the spike; later merges supersede it. For current live evidence see
+[workload-compatibility.md](workload-compatibility.md) and
+[lifecycle-evidence.md](lifecycle-evidence.md).
 
 ## Deployment
 

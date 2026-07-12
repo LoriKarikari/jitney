@@ -66,7 +66,7 @@ async function fetch(request: Request, env: Env): Promise<Response> {
   }
 
   const event = parsed.event;
-  const result = await env.SCHEDULER.getByName("global-v2").accept(event);
+  const result = await env.SCHEDULER.getByName("global-v3").accept(event);
   const { installationId, repositoryId, workflowJobId, action } = event;
   const { runnerName, outcome } = result;
   emit({
@@ -86,7 +86,7 @@ async function fetch(request: Request, env: Env): Promise<Response> {
 async function scheduled(_controller: ScheduledController, env: Env): Promise<void> {
   await reconcile(
     discoverQueuedJobs({ appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY }),
-    (candidate) => env.SCHEDULER.getByName("global-v2").reconcile(candidate),
+    (candidate) => env.SCHEDULER.getByName("global-v3").reconcile(candidate),
     env.CF_VERSION_METADATA.id,
   );
 }

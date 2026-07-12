@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "5191a574-05bb-4bdb-bb7a-2e7cc11d252f",
+  "id": "23ea50e5-ba43-43fc-8709-a9b919d0cd8e",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "assignments": {
@@ -28,20 +28,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "runner_name": {
-          "name": "runner_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "container_name": {
-          "name": "container_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
         "assigned_at": {
           "name": "assigned_at",
           "type": "integer",
@@ -51,13 +37,32 @@
         }
       },
       "indexes": {
-        "assignments_runner_name_unique": {
-          "name": "assignments_runner_name_unique",
-          "columns": ["runner_name"],
+        "assignments_attempt_unique": {
+          "name": "assignments_attempt_unique",
+          "columns": ["triggering_workflow_job_id", "attempt"],
           "isUnique": true
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "assignments_workflow_job_id_jobs_workflow_job_id_fk": {
+          "name": "assignments_workflow_job_id_jobs_workflow_job_id_fk",
+          "tableFrom": "assignments",
+          "tableTo": "jobs",
+          "columnsFrom": ["workflow_job_id"],
+          "columnsTo": ["workflow_job_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "assignments_triggering_workflow_job_id_attempt_attempts_workflow_job_id_attempt_fk": {
+          "name": "assignments_triggering_workflow_job_id_attempt_attempts_workflow_job_id_attempt_fk",
+          "tableFrom": "assignments",
+          "tableTo": "attempts",
+          "columnsFrom": ["triggering_workflow_job_id", "attempt"],
+          "columnsTo": ["workflow_job_id", "attempt"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}
@@ -81,6 +86,27 @@
         },
         "state": {
           "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "installation_id": {
+          "name": "installation_id",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repository_owner": {
+          "name": "repository_owner",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "repository_name": {
+          "name": "repository_name",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
@@ -125,9 +151,29 @@
           "name": "attempts_container_name_unique",
           "columns": ["container_name"],
           "isUnique": true
+        },
+        "attempts_state_assignment_deadline_idx": {
+          "name": "attempts_state_assignment_deadline_idx",
+          "columns": ["state", "assignment_deadline"],
+          "isUnique": false
+        },
+        "attempts_state_runtime_deadline_idx": {
+          "name": "attempts_state_runtime_deadline_idx",
+          "columns": ["state", "runtime_deadline"],
+          "isUnique": false
         }
       },
-      "foreignKeys": {},
+      "foreignKeys": {
+        "attempts_workflow_job_id_jobs_workflow_job_id_fk": {
+          "name": "attempts_workflow_job_id_jobs_workflow_job_id_fk",
+          "tableFrom": "attempts",
+          "tableTo": "jobs",
+          "columnsFrom": ["workflow_job_id"],
+          "columnsTo": ["workflow_job_id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {
         "attempts_workflow_job_id_attempt_pk": {
           "columns": ["workflow_job_id", "attempt"],
@@ -192,13 +238,6 @@
           "notNull": true,
           "autoincrement": false
         },
-        "runner_name": {
-          "name": "runner_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "conclusion": {
           "name": "conclusion",
           "type": "text",
@@ -230,30 +269,33 @@
           "notNull": true,
           "autoincrement": false
         },
-        "payload": {
-          "name": "payload",
-          "type": "text",
+        "attempt": {
+          "name": "attempt",
+          "type": "integer",
           "primaryKey": false,
           "notNull": true,
           "autoincrement": false
         },
-        "runner_name": {
-          "name": "runner_name",
+        "delivery_id": {
+          "name": "delivery_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "container_name": {
-          "name": "container_name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
+          "notNull": false,
           "autoincrement": false
         }
       },
       "indexes": {},
-      "foreignKeys": {},
+      "foreignKeys": {
+        "pending_workflow_job_id_attempt_attempts_workflow_job_id_attempt_fk": {
+          "name": "pending_workflow_job_id_attempt_attempts_workflow_job_id_attempt_fk",
+          "tableFrom": "pending",
+          "tableTo": "attempts",
+          "columnsFrom": ["workflow_job_id", "attempt"],
+          "columnsTo": ["workflow_job_id", "attempt"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "checkConstraints": {}

@@ -68,4 +68,4 @@ async function fetch(request: Request, env: Env): Promise<Response> {
   return new Response(null, { status: 202 });
 }
 
-export default { fetch } satisfies ExportedHandler<Env>;
+export default { fetch };

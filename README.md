@@ -6,8 +6,8 @@
 
 <p align="center">
   <a href="https://github.com/LoriKarikari/jitney/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/LoriKarikari/jitney/actions/workflows/test.yml/badge.svg"></a>
-  <a href="https://github.com/LoriKarikari/jitney/actions/workflows/image.yml"><img alt="Runner image" src="https://github.com/LoriKarikari/jitney/actions/workflows/image.yml/badge.svg"></a>
-  <a href="https://github.com/LoriKarikari/jitney/actions/workflows/deploy.yml"><img alt="Deploy" src="https://github.com/LoriKarikari/jitney/actions/workflows/deploy.yml/badge.svg"></a>
+  <a href="supervisor/go.mod"><img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/LoriKarikari/jitney?filename=supervisor%2Fgo.mod"></a>
+  <a href="worker/package.json"><img alt="Node version" src="https://img.shields.io/badge/node-%E2%89%A524-brightgreen"></a>
 </p>
 
 Jitney is a self-hosted control plane you deploy on your own Cloudflare

@@ -236,6 +236,12 @@ live under `worker/`. The root Taskfile delegates to both.
   changing it, run `pnpm exec drizzle-kit generate` and commit the generated
   migration; the Scheduler applies migrations on construction. Never edit an
   already-merged migration.
+- Schema changes are additive from here on. Do not squash migration history,
+  rename the Scheduler Durable Object, or otherwise discard deployed state.
+  The one clean-slate reset (`global-v3`, baseline migration) already
+  happened, pre-users, with explicit maintainer approval. Migrations that
+  restructure tables must adopt existing rows and be proven against seeded
+  old-format data before merge.
 - Vitest tests execute inside workerd through Cloudflare's Workers pool rather
   than a Node.js approximation.
 - `task ts:check` runs generated types, typechecking, formatting checks,

@@ -51,16 +51,19 @@ async function fetch(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 204 });
   }
 
-  const result = await env.SCHEDULER.getByName("global-v2").accept(parsed.event);
+  const event = parsed.event;
+  const result = await env.SCHEDULER.getByName("global-v2").accept(event);
+  const { installationId, repositoryId, workflowJobId, action } = event;
+  const { runnerName, outcome } = result;
   emit("info", "webhook_classified", {
-    deliveryId: parsed.event.deliveryId,
+    deliveryId,
     deploymentId,
-    installationId: parsed.event.installationId,
-    repositoryId: parsed.event.repositoryId,
-    workflowJobId: parsed.event.workflowJobId,
-    runnerName: result.runnerName,
-    action: parsed.event.action,
-    outcome: result.outcome,
+    installationId,
+    repositoryId,
+    workflowJobId,
+    runnerName,
+    action,
+    outcome,
   });
   return new Response(null, { status: 202 });
 }

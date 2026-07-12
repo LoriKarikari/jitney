@@ -89,7 +89,17 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   #emitTransition(event: WorkflowEvent, result: AcceptResult): void {
-    const runnerName = result.runnerName ?? event.runnerName;
+    const {
+      deliveryId,
+      installationId,
+      repositoryId,
+      workflowJobId,
+      runnerName: assignedRunnerName,
+      action,
+      conclusion,
+    } = event;
+    const { outcome } = result;
+    const runnerName = result.runnerName ?? assignedRunnerName;
     const attempt =
       runnerName === undefined
         ? undefined
@@ -97,37 +107,35 @@ export class Scheduler extends DurableObject<Env> {
     const job = this.#db
       .select({ state: jobs.state })
       .from(jobs)
-      .where(eq(jobs.workflowJobId, event.workflowJobId))
+      .where(eq(jobs.workflowJobId, workflowJobId))
       .all()[0];
 
     emit("info", "scheduler_transition", {
-      deliveryId: event.deliveryId,
+      deliveryId,
       deploymentId: this.env.CF_VERSION_METADATA.id,
-      installationId: event.installationId,
-      repositoryId: event.repositoryId,
-      workflowJobId: event.workflowJobId,
+      installationId,
+      repositoryId,
+      workflowJobId,
       attempt: attempt?.attempt,
       runnerName,
       containerName: attempt?.containerName,
-      action: event.action,
-      outcome: result.outcome,
+      action,
+      outcome,
       state: job?.state,
-      conclusion: event.conclusion,
+      conclusion,
     });
   }
 
   #recordDelivery(event: WorkflowEvent, now: number): boolean {
+    const { deliveryId, workflowJobId } = event;
     const delivery = this.#db
       .select({ deliveryId: deliveries.deliveryId })
       .from(deliveries)
-      .where(eq(deliveries.deliveryId, event.deliveryId))
+      .where(eq(deliveries.deliveryId, deliveryId))
       .all()[0];
     if (delivery !== undefined) return false;
 
-    this.#db
-      .insert(deliveries)
-      .values({ deliveryId: event.deliveryId, workflowJobId: event.workflowJobId, receivedAt: now })
-      .run();
+    this.#db.insert(deliveries).values({ deliveryId, workflowJobId, receivedAt: now }).run();
     return true;
   }
 
@@ -171,14 +179,10 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   #recordCapacityLimit(event: WorkflowEvent, now: number): void {
+    const { workflowJobId, repositoryId } = event;
     this.#db
       .insert(jobs)
-      .values({
-        workflowJobId: event.workflowJobId,
-        state: "capacity_limited",
-        repositoryId: event.repositoryId,
-        updatedAt: now,
-      })
+      .values({ workflowJobId, state: "capacity_limited", repositoryId, updatedAt: now })
       .onConflictDoUpdate({
         target: jobs.workflowJobId,
         set: { state: "capacity_limited", updatedAt: now },
@@ -240,17 +244,23 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   #recordAssignment(event: WorkflowEvent, runnerName: string, now: number): AcceptResult {
+    const { workflowJobId } = event;
     const attempt = this.#db
       .select()
       .from(attempts)
       .where(eq(attempts.runnerName, runnerName))
       .all()[0];
     if (attempt === undefined) return { outcome: "unknown_assignment", runnerName };
+    const {
+      workflowJobId: triggeringWorkflowJobId,
+      attempt: attemptNumber,
+      containerName,
+    } = attempt;
 
     const jobAssignment = this.#db
       .select()
       .from(assignments)
-      .where(eq(assignments.workflowJobId, event.workflowJobId))
+      .where(eq(assignments.workflowJobId, workflowJobId))
       .all()[0];
     const runnerAssignment = this.#db
       .select()
@@ -259,7 +269,7 @@ export class Scheduler extends DurableObject<Env> {
       .all()[0];
     if (
       jobAssignment?.runnerName === runnerName &&
-      runnerAssignment?.workflowJobId === event.workflowJobId
+      runnerAssignment?.workflowJobId === workflowJobId
     ) {
       return { outcome: "duplicate", runnerName };
     }
@@ -270,18 +280,18 @@ export class Scheduler extends DurableObject<Env> {
     this.#db
       .insert(assignments)
       .values({
-        workflowJobId: event.workflowJobId,
-        triggeringWorkflowJobId: attempt.workflowJobId,
-        attempt: attempt.attempt,
+        workflowJobId,
+        triggeringWorkflowJobId,
+        attempt: attemptNumber,
         runnerName,
-        containerName: attempt.containerName,
+        containerName,
         assignedAt: now,
       })
       .run();
     this.#db
       .update(jobs)
       .set({ state: "running", runnerName, updatedAt: now })
-      .where(eq(jobs.workflowJobId, event.workflowJobId))
+      .where(eq(jobs.workflowJobId, workflowJobId))
       .run();
     this.#db
       .update(attempts)
@@ -290,46 +300,43 @@ export class Scheduler extends DurableObject<Env> {
       .run();
     this.#db
       .delete(pending)
-      .where(inArray(pending.workflowJobId, [event.workflowJobId, attempt.workflowJobId]))
+      .where(inArray(pending.workflowJobId, [workflowJobId, triggeringWorkflowJobId]))
       .run();
     this.#db
       .update(attempts)
       .set({ state: "stopped" })
       .where(
         and(
-          eq(attempts.workflowJobId, event.workflowJobId),
+          eq(attempts.workflowJobId, workflowJobId),
           inArray(attempts.state, viableAttemptStates),
           ne(attempts.runnerName, runnerName),
         ),
       )
       .run();
-    if (attempt.workflowJobId !== event.workflowJobId) {
+    if (triggeringWorkflowJobId !== workflowJobId) {
       this.#db
         .update(jobs)
         .set({ state: "queued", updatedAt: now })
-        .where(eq(jobs.workflowJobId, attempt.workflowJobId))
+        .where(eq(jobs.workflowJobId, triggeringWorkflowJobId))
         .run();
     }
     return { outcome: "recorded", runnerName };
   }
 
   #recordCompletion(event: WorkflowEvent, now: number): void {
+    const { workflowJobId, conclusion } = event;
     const state =
-      event.conclusion === "cancelled"
-        ? "cancelled"
-        : event.conclusion === "success"
-          ? "completed"
-          : "failed";
+      conclusion === "cancelled" ? "cancelled" : conclusion === "success" ? "completed" : "failed";
     this.#db
       .update(jobs)
-      .set({ state, conclusion: event.conclusion ?? "unknown", updatedAt: now })
-      .where(eq(jobs.workflowJobId, event.workflowJobId))
+      .set({ state, conclusion: conclusion ?? "unknown", updatedAt: now })
+      .where(eq(jobs.workflowJobId, workflowJobId))
       .run();
 
     const assignment = this.#db
       .select()
       .from(assignments)
-      .where(eq(assignments.workflowJobId, event.workflowJobId))
+      .where(eq(assignments.workflowJobId, workflowJobId))
       .all()[0];
     if (assignment !== undefined) {
       this.#db
@@ -338,7 +345,7 @@ export class Scheduler extends DurableObject<Env> {
         .where(eq(attempts.runnerName, assignment.runnerName))
         .run();
     }
-    this.#db.delete(pending).where(eq(pending.workflowJobId, event.workflowJobId)).run();
+    this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
   }
 
   getJob(workflowJobId: number): JobSnapshot | undefined {
@@ -350,12 +357,13 @@ export class Scheduler extends DurableObject<Env> {
       .where(eq(pending.workflowJobId, workflowJobId))
       .all()[0];
 
+    const { state, repositoryId, runnerName } = row;
     return {
-      workflowJobId: row.workflowJobId,
-      state: row.state,
-      repositoryId: row.repositoryId,
+      workflowJobId,
+      state,
+      repositoryId,
       pending: pendingRow !== undefined,
-      ...(row.runnerName && { runnerName: row.runnerName }),
+      ...(runnerName && { runnerName }),
     };
   }
 
@@ -409,48 +417,52 @@ export async function drainPending(
   const pendingRow = db.select().from(pending).orderBy(pending.workflowJobId).all()[0];
   if (pendingRow === undefined) return false;
 
-  emit("info", "runner_provisioning_started", {
-    deliveryId: pendingRow.deliveryId,
+  const {
+    deliveryId,
+    installationId,
+    repositoryId,
+    repositoryOwner,
+    repositoryName,
+    workflowJobId,
+    runnerName,
+    containerName,
+  } = pendingRow;
+  const correlation = {
+    deliveryId,
     deploymentId,
-    installationId: pendingRow.installationId,
-    repositoryId: pendingRow.repositoryId,
-    workflowJobId: pendingRow.workflowJobId,
-    runnerName: pendingRow.runnerName,
-    containerName: pendingRow.containerName,
-  });
+    installationId,
+    repositoryId,
+    workflowJobId,
+    runnerName,
+    containerName,
+  };
+
+  emit("info", "runner_provisioning_started", correlation);
   db.update(jobs)
     .set({ state: "provisioning", updatedAt: Date.now() })
-    .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+    .where(eq(jobs.workflowJobId, workflowJobId))
     .run();
 
   const result = await Effect.runPromise(
     provision({
-      installationId: pendingRow.installationId,
-      repositoryId: pendingRow.repositoryId,
-      repositoryOwner: pendingRow.repositoryOwner,
-      repositoryName: pendingRow.repositoryName,
-      workflowJobId: pendingRow.workflowJobId,
-      runnerName: pendingRow.runnerName,
-      containerName: pendingRow.containerName,
+      installationId,
+      repositoryId,
+      repositoryOwner,
+      repositoryName,
+      workflowJobId,
+      runnerName,
+      containerName,
     }).pipe(Effect.either),
   );
 
   if (Either.isRight(result)) {
     finishProvisioning(db, pendingRow);
-    emit("info", "runner_provisioning_succeeded", {
-      deliveryId: pendingRow.deliveryId,
-      deploymentId,
-      installationId: pendingRow.installationId,
-      repositoryId: pendingRow.repositoryId,
-      workflowJobId: pendingRow.workflowJobId,
-      runnerName: pendingRow.runnerName,
-      containerName: pendingRow.containerName,
-    });
+    emit("info", "runner_provisioning_succeeded", correlation);
   } else {
     failProvisioning(db, pendingRow, result.left, deploymentId);
   }
 
-  db.delete(pending).where(eq(pending.workflowJobId, pendingRow.workflowJobId)).run();
+  db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
   const remaining = db
     .select({ count: sql<number>`count(*)` })
     .from(pending)
@@ -462,18 +474,14 @@ function finishProvisioning(
   db: DrizzleSqliteDODatabase<SchedulerSchema>,
   pendingRow: PendingRow,
 ): void {
+  const { workflowJobId, runnerName } = pendingRow;
   db.update(jobs)
     .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
-    .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+    .where(eq(jobs.workflowJobId, workflowJobId))
     .run();
   db.update(attempts)
     .set({ state: "waiting_for_assignment" })
-    .where(
-      and(
-        eq(attempts.workflowJobId, pendingRow.workflowJobId),
-        eq(attempts.runnerName, pendingRow.runnerName),
-      ),
-    )
+    .where(and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.runnerName, runnerName)))
     .run();
 }
 
@@ -483,27 +491,24 @@ function failProvisioning(
   error: Effect.Effect.Error<ReturnType<Provision>>,
   deploymentId?: string,
 ): void {
+  const { deliveryId, installationId, repositoryId, workflowJobId, runnerName, containerName } =
+    pendingRow;
   db.update(jobs)
     .set({ state: "queued", updatedAt: Date.now() })
-    .where(eq(jobs.workflowJobId, pendingRow.workflowJobId))
+    .where(eq(jobs.workflowJobId, workflowJobId))
     .run();
   db.update(attempts)
     .set({ state: "failed" })
-    .where(
-      and(
-        eq(attempts.workflowJobId, pendingRow.workflowJobId),
-        eq(attempts.runnerName, pendingRow.runnerName),
-      ),
-    )
+    .where(and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.runnerName, runnerName)))
     .run();
   emit("error", "runner_provisioning_failed", {
-    deliveryId: pendingRow.deliveryId,
+    deliveryId,
     deploymentId,
-    installationId: pendingRow.installationId,
-    repositoryId: pendingRow.repositoryId,
-    workflowJobId: pendingRow.workflowJobId,
-    runnerName: pendingRow.runnerName,
-    containerName: pendingRow.containerName,
+    installationId,
+    repositoryId,
+    workflowJobId,
+    runnerName,
+    containerName,
     step: error instanceof ProvisioningError ? error.step : "installation_mismatch",
   });
 }

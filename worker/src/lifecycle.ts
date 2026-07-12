@@ -10,7 +10,7 @@ import { emit } from "./log";
 const maxPendingJobs = 10;
 const maxActiveAttempts = 25;
 const assignmentTimeout = 5 * 60_000;
-const runtimeTimeout = 60 * 60_000;
+const defaultRuntimeTimeout = 60 * 60_000;
 const viableAttemptStates = ["created", "starting", "waiting_for_assignment"];
 const activeAttemptStates = [...viableAttemptStates, "running"];
 const terminalJobStates = ["completed", "cancelled", "failed"];
@@ -50,6 +50,7 @@ export class SchedulerLifecycle {
   constructor(
     private readonly storage: DurableObjectStorage,
     private readonly deploymentId?: string,
+    private readonly runtimeTimeout = defaultRuntimeTimeout,
   ) {
     this.#db = drizzle(storage, { schema: { deliveries, jobs, attempts, assignments, pending } });
   }
@@ -81,6 +82,13 @@ export class SchedulerLifecycle {
     }
 
     this.#emitTransition(event, result);
+    if (
+      event.action === "in_progress" &&
+      result.outcome === "recorded" &&
+      (await this.storage.getAlarm()) === null
+    ) {
+      await this.storage.setAlarm(now + this.runtimeTimeout);
+    }
     return result;
   }
 
@@ -295,7 +303,7 @@ export class SchedulerLifecycle {
       .run();
     this.#db
       .update(attempts)
-      .set({ state: "running", runtimeDeadline: now + runtimeTimeout })
+      .set({ state: "running", runtimeDeadline: now + this.runtimeTimeout })
       .where(eq(attempts.runnerName, runnerName))
       .run();
     this.#db
@@ -393,33 +401,39 @@ export class SchedulerLifecycle {
   async sweep(provision: Provision, reclaim: Reclaim, now = Date.now()): Promise<void> {
     const morePending = await drainPending(this.#db, provision, this.deploymentId);
     await this.#expireUnassignedAttempts(reclaim, now);
+    await this.#expireRunningAttempts(reclaim, now);
 
-    const nextDeadline = this.#db
-      .select({ deadline: sql<number>`min(${attempts.assignmentDeadline})` })
-      .from(attempts)
-      .where(inArray(attempts.state, viableAttemptStates))
-      .all()[0]?.deadline;
-    const wakeAt = morePending ? now + 1_000 : nextDeadline;
-    if (wakeAt !== undefined && wakeAt !== null) {
+    const wakeAt = morePending ? now + 1_000 : this.#nextDeadline();
+    if (wakeAt !== undefined) {
       await this.storage.setAlarm(Math.max(wakeAt, now + 1_000));
     }
   }
 
-  async #expireUnassignedAttempts(reclaim: Reclaim, now: number): Promise<void> {
-    const expired = this.#db
-      .select({ ...getTableColumns(attempts), repositoryId: jobs.repositoryId })
+  #nextDeadline(): number | undefined {
+    const assignment = this.#db
+      .select({ deadline: sql<number | null>`min(${attempts.assignmentDeadline})` })
       .from(attempts)
-      .innerJoin(jobs, eq(jobs.workflowJobId, attempts.workflowJobId))
-      .where(
-        and(
-          inArray(attempts.state, viableAttemptStates),
-          sql`${attempts.assignmentDeadline} <= ${now}`,
-        ),
-      )
-      .all();
+      .where(inArray(attempts.state, viableAttemptStates))
+      .all()[0]?.deadline;
+    const runtime = this.#db
+      .select({ deadline: sql<number | null>`min(${attempts.runtimeDeadline})` })
+      .from(attempts)
+      .where(eq(attempts.state, "running"))
+      .all()[0]?.deadline;
+    const deadlines = [assignment, runtime].filter((value) => value != null);
+    return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
+  }
+
+  async #expireUnassignedAttempts(reclaim: Reclaim, now: number): Promise<void> {
+    const expired = this.#expiredAttempts(
+      and(
+        inArray(attempts.state, viableAttemptStates),
+        sql`${attempts.assignmentDeadline} <= ${now}`,
+      ),
+    );
 
     for (const row of expired) {
-      const { workflowJobId, attempt, runnerName, containerName, repositoryId } = row;
+      const { workflowJobId, runnerName } = row;
       this.#db
         .update(attempts)
         .set({ state: "expired" })
@@ -436,50 +450,84 @@ export class SchedulerLifecycle {
           ),
         )
         .run();
+      await this.#reclaimExpired(reclaim, row, "assignment_deadline");
+    }
+  }
 
-      const correlation = {
-        installationId: row.installationId ?? 0,
+  async #expireRunningAttempts(reclaim: Reclaim, now: number): Promise<void> {
+    const expired = this.#expiredAttempts(
+      and(eq(attempts.state, "running"), sql`${attempts.runtimeDeadline} <= ${now}`),
+    );
+
+    for (const row of expired) {
+      const { runnerName } = row;
+      const assignment = this.#db
+        .select()
+        .from(assignments)
+        .where(eq(assignments.runnerName, runnerName))
+        .all()[0];
+      const assignedJobId = assignment?.workflowJobId ?? row.workflowJobId;
+      this.#db
+        .update(attempts)
+        .set({ state: "expired" })
+        .where(eq(attempts.runnerName, runnerName))
+        .run();
+      this.#db
+        .update(jobs)
+        .set({ state: "failed", conclusion: "timed_out", updatedAt: now })
+        .where(eq(jobs.workflowJobId, assignedJobId))
+        .run();
+      this.#db.delete(pending).where(eq(pending.workflowJobId, assignedJobId)).run();
+      await this.#reclaimExpired(reclaim, row, "runtime_deadline");
+    }
+  }
+
+  #expiredAttempts(condition: ReturnType<typeof and>): ExpiredAttempt[] {
+    return this.#db
+      .select({ ...getTableColumns(attempts), repositoryId: jobs.repositoryId })
+      .from(attempts)
+      .innerJoin(jobs, eq(jobs.workflowJobId, attempts.workflowJobId))
+      .where(condition)
+      .all();
+  }
+
+  async #reclaimExpired(reclaim: Reclaim, row: ExpiredAttempt, stopReason: string): Promise<void> {
+    const { workflowJobId, attempt, runnerName, containerName, repositoryId } = row;
+    const correlation = {
+      installationId: row.installationId ?? 0,
+      repositoryId,
+      workflowJobId,
+      runnerName,
+      containerName,
+      deploymentId: this.deploymentId,
+    };
+    emit({ event: "runner_attempt_expired", ...correlation, attempt, stopReason });
+
+    if (
+      row.installationId === null ||
+      row.repositoryOwner === null ||
+      row.repositoryName === null
+    ) {
+      return;
+    }
+    const result = await Effect.runPromise(
+      reclaim({
+        installationId: row.installationId,
         repositoryId,
+        repositoryOwner: row.repositoryOwner,
+        repositoryName: row.repositoryName,
         workflowJobId,
         runnerName,
         containerName,
-        deploymentId: this.deploymentId,
-      };
-      emit({
-        event: "runner_attempt_expired",
-        ...correlation,
-        attempt,
-        stopReason: "assignment_deadline",
-      });
-
-      if (
-        row.installationId === null ||
-        row.repositoryOwner === null ||
-        row.repositoryName === null
-      ) {
-        continue;
-      }
-      const result = await Effect.runPromise(
-        reclaim({
-          installationId: row.installationId,
-          repositoryId,
-          repositoryOwner: row.repositoryOwner,
-          repositoryName: row.repositoryName,
-          workflowJobId,
-          runnerName,
-          containerName,
-        }).pipe(Effect.either),
-      );
-      if (Either.isLeft(result)) {
-        emit({
-          event: "runner_reclaim_failed",
-          ...correlation,
-          step: result.left.step,
-        });
-      }
+      }).pipe(Effect.either),
+    );
+    if (Either.isLeft(result)) {
+      emit({ event: "runner_reclaim_failed", ...correlation, step: result.left.step });
     }
   }
 }
+
+type ExpiredAttempt = typeof attempts.$inferSelect & { repositoryId: number };
 
 type SchedulerSchema = {
   deliveries: typeof deliveries;

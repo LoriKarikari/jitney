@@ -7,7 +7,7 @@ export type RunnerCorrelation = {
 };
 
 type DeliveryCorrelation = {
-  deliveryId: string;
+  deliveryId?: string | undefined;
   deploymentId?: string | undefined;
 };
 
@@ -62,12 +62,20 @@ export type LifecycleRecord =
   | { event: "reconciliation_started"; deploymentId: string }
   | { event: "reconciliation_failed"; deploymentId: string; step: string }
   | {
+      event: "reconciliation_discovery_failed";
+      deploymentId: string;
+      step: string;
+      installationId: number;
+      repositoryId?: number | undefined;
+    }
+  | {
       event: "reconciliation_completed";
       deploymentId: string;
       discovered: number;
       submitted: number;
       suppressed: number;
       ignored: number;
+      failures: number;
     }
   | (ContainerCorrelation & { event: "runner_container_started" })
   | (ContainerCorrelation & {
@@ -102,6 +110,7 @@ const allowedFields = [
   "submitted",
   "suppressed",
   "ignored",
+  "failures",
 ] as const satisfies readonly LifecycleFieldName[];
 
 const sensitive = [

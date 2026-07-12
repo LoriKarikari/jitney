@@ -1,6 +1,6 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
-import { Data, Effect } from "effect";
+import { Data, Effect, Either } from "effect";
 import type { QueuedJobCandidate } from "./domain";
 
 export class InstallationMismatch extends Data.TaggedError("InstallationMismatch")<{
@@ -38,9 +38,20 @@ export type DiscoveryInput = {
   privateKey: string;
 };
 
+type DiscoveryFailure = {
+  step: string;
+  installationId: number;
+  repositoryId?: number;
+};
+
+export type DiscoveryResult = {
+  candidates: QueuedJobCandidate[];
+  failures: DiscoveryFailure[];
+};
+
 export function discoverQueuedJobs(
   input: DiscoveryInput,
-): Effect.Effect<QueuedJobCandidate[], ProvisioningError> {
+): Effect.Effect<DiscoveryResult, ProvisioningError> {
   const { appId, privateKey } = input;
 
   return Effect.gen(function* () {
@@ -50,47 +61,65 @@ export function discoverQueuedJobs(
       catch: (cause) => new ProvisioningError({ step: "installation_listing", cause }),
     });
 
-    const candidates: QueuedJobCandidate[] = [];
+    const result: DiscoveryResult = { candidates: [], failures: [] };
     for (const { id: installationId } of installations.data) {
       const installation = new Octokit({
         authStrategy: createAppAuth,
         auth: { appId, privateKey, installationId },
       });
-      const repositories = yield* Effect.tryPromise({
-        try: () => installation.rest.apps.listReposAccessibleToInstallation(),
-        catch: (cause) => new ProvisioningError({ step: "repository_listing", cause }),
-      });
+      const repositories = yield* Effect.either(
+        Effect.tryPromise({
+          try: () => installation.rest.apps.listReposAccessibleToInstallation(),
+          catch: (cause) => new ProvisioningError({ step: "repository_listing", cause }),
+        }),
+      );
+      if (Either.isLeft(repositories)) {
+        result.failures.push({ installationId, step: repositories.left.step });
+        continue;
+      }
 
-      for (const repository of repositories.data.repositories) {
+      for (const repository of repositories.right.data.repositories) {
         if (!repository.private) continue;
         const { id: repositoryId, name: repositoryName, private: repositoryPrivate } = repository;
         const repositoryOwner = repository.owner.login;
-        const runs = yield* Effect.tryPromise({
-          try: () =>
-            installation.rest.actions.listWorkflowRunsForRepo({
-              owner: repositoryOwner,
-              repo: repositoryName,
-              status: "queued",
-            }),
-          catch: (cause) => new ProvisioningError({ step: "run_listing", cause }),
-        });
-
-        for (const run of runs.data.workflow_runs) {
-          const jobs = yield* Effect.tryPromise({
+        const correlation = { installationId, repositoryId };
+        const runs = yield* Effect.either(
+          Effect.tryPromise({
             try: () =>
-              installation.rest.actions.listJobsForWorkflowRun({
+              installation.rest.actions.listWorkflowRunsForRepo({
                 owner: repositoryOwner,
                 repo: repositoryName,
-                run_id: run.id,
+                status: "queued",
               }),
-            catch: (cause) => new ProvisioningError({ step: "job_listing", cause }),
-          });
+            catch: (cause) => new ProvisioningError({ step: "run_listing", cause }),
+          }),
+        );
+        if (Either.isLeft(runs)) {
+          result.failures.push({ ...correlation, step: runs.left.step });
+          continue;
+        }
 
-          for (const job of jobs.data.jobs) {
+        for (const run of runs.right.data.workflow_runs) {
+          const jobs = yield* Effect.either(
+            Effect.tryPromise({
+              try: () =>
+                installation.rest.actions.listJobsForWorkflowRun({
+                  owner: repositoryOwner,
+                  repo: repositoryName,
+                  run_id: run.id,
+                }),
+              catch: (cause) => new ProvisioningError({ step: "job_listing", cause }),
+            }),
+          );
+          if (Either.isLeft(jobs)) {
+            result.failures.push({ ...correlation, step: jobs.left.step });
+            continue;
+          }
+
+          for (const job of jobs.right.data.jobs) {
             if (job.status !== "queued") continue;
-            candidates.push({
-              installationId,
-              repositoryId,
+            result.candidates.push({
+              ...correlation,
               repositoryOwner,
               repositoryName,
               repositoryPrivate,
@@ -101,7 +130,7 @@ export function discoverQueuedJobs(
         }
       }
     }
-    return candidates;
+    return result;
   });
 }
 

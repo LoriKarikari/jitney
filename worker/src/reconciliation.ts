@@ -1,18 +1,17 @@
 import { Effect, Either } from "effect";
-import { isAdmissible, type QueuedJobCandidate, type WorkflowEvent } from "./domain";
-import type { ProvisioningError } from "./github";
+import type { QueuedJobCandidate } from "./domain";
+import type { DiscoveryResult, ProvisioningError } from "./github";
 import type { AcceptResult } from "./lifecycle";
 import { emit } from "./log";
 
-export type Discover = Effect.Effect<QueuedJobCandidate[], ProvisioningError>;
+export type Discover = Effect.Effect<DiscoveryResult, ProvisioningError>;
 
-export type Submit = (event: WorkflowEvent) => Promise<AcceptResult>;
+export type Submit = (candidate: QueuedJobCandidate) => Promise<AcceptResult>;
 
 export async function reconcile(
   discover: Discover,
   submit: Submit,
   deploymentId: string,
-  now = Date.now(),
 ): Promise<void> {
   emit({ event: "reconciliation_started", deploymentId });
 
@@ -22,29 +21,28 @@ export async function reconcile(
     return;
   }
 
+  const { candidates, failures } = discovered.right;
+  for (const failure of failures) {
+    emit({ event: "reconciliation_discovery_failed", deploymentId, ...failure });
+  }
+
   let submitted = 0;
   let suppressed = 0;
   let ignored = 0;
-  for (const candidate of discovered.right) {
-    if (!isAdmissible(candidate.repositoryPrivate, candidate.labels)) {
-      ignored++;
-      continue;
-    }
-    const { outcome } = await submit({
-      ...candidate,
-      deliveryId: `reconciliation-${now}-${candidate.workflowJobId}`,
-      action: "queued",
-    });
+  for (const candidate of candidates) {
+    const { outcome } = await submit(candidate);
     if (outcome === "accepted") submitted++;
+    else if (outcome === "ignored") ignored++;
     else suppressed++;
   }
 
   emit({
     event: "reconciliation_completed",
     deploymentId,
-    discovered: discovered.right.length,
+    discovered: candidates.length,
     submitted,
     suppressed,
     ignored,
+    failures: failures.length,
   });
 }

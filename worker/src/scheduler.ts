@@ -2,7 +2,7 @@ import { drizzle } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import { DurableObject } from "cloudflare:workers";
 import migrations from "../drizzle/migrations";
-import type { WorkflowEvent } from "./domain";
+import type { QueuedJobCandidate, WorkflowEvent } from "./domain";
 import {
   SchedulerLifecycle,
   type AcceptResult,
@@ -35,6 +35,10 @@ export class Scheduler extends DurableObject<Env> {
 
   accept(event: WorkflowEvent): Promise<AcceptResult> {
     return this.#lifecycle.accept(event);
+  }
+
+  reconcile(candidate: QueuedJobCandidate): Promise<AcceptResult> {
+    return this.#lifecycle.reconcile(candidate);
   }
 
   getJob(workflowJobId: number): JobSnapshot | undefined {

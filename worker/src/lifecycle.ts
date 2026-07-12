@@ -2,7 +2,7 @@ import { and, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { Either, Effect } from "effect";
 import { assignments, attempts, deliveries, jobs, pending } from "./schema";
-import type { WorkflowEvent } from "./domain";
+import { isAdmissible, type QueuedJobCandidate, type WorkflowEvent } from "./domain";
 import type { Provision, Reclaim } from "./provisioning";
 import { ProvisioningError } from "./github";
 import { emit } from "./log";
@@ -21,6 +21,7 @@ export type AcceptResult = {
     | "recorded"
     | "duplicate"
     | "capacity_limited"
+    | "ignored"
     | "unknown_assignment"
     | "conflicting_assignment";
   runnerName?: string;
@@ -43,6 +44,13 @@ export type AttemptSnapshot = {
 };
 
 export type AssignmentSnapshot = typeof assignments.$inferSelect;
+
+type TransitionInput = QueuedJobCandidate & {
+  action: string;
+  deliveryId?: string | undefined;
+  runnerName?: string | undefined;
+  conclusion?: string | undefined;
+};
 
 export class SchedulerLifecycle {
   #db: DrizzleSqliteDODatabase<SchedulerSchema>;
@@ -72,7 +80,7 @@ export class SchedulerLifecycle {
       } else if (event.action === "queued" && job?.state === "running") {
         result = { outcome: "duplicate", ...(job.runnerName && { runnerName: job.runnerName }) };
       } else if (event.action === "queued") {
-        result = await this.#acceptQueued(event, now);
+        result = await this.#acceptQueued(event, event.deliveryId, now);
       } else if (event.action === "in_progress" && event.runnerName !== undefined) {
         result = this.#recordAssignment(event, event.runnerName, now);
       } else {
@@ -90,7 +98,16 @@ export class SchedulerLifecycle {
     return result;
   }
 
-  #emitTransition(event: WorkflowEvent, result: AcceptResult): void {
+  async reconcile(candidate: QueuedJobCandidate): Promise<AcceptResult> {
+    const now = Date.now();
+    const result = isAdmissible(candidate.repositoryPrivate, candidate.labels)
+      ? await this.#acceptQueued(candidate, null, now)
+      : { outcome: "ignored" as const };
+    this.#emitTransition({ ...candidate, action: "queued" }, result);
+    return result;
+  }
+
+  #emitTransition(event: TransitionInput, result: AcceptResult): void {
     const {
       deliveryId,
       installationId,
@@ -142,7 +159,11 @@ export class SchedulerLifecycle {
     return true;
   }
 
-  async #acceptQueued(event: WorkflowEvent, now: number): Promise<AcceptResult> {
+  async #acceptQueued(
+    event: QueuedJobCandidate,
+    deliveryId: string | null,
+    now: number,
+  ): Promise<AcceptResult> {
     const viableAttempt = this.#db
       .select({ runnerName: attempts.runnerName })
       .from(attempts)
@@ -161,7 +182,7 @@ export class SchedulerLifecycle {
       return { outcome: "capacity_limited" };
     }
 
-    const runnerName = this.#createAttempt(event, now);
+    const runnerName = this.#createAttempt(event, deliveryId, now);
     await this.storage.setAlarm(now + 1_000);
     return { outcome: "accepted", runnerName };
   }
@@ -181,7 +202,7 @@ export class SchedulerLifecycle {
     return pendingCount < maxPendingJobs && activeCount < maxActiveAttempts;
   }
 
-  #recordCapacityLimit(event: WorkflowEvent, now: number): void {
+  #recordCapacityLimit(event: QueuedJobCandidate, now: number): void {
     const { workflowJobId, repositoryId } = event;
     this.#db
       .insert(jobs)
@@ -193,15 +214,8 @@ export class SchedulerLifecycle {
       .run();
   }
 
-  #createAttempt(event: WorkflowEvent, now: number): string {
-    const {
-      deliveryId,
-      installationId,
-      repositoryId,
-      repositoryOwner,
-      repositoryName,
-      workflowJobId,
-    } = event;
+  #createAttempt(event: QueuedJobCandidate, deliveryId: string | null, now: number): string {
+    const { installationId, repositoryId, repositoryOwner, repositoryName, workflowJobId } = event;
     const previousAttempt = this.#db
       .select({ attempt: attempts.attempt })
       .from(attempts)
@@ -556,7 +570,7 @@ async function drainPending(
     containerName,
   } = pendingRow;
   const correlation = {
-    deliveryId,
+    ...(deliveryId && { deliveryId }),
     deploymentId,
     installationId,
     repositoryId,
@@ -631,7 +645,7 @@ function failProvisioning(
     .run();
   emit({
     event: "runner_provisioning_failed",
-    deliveryId,
+    ...(deliveryId && { deliveryId }),
     deploymentId,
     installationId,
     repositoryId,

@@ -43,7 +43,7 @@ export const assignments = sqliteTable("assignments", {
 
 export const pending = sqliteTable("pending", {
   workflowJobId: integer("workflow_job_id").primaryKey(),
-  deliveryId: text("delivery_id").notNull(),
+  deliveryId: text("delivery_id"),
   installationId: integer("installation_id").notNull(),
   repositoryId: integer("repository_id").notNull(),
   repositoryOwner: text("repository_owner").notNull(),

@@ -86,7 +86,7 @@ async function fetch(request: Request, env: Env): Promise<Response> {
 async function scheduled(_controller: ScheduledController, env: Env): Promise<void> {
   await reconcile(
     discoverQueuedJobs({ appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY }),
-    (event) => env.SCHEDULER.getByName("global-v2").accept(event),
+    (candidate) => env.SCHEDULER.getByName("global-v2").reconcile(candidate),
     env.CF_VERSION_METADATA.id,
   );
 }

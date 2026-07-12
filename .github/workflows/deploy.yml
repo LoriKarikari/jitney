@@ -14,15 +14,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-deploy
+  group: deploy
   cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: production
-      url: https://jitney.lori-karikari.workers.dev
+    environment: test
     defaults:
       run:
         working-directory: worker

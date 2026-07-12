@@ -22,6 +22,58 @@ export type ProvisioningInput = {
   runnerName: string;
 };
 
+export type RunnerCleanupInput = {
+  appId: string;
+  privateKey: string;
+  installationId: number;
+  repositoryId: number;
+  repositoryOwner: string;
+  repositoryName: string;
+  runnerName: string;
+};
+
+export function deleteRunner(input: RunnerCleanupInput): Effect.Effect<void, ProvisioningError> {
+  const { appId, privateKey, installationId, repositoryId, repositoryOwner, repositoryName } =
+    input;
+
+  return Effect.gen(function* () {
+    const auth = createAppAuth({ appId, privateKey });
+    const { token } = yield* Effect.tryPromise({
+      try: () =>
+        auth({
+          type: "installation",
+          installationId,
+          repositoryIds: [repositoryId],
+          permissions: { administration: "write" },
+        }),
+      catch: (cause) => new ProvisioningError({ step: "installation_token", cause }),
+    });
+
+    const repo = new Octokit({ auth: token });
+    const { data } = yield* Effect.tryPromise({
+      try: () =>
+        repo.rest.actions.listSelfHostedRunnersForRepo({
+          owner: repositoryOwner,
+          repo: repositoryName,
+        }),
+      catch: (cause) => new ProvisioningError({ step: "runner_lookup", cause }),
+    });
+
+    const runner = data.runners.find((candidate) => candidate.name === input.runnerName);
+    if (runner === undefined) return;
+
+    yield* Effect.tryPromise({
+      try: () =>
+        repo.rest.actions.deleteSelfHostedRunnerFromRepo({
+          owner: repositoryOwner,
+          repo: repositoryName,
+          runner_id: runner.id,
+        }),
+      catch: (cause) => new ProvisioningError({ step: "runner_deletion", cause }),
+    });
+  });
+}
+
 export function generateJitConfig(
   input: ProvisioningInput,
 ): Effect.Effect<string, InstallationMismatch | ProvisioningError> {

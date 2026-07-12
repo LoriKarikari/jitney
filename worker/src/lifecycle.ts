@@ -3,7 +3,7 @@ import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlit
 import { Either, Effect } from "effect";
 import { assignments, attempts, deliveries, jobs, pending } from "./schema";
 import type { WorkflowEvent } from "./domain";
-import type { Provision } from "./provisioning";
+import type { Provision, Reclaim } from "./provisioning";
 import { ProvisioningError } from "./github";
 import { emit } from "./log";
 
@@ -217,6 +217,9 @@ export class SchedulerLifecycle {
         workflowJobId,
         attempt,
         state: "created",
+        installationId,
+        repositoryOwner,
+        repositoryName,
         runnerName,
         containerName,
         assignmentDeadline: now + assignmentTimeout,
@@ -387,9 +390,102 @@ export class SchedulerLifecycle {
       .all()[0];
   }
 
-  async drain(provision: Provision, deploymentId = this.deploymentId): Promise<void> {
-    if (await drainPending(this.#db, provision, deploymentId)) {
-      await this.storage.setAlarm(Date.now() + 1_000);
+  async sweep(provision: Provision, reclaim: Reclaim, now = Date.now()): Promise<void> {
+    const morePending = await drainPending(this.#db, provision, this.deploymentId);
+    await this.#expireUnassignedAttempts(reclaim, now);
+
+    const nextDeadline = this.#db
+      .select({ deadline: sql<number>`min(${attempts.assignmentDeadline})` })
+      .from(attempts)
+      .where(inArray(attempts.state, viableAttemptStates))
+      .all()[0]?.deadline;
+    const wakeAt = morePending ? now + 1_000 : nextDeadline;
+    if (wakeAt !== undefined && wakeAt !== null) {
+      await this.storage.setAlarm(Math.max(wakeAt, now + 1_000));
+    }
+  }
+
+  async #expireUnassignedAttempts(reclaim: Reclaim, now: number): Promise<void> {
+    const expired = this.#db
+      .select({
+        workflowJobId: attempts.workflowJobId,
+        attempt: attempts.attempt,
+        installationId: attempts.installationId,
+        repositoryOwner: attempts.repositoryOwner,
+        repositoryName: attempts.repositoryName,
+        runnerName: attempts.runnerName,
+        containerName: attempts.containerName,
+        repositoryId: jobs.repositoryId,
+      })
+      .from(attempts)
+      .innerJoin(jobs, eq(jobs.workflowJobId, attempts.workflowJobId))
+      .where(
+        and(
+          inArray(attempts.state, viableAttemptStates),
+          sql`${attempts.assignmentDeadline} <= ${now}`,
+        ),
+      )
+      .all();
+
+    for (const row of expired) {
+      const { workflowJobId, attempt, runnerName, containerName, repositoryId } = row;
+      this.#db
+        .update(attempts)
+        .set({ state: "expired" })
+        .where(eq(attempts.runnerName, runnerName))
+        .run();
+      this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
+      this.#db
+        .update(jobs)
+        .set({ state: "queued", updatedAt: now })
+        .where(
+          and(
+            eq(jobs.workflowJobId, workflowJobId),
+            inArray(jobs.state, ["queued", "provisioning", "waiting_for_assignment"]),
+          ),
+        )
+        .run();
+
+      const correlation = {
+        installationId: row.installationId ?? 0,
+        repositoryId,
+        workflowJobId,
+        runnerName,
+        containerName,
+        deploymentId: this.deploymentId,
+      };
+      emit({
+        event: "runner_attempt_expired",
+        ...correlation,
+        attempt,
+        stopReason: "assignment_deadline",
+      });
+
+      if (
+        row.installationId === null ||
+        row.repositoryOwner === null ||
+        row.repositoryName === null
+      ) {
+        continue;
+      }
+      const result = await Effect.runPromise(
+        reclaim({
+          installationId: row.installationId,
+          repositoryId,
+          repositoryOwner: row.repositoryOwner,
+          repositoryName: row.repositoryName,
+          workflowJobId,
+          runnerName,
+          containerName,
+        }).pipe(Effect.either),
+      );
+      if (Either.isLeft(result)) {
+        emit({
+          event: "runner_reclaim_failed",
+          ...correlation,
+          step: result.left.step,
+        });
+      }
     }
   }
 }

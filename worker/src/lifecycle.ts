@@ -106,7 +106,8 @@ export class SchedulerLifecycle {
       .where(eq(jobs.workflowJobId, workflowJobId))
       .all()[0];
 
-    emit("info", "scheduler_transition", {
+    emit({
+      event: "scheduler_transition",
       deliveryId,
       deploymentId: this.deploymentId,
       installationId,
@@ -431,7 +432,7 @@ async function drainPending(
     containerName,
   };
 
-  emit("info", "runner_provisioning_started", correlation);
+  emit({ event: "runner_provisioning_started", ...correlation });
   db.update(jobs)
     .set({ state: "provisioning", updatedAt: Date.now() })
     .where(eq(jobs.workflowJobId, workflowJobId))
@@ -451,7 +452,7 @@ async function drainPending(
 
   if (Either.isRight(result)) {
     finishProvisioning(db, pendingRow);
-    emit("info", "runner_provisioning_succeeded", correlation);
+    emit({ event: "runner_provisioning_succeeded", ...correlation });
   } else {
     failProvisioning(db, pendingRow, result.left, deploymentId);
   }
@@ -495,7 +496,8 @@ function failProvisioning(
     .set({ state: "failed" })
     .where(and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.runnerName, runnerName)))
     .run();
-  emit("error", "runner_provisioning_failed", {
+  emit({
+    event: "runner_provisioning_failed",
     deliveryId,
     deploymentId,
     installationId,

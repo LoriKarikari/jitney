@@ -38,8 +38,7 @@ jobs:
   daemon, so `docker build`, service containers, and container actions fail.
 - **Public repositories.** Only private repositories are admitted; public
   repos are outside the execution trust boundary.
-- **A hosted service.** You deploy your own copy. The maintainer's deployment
-  is a test environment, not something you can point your repos at.
+- **A hosted service.** You deploy your own copy.
 
 ## Requirements
 

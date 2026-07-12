@@ -46,8 +46,9 @@ jobs:
 - A Cloudflare account with [Workers Paid](https://developers.cloudflare.com/durable-objects/platform/pricing/)
   (Durable Objects and Containers)
 - A GitHub account or organization where you can create a GitHub App
-- Locally: Node 24 with pnpm, and a Docker-compatible engine (Wrangler builds
-  the runner image during deploy)
+- Locally: Node 24 with pnpm, [Wrangler](https://developers.cloudflare.com/workers/wrangler/),
+  and a Docker-compatible engine (Wrangler builds the runner image during
+  deploy)
 
 ## Setup
 
@@ -107,17 +108,6 @@ the queued job instead.
 | `instance_type` | `wrangler.jsonc` containers | `standard-2` | Container size (1 vCPU, 6 GiB, 12 GB disk) |
 
 ## How it works
-
-```text
-GitHub workflow_job webhook ─┐
-                             ├─→ Scheduler (Durable Object)
-Cloudflare cron discovery ───┘      │ admission, idempotency, deadlines
-                                    ↓
-                             JIT config + Runner Container
-                                    │ one runner, one job
-                                    ↓
-                                  exit
-```
 
 An ingress Worker verifies webhook signatures and hands events to a Durable
 Object Scheduler, which owns all lifecycle state in SQLite. The Scheduler

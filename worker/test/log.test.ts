@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { emit } from "../src/log";
+import { emit, type LifecycleRecord } from "../src/log";
 
 const correlation = {
   deliveryId: "delivery-1",
@@ -33,6 +33,58 @@ describe("lifecycle logging", () => {
     const line = String(logged.mock.calls[0]?.[0]);
     expect(line).not.toContain(canary);
     expect(line).toContain("[REDACTED]");
+  });
+
+  it("renders every approved field across representative records", () => {
+    const output: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((line) => output.push(String(line)));
+    vi.spyOn(console, "error").mockImplementation((line) => output.push(String(line)));
+    const records = [
+      {
+        event: "scheduler_transition",
+        ...correlation,
+        deploymentId: "deployment-1",
+        attempt: 1,
+        action: "completed",
+        outcome: "recorded",
+        state: "completed",
+        conclusion: "success",
+      },
+      {
+        event: "reconciliation_completed",
+        deploymentId: "deployment-1",
+        discovered: 5,
+        submitted: 2,
+        suppressed: 1,
+        ignored: 1,
+        failures: 1,
+      },
+      {
+        event: "runner_container_stopped",
+        installationId: 123,
+        repositoryId: 456,
+        workflowJobId: 789,
+        runnerName: "jitney-456-789-1",
+        containerName: "attempt-456-789-1",
+        containerId: "container-id",
+        deploymentId: "deployment-1",
+        exitCode: 0,
+        stopReason: "exited",
+      },
+      {
+        event: "runner_provisioning_failed",
+        ...correlation,
+        deploymentId: "deployment-1",
+        step: "container_start",
+      },
+    ] satisfies LifecycleRecord[];
+
+    for (const record of records) emit(record);
+
+    expect(output).toHaveLength(records.length);
+    for (const [index, record] of records.entries()) {
+      expect(JSON.parse(output[index] ?? "")).toMatchObject(record);
+    }
   });
 
   it("drops fields outside the runtime allowlist", () => {

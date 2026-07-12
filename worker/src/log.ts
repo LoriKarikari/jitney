@@ -87,31 +87,34 @@ export type LifecycleRecord =
 
 type KeysOfUnion<Record> = Record extends unknown ? keyof Record : never;
 type LifecycleFieldName = KeysOfUnion<LifecycleRecord>;
+type FieldPolicy = { [Field in LifecycleFieldName]: "allow" | "drop" };
 
-const allowedFields = [
-  "event",
-  "deliveryId",
-  "installationId",
-  "repositoryId",
-  "workflowJobId",
-  "attempt",
-  "runnerName",
-  "containerName",
-  "containerId",
-  "deploymentId",
-  "action",
-  "outcome",
-  "state",
-  "step",
-  "conclusion",
-  "stopReason",
-  "exitCode",
-  "discovered",
-  "submitted",
-  "suppressed",
-  "ignored",
-  "failures",
-] as const satisfies readonly LifecycleFieldName[];
+// This object is both the security decision and the runtime renderer's source
+// of truth. TypeScript rejects a missing lifecycle field or an unknown entry.
+const lifecycleFieldPolicy = {
+  event: "allow",
+  deliveryId: "allow",
+  installationId: "allow",
+  repositoryId: "allow",
+  workflowJobId: "allow",
+  attempt: "allow",
+  runnerName: "allow",
+  containerName: "allow",
+  containerId: "allow",
+  deploymentId: "allow",
+  action: "allow",
+  outcome: "allow",
+  state: "allow",
+  step: "allow",
+  conclusion: "allow",
+  stopReason: "allow",
+  exitCode: "allow",
+  discovered: "allow",
+  submitted: "allow",
+  suppressed: "allow",
+  ignored: "allow",
+  failures: "allow",
+} as const satisfies FieldPolicy;
 
 const sensitive = [
   /-----BEGIN [^-]+-----[\s\S]*-----END [^-]+-----/,
@@ -126,9 +129,12 @@ const warningOutcomes = new Set(["payload_too_large", "invalid_signature", "malf
 export function emit(record: LifecycleRecord): void {
   const fields: Partial<Record<LifecycleFieldName, string | number | null | undefined>> = record;
   const safe: Record<string, string | number> = { timestamp: Date.now() };
-  for (const key of allowedFields) {
-    const value = fields[key];
-    if (value !== undefined && value !== null) safe[key] = redact(value);
+  for (const key in lifecycleFieldPolicy) {
+    const field = key as LifecycleFieldName;
+    const value = fields[field];
+    if (lifecycleFieldPolicy[field] === "allow" && value !== undefined && value !== null) {
+      safe[field] = redact(value);
+    }
   }
   console[level(record)](JSON.stringify(safe));
 }

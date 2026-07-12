@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emit } from "../src/log";
 
+const correlation = {
+  deliveryId: "delivery-1",
+  installationId: 123,
+  repositoryId: 456,
+  workflowJobId: 789,
+  runnerName: "jitney-456-789-1",
+  containerName: "attempt-456-789-1",
+};
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("lifecycle logging", () => {
@@ -13,8 +22,9 @@ describe("lifecycle logging", () => {
   ])("redacts a %s", (_kind, canary) => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-    emit("error", "runner_provisioning_failed", {
-      workflowJobId: 789,
+    emit({
+      event: "runner_provisioning_failed",
+      ...correlation,
       runnerName: canary,
       step: "container_start",
     });
@@ -29,10 +39,13 @@ describe("lifecycle logging", () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const canary = "RAW_ERROR_CANARY";
 
-    emit("info", "scheduler_transition", {
-      workflowJobId: 789,
+    emit({
+      event: "scheduler_transition",
+      ...correlation,
+      action: "queued",
+      outcome: "accepted",
       rawError: canary,
-    } as Parameters<typeof emit>[2]);
+    } as Parameters<typeof emit>[0]);
 
     expect(String(logged.mock.calls[0]?.[0])).not.toContain(canary);
     expect(String(logged.mock.calls[0]?.[0])).not.toContain("rawError");
@@ -41,14 +54,10 @@ describe("lifecycle logging", () => {
   it("emits the correlation fields as one structured record", () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    emit("info", "scheduler_transition", {
-      deliveryId: "delivery-1",
-      installationId: 123,
-      repositoryId: 456,
-      workflowJobId: 789,
+    emit({
+      event: "scheduler_transition",
+      ...correlation,
       attempt: 1,
-      runnerName: "jitney-456-789-1",
-      containerName: "attempt-456-789-1",
       action: "queued",
       outcome: "accepted",
       state: "created",
@@ -56,16 +65,24 @@ describe("lifecycle logging", () => {
 
     expect(JSON.parse(String(logged.mock.calls[0]?.[0]))).toMatchObject({
       event: "scheduler_transition",
-      deliveryId: "delivery-1",
-      installationId: 123,
-      repositoryId: 456,
-      workflowJobId: 789,
+      ...correlation,
       attempt: 1,
-      runnerName: "jitney-456-789-1",
-      containerName: "attempt-456-789-1",
       action: "queued",
       outcome: "accepted",
       state: "created",
     });
+  });
+
+  it("classifies rejected webhooks as warnings", () => {
+    const logged = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    emit({
+      event: "webhook_classified",
+      deliveryId: "delivery-rejected",
+      deploymentId: "deployment-1",
+      outcome: "invalid_signature",
+    });
+
+    expect(logged).toHaveBeenCalledOnce();
   });
 });

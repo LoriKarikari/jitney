@@ -1,13 +1,11 @@
 import { Container, type StopParams } from "@cloudflare/containers";
-import { emit, type LifecycleFields } from "./log";
+import { emit, type RunnerCorrelation } from "./log";
 
-export type StartAttempt = {
-  jitConfig: string;
-  installationId: number;
-  repositoryId: number;
-  workflowJobId: number;
-  runnerName: string;
-  containerName: string;
+export type StartAttempt = RunnerCorrelation & { jitConfig: string };
+
+type ContainerCorrelation = RunnerCorrelation & {
+  containerId: string;
+  deploymentId: string;
 };
 
 export class RunnerContainer extends Container<Env> {
@@ -16,32 +14,35 @@ export class RunnerContainer extends Container<Env> {
 
   async startAttempt(request: StartAttempt): Promise<void> {
     const { jitConfig, ...correlation } = request;
-    await this.ctx.storage.put("correlation", correlation satisfies LifecycleFields);
+    await this.ctx.storage.put("correlation", correlation satisfies RunnerCorrelation);
     await this.start({ envVars: { JIT_CONFIG: jitConfig } });
   }
 
   override async onStart(): Promise<void> {
-    emit("info", "runner_container_started", await this.#fields());
+    emit({ event: "runner_container_started", ...(await this.#correlation()) });
   }
 
   override async onStop({ exitCode, reason }: StopParams): Promise<void> {
-    emit("info", "runner_container_stopped", {
-      ...(await this.#fields()),
+    emit({
+      event: "runner_container_stopped",
+      ...(await this.#correlation()),
       exitCode,
       stopReason: reason,
     });
   }
 
   override async onError(error: unknown): Promise<never> {
-    emit("error", "runner_container_failed", {
-      ...(await this.#fields()),
+    emit({
+      event: "runner_container_failed",
+      ...(await this.#correlation()),
       outcome: error instanceof Error ? "classified_error" : "unknown_error",
     });
     throw error;
   }
 
-  async #fields(): Promise<LifecycleFields> {
-    const correlation = await this.ctx.storage.get<LifecycleFields>("correlation");
+  async #correlation(): Promise<ContainerCorrelation> {
+    const correlation = await this.ctx.storage.get<RunnerCorrelation>("correlation");
+    if (correlation === undefined) throw new Error("runner correlation is missing");
     return {
       ...correlation,
       containerId: this.ctx.id.toString(),

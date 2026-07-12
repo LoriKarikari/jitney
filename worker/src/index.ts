@@ -14,7 +14,8 @@ async function fetch(request: Request, env: Env): Promise<Response> {
   const deliveryId = request.headers.get("X-GitHub-Delivery");
   const eventName = request.headers.get("X-GitHub-Event");
   const deploymentId = env.CF_VERSION_METADATA.id;
-  emit("info", "webhook_received", {
+  emit({
+    event: "webhook_received",
     deliveryId,
     deploymentId,
     action: eventName ?? "unknown",
@@ -22,7 +23,8 @@ async function fetch(request: Request, env: Env): Promise<Response> {
 
   const body = await request.arrayBuffer();
   if (body.byteLength > 1_048_576) {
-    emit("warn", "webhook_classified", {
+    emit({
+      event: "webhook_classified",
       deliveryId,
       deploymentId,
       outcome: "payload_too_large",
@@ -33,7 +35,8 @@ async function fetch(request: Request, env: Env): Promise<Response> {
   const signature = request.headers.get("X-Hub-Signature-256");
   const bodyText = new TextDecoder().decode(body);
   if (!signature || !(await verify(env.GITHUB_WEBHOOK_SECRET, bodyText, signature))) {
-    emit("warn", "webhook_classified", {
+    emit({
+      event: "webhook_classified",
       deliveryId,
       deploymentId,
       outcome: "invalid_signature",
@@ -43,11 +46,11 @@ async function fetch(request: Request, env: Env): Promise<Response> {
 
   const parsed = parseWorkflowEvent(eventName, deliveryId, body);
   if (parsed.kind === "malformed") {
-    emit("warn", "webhook_classified", { deliveryId, deploymentId, outcome: "malformed" });
+    emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "malformed" });
     return new Response(null, { status: 400 });
   }
   if (parsed.kind === "ignored") {
-    emit("info", "webhook_classified", { deliveryId, deploymentId, outcome: "ignored" });
+    emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "ignored" });
     return new Response(null, { status: 204 });
   }
 
@@ -55,7 +58,8 @@ async function fetch(request: Request, env: Env): Promise<Response> {
   const result = await env.SCHEDULER.getByName("global-v2").accept(event);
   const { installationId, repositoryId, workflowJobId, action } = event;
   const { runnerName, outcome } = result;
-  emit("info", "webhook_classified", {
+  emit({
+    event: "webhook_classified",
     deliveryId,
     deploymentId,
     installationId,

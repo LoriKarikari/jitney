@@ -14,6 +14,15 @@ const (
 	terminateWait   = 10 * time.Second
 )
 
+type sessionEvent string
+
+const (
+	runnerProcessStarted    sessionEvent = "runner_process_started"
+	runnerProcessExited     sessionEvent = "runner_process_exited"
+	runnerShutdownStarted   sessionEvent = "runner_shutdown_started"
+	runnerShutdownEscalated sessionEvent = "runner_shutdown_escalated"
+)
+
 type runnerProcess struct {
 	pid  int
 	done <-chan error
@@ -31,17 +40,17 @@ func runSession(jitConfig string, runtime sessionRuntime) error {
 	if err != nil {
 		return fmt.Errorf("start runner: %w", err)
 	}
-	logEvent("runner_process_started", process.pid, "started", 0)
+	logEvent(runnerProcessStarted, process.pid, "started", 0)
 
 	signals, stopSignals := runtime.signals()
 	defer stopSignals()
 
 	select {
 	case err := <-process.done:
-		logEvent("runner_process_exited", process.pid, "exit", exitCode(err))
+		logEvent(runnerProcessExited, process.pid, "exit", exitCode(err))
 		return exitResult(err)
 	case signal := <-signals:
-		logEvent("runner_shutdown_started", process.pid, signal.String(), 0)
+		logEvent(runnerShutdownStarted, process.pid, signal.String(), 0)
 		return shutdown(process, runtime)
 	}
 }
@@ -51,32 +60,32 @@ func shutdown(process runnerProcess, runtime sessionRuntime) error {
 		return err
 	}
 	if exited, err := runtime.wait(process.done, gracefulTimeout); exited {
-		logEvent("runner_process_exited", process.pid, "sigint", exitCode(err))
+		logEvent(runnerProcessExited, process.pid, "sigint", exitCode(err))
 		return exitResult(err)
 	}
-	logEvent("runner_shutdown_escalated", process.pid, "sigterm", 0)
+	logEvent(runnerShutdownEscalated, process.pid, "sigterm", 0)
 	if err := runtime.signalSession(process.pid, syscall.SIGTERM); err != nil {
 		return err
 	}
 	if exited, err := runtime.wait(process.done, terminateWait); exited {
-		logEvent("runner_process_exited", process.pid, "sigterm", exitCode(err))
+		logEvent(runnerProcessExited, process.pid, "sigterm", exitCode(err))
 		return exitResult(err)
 	}
-	logEvent("runner_shutdown_escalated", process.pid, "sigkill", 0)
+	logEvent(runnerShutdownEscalated, process.pid, "sigkill", 0)
 	if err := runtime.signalSession(process.pid, syscall.SIGKILL); err != nil {
 		return err
 	}
 	err := <-process.done
-	logEvent("runner_process_exited", process.pid, "sigkill", exitCode(err))
+	logEvent(runnerProcessExited, process.pid, "sigkill", exitCode(err))
 	return exitResult(err)
 }
 
-func logEvent(event string, pid int, reason string, code int) {
+func logEvent(event sessionEvent, pid int, reason string, code int) {
 	record := struct {
-		Event    string `json:"event"`
-		PID      int    `json:"pid"`
-		Reason   string `json:"reason"`
-		ExitCode int    `json:"exitCode,omitempty"`
+		Event    sessionEvent `json:"event"`
+		PID      int          `json:"pid"`
+		Reason   string       `json:"reason"`
+		ExitCode int          `json:"exitCode,omitempty"`
 	}{Event: event, PID: pid, Reason: reason, ExitCode: code}
 	_ = json.NewEncoder(os.Stdout).Encode(record)
 }

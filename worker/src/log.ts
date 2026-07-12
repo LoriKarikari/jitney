@@ -1,50 +1,66 @@
-export type LogLevel = "info" | "warn" | "error";
-
-export type LifecycleEvent =
-  | "webhook_received"
-  | "webhook_classified"
-  | "scheduler_transition"
-  | "runner_provisioning_started"
-  | "runner_provisioning_succeeded"
-  | "runner_provisioning_failed"
-  | "runner_container_started"
-  | "runner_container_stopped"
-  | "runner_container_failed";
-
-type CorrelationFields = {
-  deliveryId: string | null;
+export type RunnerCorrelation = {
   installationId: number;
   repositoryId: number;
   workflowJobId: number;
-  attempt: number;
   runnerName: string;
   containerName: string;
+};
+
+type DeliveryCorrelation = {
+  deliveryId: string;
+  deploymentId?: string | undefined;
+};
+
+type ProvisioningCorrelation = DeliveryCorrelation & RunnerCorrelation;
+
+type ContainerCorrelation = RunnerCorrelation & {
   containerId: string;
   deploymentId: string;
 };
 
-type TransitionFields = {
-  action: string;
-  outcome: string;
-  state: string;
-  step: string;
-};
+export type LifecycleRecord =
+  | { event: "webhook_received"; deliveryId: string | null; deploymentId: string; action: string }
+  | {
+      event: "webhook_classified";
+      deliveryId: string | null;
+      deploymentId: string;
+      outcome: string;
+      installationId?: number | undefined;
+      repositoryId?: number | undefined;
+      workflowJobId?: number | undefined;
+      runnerName?: string | undefined;
+      action?: string | undefined;
+    }
+  | (DeliveryCorrelation & {
+      event: "scheduler_transition";
+      installationId: number;
+      repositoryId: number;
+      workflowJobId: number;
+      action: string;
+      outcome: string;
+      attempt?: number | undefined;
+      runnerName?: string | undefined;
+      containerName?: string | undefined;
+      state?: string | undefined;
+      conclusion?: string | undefined;
+    })
+  | (ProvisioningCorrelation & {
+      event: "runner_provisioning_started" | "runner_provisioning_succeeded";
+    })
+  | (ProvisioningCorrelation & { event: "runner_provisioning_failed"; step: string })
+  | (ContainerCorrelation & { event: "runner_container_started" })
+  | (ContainerCorrelation & {
+      event: "runner_container_stopped";
+      exitCode: number;
+      stopReason: string;
+    })
+  | (ContainerCorrelation & { event: "runner_container_failed"; outcome: string });
 
-type CompletionFields = {
-  conclusion: string;
-  stopReason: string;
-  exitCode: number;
-};
-
-type OptionalFields<Fields> = {
-  [Field in keyof Fields]?: Fields[Field] | undefined;
-};
-
-export type LifecycleFields = OptionalFields<
-  CorrelationFields & TransitionFields & CompletionFields
->;
+type KeysOfUnion<Record> = Record extends unknown ? keyof Record : never;
+type LifecycleFieldName = KeysOfUnion<LifecycleRecord>;
 
 const allowedFields = [
+  "event",
   "deliveryId",
   "installationId",
   "repositoryId",
@@ -61,7 +77,7 @@ const allowedFields = [
   "conclusion",
   "stopReason",
   "exitCode",
-] as const satisfies readonly (keyof LifecycleFields)[];
+] as const satisfies readonly LifecycleFieldName[];
 
 const sensitive = [
   /-----BEGIN [^-]+-----[\s\S]*-----END [^-]+-----/,
@@ -71,13 +87,22 @@ const sensitive = [
   /\b[A-Za-z0-9+/]{160,}={0,2}\b/,
 ];
 
-export function emit(level: LogLevel, event: LifecycleEvent, fields: LifecycleFields = {}): void {
-  const record: Record<string, string | number> = { event, timestamp: Date.now() };
+const warningOutcomes = new Set(["payload_too_large", "invalid_signature", "malformed"]);
+
+export function emit(record: LifecycleRecord): void {
+  const fields: Partial<Record<LifecycleFieldName, string | number | null | undefined>> = record;
+  const safe: Record<string, string | number> = { timestamp: Date.now() };
   for (const key of allowedFields) {
     const value = fields[key];
-    if (value !== undefined && value !== null) record[key] = redact(value);
+    if (value !== undefined && value !== null) safe[key] = redact(value);
   }
-  console[level === "info" ? "log" : level](JSON.stringify(record));
+  console[level(record)](JSON.stringify(safe));
+}
+
+function level(record: LifecycleRecord): "log" | "warn" | "error" {
+  if (record.event.endsWith("_failed")) return "error";
+  if (record.event === "webhook_classified" && warningOutcomes.has(record.outcome)) return "warn";
+  return "log";
 }
 
 function redact(value: string | number): string | number {

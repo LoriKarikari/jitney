@@ -25,9 +25,11 @@ The lifecycle event names are:
 | Container | `runner_container_started`, `runner_container_stopped`, `runner_container_failed` |
 | Supervisor | `runner_process_started`, `runner_shutdown_started`, `runner_shutdown_escalated`, `runner_process_exited` |
 
-The logger accepts only the fields listed above. It does not accept raw errors,
-headers, webhook bodies, environment objects, or GitHub API responses. A second
-value filter replaces PEM blocks, JWTs, GitHub token formats, webhook
+The logger accepts discriminated lifecycle records, so each event admits only
+its valid correlation and outcome fields. It classifies the log level from the
+event instead of trusting each caller. Raw errors, headers, webhook bodies,
+environment objects, and GitHub API responses are outside the interface. A
+second value filter replaces PEM blocks, JWTs, GitHub token formats, webhook
 signatures, and long base64 strings with `[REDACTED]`.
 
 Automated tests cover recognizable canaries for an App private key, JWT,

@@ -11,11 +11,12 @@
     "fmt": "oxfmt --write .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "knip": "knip",
     "types": "wrangler types",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "fmt:check": "oxfmt --check .",
-    "check": "pnpm types && pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm test"
+    "check": "pnpm types && pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm knip && pnpm test"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7",
@@ -29,7 +30,7 @@
     "@cloudflare/vitest-pool-workers": "^0.18.4",
     "@types/node": "^26.1.1",
     "drizzle-kit": "^0.31.10",
-    "drizzle-zod": "^0.8.3",
+    "knip": "^6.26.0",
     "oxfmt": "^0.58.0",
     "oxlint": "^1.73.0",
     "oxlint-tsgolint": "^0.24.0",
@@ -40,5 +41,17 @@
   "engines": {
     "node": ">=24"
   },
-  "packageManager": "pnpm@11.8.0"
+  "packageManager": "pnpm@11.8.0",
+  "knip": {
+    "entry": [
+      "test/**/*.test.ts"
+    ],
+    "project": [
+      "src/**/*.ts",
+      "test/**/*.ts"
+    ],
+    "ignoreDependencies": [
+      "cloudflare"
+    ]
+  }
 }

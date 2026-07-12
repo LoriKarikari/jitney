@@ -23,8 +23,9 @@ export function createReclaimer(env: Env): Reclaim {
   // Destroy the container before touching GitHub: a runner that is still
   // executing a job cannot be deleted (GitHub rejects deleting a busy
   // runner), and the container is the resource Jitney pays for.
-  return (request) =>
-    Effect.tryPromise({
+  return (request) => {
+    const { installationId, repositoryId, repositoryOwner, repositoryName, runnerName } = request;
+    return Effect.tryPromise({
       try: () =>
         (
           env.RUNNER_CONTAINERS.getByName(
@@ -37,14 +38,15 @@ export function createReclaimer(env: Env): Reclaim {
         deleteRunner({
           appId: env.GITHUB_APP_ID,
           privateKey: env.GITHUB_APP_PRIVATE_KEY,
-          installationId: request.installationId,
-          repositoryId: request.repositoryId,
-          repositoryOwner: request.repositoryOwner,
-          repositoryName: request.repositoryName,
-          runnerName: request.runnerName,
+          installationId,
+          repositoryId,
+          repositoryOwner,
+          repositoryName,
+          runnerName,
         }),
       ),
     );
+  };
 }
 
 export function createProvisioner(env: Env): Provision {

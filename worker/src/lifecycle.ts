@@ -71,19 +71,8 @@ export class SchedulerLifecycle {
     const result = this.storage.transactionSync(() => {
       if (!this.#recordDelivery(event, now)) return { outcome: "duplicate" } as const;
 
-      const job = this.#db
-        .select()
-        .from(jobs)
-        .where(eq(jobs.workflowJobId, event.workflowJobId))
-        .all()[0];
-      if (job !== undefined && terminalJobStates.includes(job.state)) {
-        const runnerName = this.getAssignment(event.workflowJobId)?.runnerName;
-        return { outcome: "duplicate" as const, ...(runnerName && { runnerName }) };
-      }
-      if (event.action === "queued" && job?.state === "running") {
-        const runnerName = this.getAssignment(event.workflowJobId)?.runnerName;
-        return { outcome: "duplicate" as const, ...(runnerName && { runnerName }) };
-      }
+      const dominant = this.#dominantOutcome(event.workflowJobId, event.action);
+      if (dominant !== undefined) return dominant;
       if (event.action === "queued") return this.#acceptQueued(event, event.deliveryId, now);
       if (event.action === "in_progress" && event.runnerName !== undefined) {
         return this.#recordAssignment(event, event.runnerName, now);
@@ -106,14 +95,28 @@ export class SchedulerLifecycle {
 
   async reconcile(candidate: QueuedJobCandidate): Promise<AcceptResult> {
     const now = Date.now();
-    const result = this.storage.transactionSync(() =>
-      isAdmissible(candidate.repositoryPrivate, candidate.labels)
-        ? this.#acceptQueued(candidate, null, now)
-        : { outcome: "ignored" as const },
-    );
+    const result = this.storage.transactionSync(() => {
+      if (!isAdmissible(candidate.repositoryPrivate, candidate.labels)) {
+        return { outcome: "ignored" as const };
+      }
+      return (
+        this.#dominantOutcome(candidate.workflowJobId, "queued") ??
+        this.#acceptQueued(candidate, null, now)
+      );
+    });
     this.#emitTransition({ ...candidate, action: "queued" }, result);
     if (result.outcome === "accepted") await this.storage.setAlarm(now + 1_000);
     return result;
+  }
+
+  #dominantOutcome(workflowJobId: number, action: string): AcceptResult | undefined {
+    const job = this.#db.select().from(jobs).where(eq(jobs.workflowJobId, workflowJobId)).all()[0];
+    const dominated =
+      (job !== undefined && terminalJobStates.includes(job.state)) ||
+      (action === "queued" && job?.state === "running");
+    if (!dominated) return undefined;
+    const runnerName = this.getAssignment(workflowJobId)?.runnerName;
+    return { outcome: "duplicate", ...(runnerName && { runnerName }) };
   }
 
   #emitTransition(event: TransitionInput, result: AcceptResult): void {
@@ -592,7 +595,8 @@ async function drainPending(
     .orderBy(pending.workflowJobId)
     .all()[0];
   if (row === undefined) return false;
-  if (row.installationId === null || row.repositoryOwner === null || row.repositoryName === null) {
+  const { installationId, repositoryOwner, repositoryName } = row;
+  if (installationId === null || repositoryOwner === null || repositoryName === null) {
     storage.transactionSync(() => {
       db.update(attempts)
         .set({ state: "failed" })
@@ -609,22 +613,8 @@ async function drainPending(
     return true;
   }
 
-  const pendingRow: PendingRow = {
-    ...row,
-    installationId: row.installationId,
-    repositoryOwner: row.repositoryOwner,
-    repositoryName: row.repositoryName,
-  };
-  const {
-    deliveryId,
-    installationId,
-    repositoryId,
-    repositoryOwner,
-    repositoryName,
-    workflowJobId,
-    runnerName,
-    containerName,
-  } = pendingRow;
+  const pendingRow: PendingRow = { ...row, installationId, repositoryOwner, repositoryName };
+  const { deliveryId, repositoryId, workflowJobId, runnerName, containerName } = pendingRow;
   const correlation = {
     ...(deliveryId && { deliveryId }),
     deploymentId,

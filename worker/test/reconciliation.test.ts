@@ -74,6 +74,50 @@ describe("reconciliation", () => {
     logged.mockRestore();
   });
 
+  it("does not resurrect a terminal job", async () => {
+    const scheduler = env.SCHEDULER.getByName("reconciliation-terminal");
+    const queued = candidate(8006);
+    await scheduler.accept({
+      ...queued,
+      deliveryId: "delivery-queued",
+      action: "queued",
+    });
+    await scheduler.accept({
+      ...queued,
+      deliveryId: "delivery-completed",
+      action: "completed",
+      conclusion: "failure",
+    });
+
+    expect(await scheduler.reconcile(queued)).toMatchObject({ outcome: "duplicate" });
+    expect(await scheduler.getJob(8006)).toMatchObject({ state: "failed", pending: false });
+    expect(await scheduler.getAttempts(8006)).toHaveLength(1);
+  });
+
+  it("does not requeue a running job", async () => {
+    const scheduler = env.SCHEDULER.getByName("reconciliation-running");
+    const queued = candidate(8007);
+    const accepted = await scheduler.accept({
+      ...queued,
+      deliveryId: "delivery-queued",
+      action: "queued",
+    });
+    if (accepted.runnerName === undefined) throw new Error("missing runner name");
+    await scheduler.accept({
+      ...queued,
+      deliveryId: "delivery-in-progress",
+      action: "in_progress",
+      runnerName: accepted.runnerName,
+    });
+
+    expect(await scheduler.reconcile(queued)).toEqual({
+      outcome: "duplicate",
+      runnerName: accepted.runnerName,
+    });
+    expect(await scheduler.getJob(8007)).toMatchObject({ state: "running" });
+    expect(await scheduler.getAttempts(8007)).toHaveLength(1);
+  });
+
   it("ignores public repositories and unsupported labels", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("reconciliation-admission");

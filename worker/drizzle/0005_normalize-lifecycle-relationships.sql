@@ -1,4 +1,3 @@
-PRAGMA foreign_keys=OFF;--> statement-breakpoint
 CREATE TABLE `__new_attempts` (
 	`workflow_job_id` integer NOT NULL,
 	`attempt` integer NOT NULL,
@@ -47,6 +46,4 @@ FROM `pending` p
 INNER JOIN `attempts` a ON a."runner_name" = p."runner_name";--> statement-breakpoint
 DROP TABLE `pending`;--> statement-breakpoint
 ALTER TABLE `__new_pending` RENAME TO `pending`;--> statement-breakpoint
-ALTER TABLE `jobs` DROP COLUMN `runner_name`;--> statement-breakpoint
-PRAGMA foreign_keys=ON;--> statement-breakpoint
-PRAGMA foreign_key_check;
+ALTER TABLE `jobs` DROP COLUMN `runner_name`;

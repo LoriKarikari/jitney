@@ -567,6 +567,35 @@ describe("Scheduler admission", () => {
     logged.mockRestore();
   });
 
+  it("pulls the alarm earlier when the runtime deadline precedes it", async () => {
+    const scheduler = env.SCHEDULER.getByName("runtime-alarm");
+    const event = queuedEvent(7004, "delivery-queued");
+
+    await runInDurableObject(scheduler, async (_instance, state) => {
+      const lifecycle = new SchedulerLifecycle(state.storage, "deployment-test", 120_000);
+      const accepted = await lifecycle.accept(event);
+      if (accepted.runnerName === undefined) throw new Error("missing runner name");
+      await lifecycle.sweep(
+        () => Effect.void,
+        () => Effect.void,
+      );
+      const armed = await state.storage.getAlarm();
+      if (armed === null) throw new Error("expected an assignment alarm");
+
+      await lifecycle.accept({
+        ...event,
+        action: "in_progress",
+        deliveryId: "delivery-in-progress",
+        runnerName: accepted.runnerName,
+      });
+
+      const alarm = await state.storage.getAlarm();
+      if (alarm === null) throw new Error("expected a runtime alarm");
+      expect(alarm).toBeLessThan(armed);
+      expect(alarm).toBeLessThanOrEqual(Date.now() + 120_000);
+    });
+  });
+
   it("persists separate assignment and runtime deadlines", async () => {
     const scheduler = env.SCHEDULER.getByName("deadlines");
     const event = queuedEvent(3001, "delivery-queued");

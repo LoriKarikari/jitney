@@ -20,25 +20,28 @@ export type Provision = (
 export type Reclaim = (request: ProvisionRequest) => Effect.Effect<void, ProvisioningError>;
 
 export function createReclaimer(env: Env): Reclaim {
+  // Destroy the container before touching GitHub: a runner that is still
+  // executing a job cannot be deleted (GitHub rejects deleting a busy
+  // runner), and the container is the resource Jitney pays for.
   return (request) =>
-    deleteRunner({
-      appId: env.GITHUB_APP_ID,
-      privateKey: env.GITHUB_APP_PRIVATE_KEY,
-      installationId: request.installationId,
-      repositoryId: request.repositoryId,
-      repositoryOwner: request.repositoryOwner,
-      repositoryName: request.repositoryName,
-      runnerName: request.runnerName,
+    Effect.tryPromise({
+      try: () =>
+        (
+          env.RUNNER_CONTAINERS.getByName(
+            request.containerName,
+          ) as DurableObjectStub<RunnerContainer>
+        ).destroy(),
+      catch: (cause) => new ProvisioningError({ step: "container_destroy", cause }),
     }).pipe(
       Effect.andThen(
-        Effect.tryPromise({
-          try: () =>
-            (
-              env.RUNNER_CONTAINERS.getByName(
-                request.containerName,
-              ) as DurableObjectStub<RunnerContainer>
-            ).destroy(),
-          catch: (cause) => new ProvisioningError({ step: "container_destroy", cause }),
+        deleteRunner({
+          appId: env.GITHUB_APP_ID,
+          privateKey: env.GITHUB_APP_PRIVATE_KEY,
+          installationId: request.installationId,
+          repositoryId: request.repositoryId,
+          repositoryOwner: request.repositoryOwner,
+          repositoryName: request.repositoryName,
+          runnerName: request.runnerName,
         }),
       ),
     );

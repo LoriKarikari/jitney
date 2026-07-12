@@ -2,8 +2,14 @@ name: security
 
 on:
   pull_request:
+    paths:
+      - "supervisor/**"
+      - ".github/workflows/security.yml"
   push:
     branches: [main]
+    paths:
+      - "supervisor/**"
+      - ".github/workflows/security.yml"
   schedule:
     - cron: '23 4 * * 1'
 

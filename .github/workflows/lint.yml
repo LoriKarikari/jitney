@@ -2,8 +2,16 @@ name: lint
 
 on:
   pull_request:
+    paths:
+      - "supervisor/**"
+      - ".golangci.yml"
+      - ".github/workflows/lint.yml"
   push:
     branches: [main]
+    paths:
+      - "supervisor/**"
+      - ".golangci.yml"
+      - ".github/workflows/lint.yml"
 
 permissions:
   contents: read

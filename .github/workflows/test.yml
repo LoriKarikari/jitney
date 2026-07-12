@@ -2,8 +2,14 @@ name: test
 
 on:
   pull_request:
+    paths:
+      - "supervisor/**"
+      - ".github/workflows/test.yml"
   push:
     branches: [main]
+    paths:
+      - "supervisor/**"
+      - ".github/workflows/test.yml"
 
 permissions:
   contents: read

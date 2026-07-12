@@ -9,8 +9,9 @@ describe("Scheduler persistence constraints", () => {
       expect(() =>
         state.storage.sql.exec(
           `INSERT INTO attempts
-             (workflow_job_id, attempt, state, runner_name, container_name, assignment_deadline)
-           VALUES (999999, 1, 'created', 'orphan-runner', 'orphan-container', 0)`,
+             (workflow_job_id, attempt, state, installation_id, repository_owner, repository_name,
+              runner_name, container_name, assignment_deadline)
+           VALUES (999999, 1, 'created', 1, 'owner', 'repo', 'orphan-runner', 'orphan-container', 0)`,
         ),
       ).toThrowError(/FOREIGN KEY/i);
     });
@@ -41,8 +42,9 @@ describe("Scheduler persistence constraints", () => {
       );
       state.storage.sql.exec(
         `INSERT INTO attempts
-           (workflow_job_id, attempt, state, runner_name, container_name, assignment_deadline)
-         VALUES (3, 1, 'running', 'runner-1', 'container-1', 0)`,
+           (workflow_job_id, attempt, state, installation_id, repository_owner, repository_name,
+            runner_name, container_name, assignment_deadline)
+         VALUES (3, 1, 'running', 1, 'owner', 'repo', 'runner-1', 'container-1', 0)`,
       );
       state.storage.sql.exec(
         "INSERT INTO assignments (workflow_job_id, triggering_workflow_job_id, attempt, assigned_at) VALUES (1, 3, 1, 0)",

@@ -520,9 +520,9 @@ export class SchedulerLifecycle {
   }
 
   async #reclaimExpired(reclaim: Reclaim, row: ExpiredAttempt, stopReason: string): Promise<void> {
-    const { workflowJobId, attempt, runnerName, containerName, repositoryId } = row;
+    const { workflowJobId, attempt, installationId, runnerName, containerName, repositoryId } = row;
     const correlation = {
-      installationId: row.installationId ?? 0,
+      installationId,
       repositoryId,
       workflowJobId,
       runnerName,
@@ -531,19 +531,13 @@ export class SchedulerLifecycle {
     };
     emit({ event: "runner_attempt_expired", ...correlation, attempt, stopReason });
 
-    if (
-      row.installationId === null ||
-      row.repositoryOwner === null ||
-      row.repositoryName === null
-    ) {
-      return;
-    }
+    const { repositoryOwner, repositoryName } = row;
     const result = await Effect.runPromise(
       reclaim({
-        installationId: row.installationId,
+        installationId,
         repositoryId,
-        repositoryOwner: row.repositoryOwner,
-        repositoryName: row.repositoryName,
+        repositoryOwner,
+        repositoryName,
         workflowJobId,
         runnerName,
         containerName,
@@ -595,26 +589,18 @@ async function drainPending(
     .orderBy(pending.workflowJobId)
     .all()[0];
   if (row === undefined) return false;
-  const { installationId, repositoryOwner, repositoryName } = row;
-  if (installationId === null || repositoryOwner === null || repositoryName === null) {
-    storage.transactionSync(() => {
-      db.update(attempts)
-        .set({ state: "failed" })
-        .where(
-          and(eq(attempts.workflowJobId, row.workflowJobId), eq(attempts.attempt, row.attempt)),
-        )
-        .run();
-      db.update(jobs)
-        .set({ state: "queued", updatedAt: Date.now() })
-        .where(eq(jobs.workflowJobId, row.workflowJobId))
-        .run();
-      db.delete(pending).where(eq(pending.workflowJobId, row.workflowJobId)).run();
-    });
-    return true;
-  }
 
-  const pendingRow: PendingRow = { ...row, installationId, repositoryOwner, repositoryName };
-  const { deliveryId, repositoryId, workflowJobId, runnerName, containerName } = pendingRow;
+  const pendingRow: PendingRow = row;
+  const {
+    deliveryId,
+    installationId,
+    repositoryId,
+    repositoryOwner,
+    repositoryName,
+    workflowJobId,
+    runnerName,
+    containerName,
+  } = pendingRow;
   const correlation = {
     ...(deliveryId && { deliveryId }),
     deploymentId,

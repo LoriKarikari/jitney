@@ -13,7 +13,10 @@ CREATE TABLE `__new_attempts` (
 	FOREIGN KEY (`workflow_job_id`) REFERENCES `jobs`(`workflow_job_id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-INSERT INTO `__new_attempts`("workflow_job_id", "attempt", "state", "installation_id", "repository_owner", "repository_name", "runner_name", "container_name", "assignment_deadline", "runtime_deadline") SELECT "workflow_job_id", "attempt", "state", "installation_id", "repository_owner", "repository_name", "runner_name", "container_name", "assignment_deadline", "runtime_deadline" FROM `attempts`;--> statement-breakpoint
+INSERT INTO `__new_attempts`("workflow_job_id", "attempt", "state", "installation_id", "repository_owner", "repository_name", "runner_name", "container_name", "assignment_deadline", "runtime_deadline")
+SELECT a."workflow_job_id", a."attempt", a."state", a."installation_id", a."repository_owner", a."repository_name", a."runner_name", a."container_name", a."assignment_deadline", a."runtime_deadline"
+FROM `attempts` a
+INNER JOIN `jobs` j ON j."workflow_job_id" = a."workflow_job_id";--> statement-breakpoint
 DROP TABLE `attempts`;--> statement-breakpoint
 ALTER TABLE `__new_attempts` RENAME TO `attempts`;--> statement-breakpoint
 CREATE UNIQUE INDEX `attempts_runner_name_unique` ON `attempts` (`runner_name`);--> statement-breakpoint
@@ -29,7 +32,11 @@ CREATE TABLE `__new_assignments` (
 	FOREIGN KEY (`triggering_workflow_job_id`,`attempt`) REFERENCES `attempts`(`workflow_job_id`,`attempt`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-INSERT INTO `__new_assignments`("workflow_job_id", "triggering_workflow_job_id", "attempt", "assigned_at") SELECT "workflow_job_id", "triggering_workflow_job_id", "attempt", "assigned_at" FROM `assignments`;--> statement-breakpoint
+INSERT INTO `__new_assignments`("workflow_job_id", "triggering_workflow_job_id", "attempt", "assigned_at")
+SELECT s."workflow_job_id", s."triggering_workflow_job_id", s."attempt", s."assigned_at"
+FROM `assignments` s
+INNER JOIN `jobs` j ON j."workflow_job_id" = s."workflow_job_id"
+INNER JOIN `attempts` a ON a."workflow_job_id" = s."triggering_workflow_job_id" AND a."attempt" = s."attempt";--> statement-breakpoint
 DROP TABLE `assignments`;--> statement-breakpoint
 ALTER TABLE `__new_assignments` RENAME TO `assignments`;--> statement-breakpoint
 CREATE UNIQUE INDEX `assignments_attempt_unique` ON `assignments` (`triggering_workflow_job_id`,`attempt`);--> statement-breakpoint

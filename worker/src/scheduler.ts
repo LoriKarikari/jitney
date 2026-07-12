@@ -23,7 +23,11 @@ export class Scheduler extends DurableObject<Env> {
     const db = drizzle(ctx.storage, {
       schema: { deliveries, jobs, attempts, assignments, pending },
     });
-    this.#lifecycle = new SchedulerLifecycle(ctx.storage, env.CF_VERSION_METADATA.id);
+    this.#lifecycle = new SchedulerLifecycle(
+      ctx.storage,
+      env.CF_VERSION_METADATA.id,
+      Number(env.RUNTIME_TIMEOUT_MS) || undefined,
+    );
     void ctx.blockConcurrencyWhile(async () => {
       await migrate(db, migrations);
     });

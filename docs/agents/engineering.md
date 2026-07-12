@@ -211,10 +211,12 @@ live under `worker/`. The root Taskfile delegates to both.
 - **golangci-lint** with `supervisor/.golangci.yml` is the lint source of
   truth. Run `task lint` after every significant change.
 - CI runs tests with `-race -shuffle=on`, checks `go mod tidy` drift, and
-  runs govulncheck and gosec on every PR that touches Go code. CodeQL stays
-  disabled while the repository is private.
-- Workflows are path-scoped: Go checks run only when `supervisor/**` changes,
-  TypeScript checks only when `worker/**` changes.
+  runs govulncheck and gosec on every PR that touches Go code. CodeQL runs the
+  `security-extended` suite for both Go and TypeScript and uploads findings to
+  GitHub code scanning.
+- Workflows are path-scoped: Go and Go CodeQL checks run only when
+  `supervisor/**` changes; TypeScript and TypeScript CodeQL checks only when
+  `worker/**` changes.
 - The supervisor builds as a static `CGO_ENABLED=0` linux/amd64 binary; it
   ships inside the runner image, not as a released archive.
 - `//nolint` directives must name the linter and carry a justification.

@@ -1,0 +1,40 @@
+name: CodeQL (Go)
+
+on:
+  pull_request:
+    paths:
+      - "supervisor/**"
+      - ".github/codeql/**"
+      - ".github/workflows/codeql-go.yml"
+  push:
+    branches: [main]
+    paths:
+      - "supervisor/**"
+      - ".github/codeql/**"
+      - ".github/workflows/codeql-go.yml"
+  schedule:
+    - cron: "41 4 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  codeql-go:
+    name: CodeQL (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: supervisor/go.mod
+          cache-dependency-path: supervisor/go.sum
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: go
+          config-file: ./.github/codeql/codeql-config.yml
+      - run: go build ./...
+        working-directory: supervisor
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:go

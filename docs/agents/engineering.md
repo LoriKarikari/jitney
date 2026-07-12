@@ -243,6 +243,14 @@ live under `worker/`. The root Taskfile delegates to both.
 - Scheduler tests exercise lifecycle behavior through `SchedulerLifecycle` and
   fake provisioning adapters; they should not import table declarations or
   construct a Drizzle database directly.
+- Do not manually rebuild a record by repeating `field: source.field` for each
+  property when its shape already exists. Prefer destructuring, property
+  shorthand, object spread, or the library's projection helper (for example,
+  Drizzle's `getTableColumns`). Select fields individually only when the
+  narrower projection is meaningful.
+- Keep transport and storage nullability at their boundaries. Validate or
+  classify nullable headers and columns before calling domain operations; do
+  not spread `T | null` through interfaces that require a present value.
 
 ### SDK-first integrations
 

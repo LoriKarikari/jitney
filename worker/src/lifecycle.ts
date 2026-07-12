@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { Either, Effect } from "effect";
 import { assignments, attempts, deliveries, jobs, pending } from "./schema";
@@ -407,16 +407,7 @@ export class SchedulerLifecycle {
 
   async #expireUnassignedAttempts(reclaim: Reclaim, now: number): Promise<void> {
     const expired = this.#db
-      .select({
-        workflowJobId: attempts.workflowJobId,
-        attempt: attempts.attempt,
-        installationId: attempts.installationId,
-        repositoryOwner: attempts.repositoryOwner,
-        repositoryName: attempts.repositoryName,
-        runnerName: attempts.runnerName,
-        containerName: attempts.containerName,
-        repositoryId: jobs.repositoryId,
-      })
+      .select({ ...getTableColumns(attempts), repositoryId: jobs.repositoryId })
       .from(attempts)
       .innerJoin(jobs, eq(jobs.workflowJobId, attempts.workflowJobId))
       .where(

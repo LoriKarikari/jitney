@@ -44,7 +44,16 @@ async function fetch(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 401 });
   }
 
-  const parsed = parseWorkflowEvent(eventName, deliveryId, body);
+  if (eventName !== "workflow_job") {
+    emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "ignored" });
+    return new Response(null, { status: 204 });
+  }
+  if (deliveryId === null) {
+    emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "malformed" });
+    return new Response(null, { status: 400 });
+  }
+
+  const parsed = parseWorkflowEvent(deliveryId, body);
   if (parsed.kind === "malformed") {
     emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "malformed" });
     return new Response(null, { status: 400 });

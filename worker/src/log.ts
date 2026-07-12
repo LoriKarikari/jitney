@@ -48,6 +48,17 @@ export type LifecycleRecord =
       event: "runner_provisioning_started" | "runner_provisioning_succeeded";
     })
   | (ProvisioningCorrelation & { event: "runner_provisioning_failed"; step: string })
+  | (RunnerCorrelation & {
+      event: "runner_attempt_expired";
+      attempt: number;
+      stopReason: string;
+      deploymentId?: string | undefined;
+    })
+  | (RunnerCorrelation & {
+      event: "runner_reclaim_failed";
+      step: string;
+      deploymentId?: string | undefined;
+    })
   | (ContainerCorrelation & { event: "runner_container_started" })
   | (ContainerCorrelation & {
       event: "runner_container_stopped";

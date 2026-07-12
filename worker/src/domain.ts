@@ -38,14 +38,7 @@ const Payload = Schema.Struct({
   }),
 });
 
-export function parseWorkflowEvent(
-  eventName: string | null,
-  deliveryId: string | null,
-  body: ArrayBuffer,
-): ParseResult {
-  if (eventName !== "workflow_job") return { kind: "ignored" };
-  if (!deliveryId) return { kind: "malformed" };
-
+export function parseWorkflowEvent(deliveryId: string, body: ArrayBuffer): ParseResult {
   let json: unknown;
   try {
     json = JSON.parse(new TextDecoder().decode(body));

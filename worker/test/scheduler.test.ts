@@ -49,8 +49,9 @@ describe("Scheduler admission", () => {
     await scheduler.accept(event);
 
     await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.drain(() =>
-        Effect.fail(new ProvisioningError({ step: "container_start", cause: "failed" })),
+      lifecycle.sweep(
+        () => Effect.fail(new ProvisioningError({ step: "container_start", cause: "failed" })),
+        () => Effect.void,
       ),
     );
 
@@ -112,7 +113,12 @@ describe("Scheduler admission", () => {
     for (let job = 1; job <= 25; job++) {
       const event = queuedEvent(4000 + job, `delivery-${job}`);
       expect(await scheduler.accept(event)).toMatchObject({ outcome: "accepted" });
-      await withLifecycle(scheduler, (lifecycle) => lifecycle.drain(() => Effect.void));
+      await withLifecycle(scheduler, (lifecycle) =>
+        lifecycle.sweep(
+          () => Effect.void,
+          () => Effect.void,
+        ),
+      );
     }
 
     const rejected = queuedEvent(4026, "delivery-26");
@@ -121,10 +127,13 @@ describe("Scheduler admission", () => {
 
     let privilegedCalls = 0;
     await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.drain(() => {
-        privilegedCalls++;
-        return Effect.void;
-      }),
+      lifecycle.sweep(
+        () => {
+          privilegedCalls++;
+          return Effect.void;
+        },
+        () => Effect.void,
+      ),
     );
     expect(privilegedCalls).toBe(0);
   });
@@ -231,10 +240,13 @@ describe("Scheduler admission", () => {
     const requests: ProvisionRequest[] = [];
 
     await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.drain((request) => {
-        requests.push(request);
-        return Effect.void;
-      }),
+      lifecycle.sweep(
+        (request) => {
+          requests.push(request);
+          return Effect.void;
+        },
+        () => Effect.void,
+      ),
     );
 
     expect(requests).toEqual([
@@ -264,7 +276,12 @@ describe("Scheduler admission", () => {
     const accepted = await scheduler.accept(event);
     if (accepted.runnerName === undefined) throw new Error("accepted attempt has no runner name");
 
-    await withLifecycle(scheduler, (lifecycle) => lifecycle.drain(() => Effect.void));
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        () => Effect.void,
+        () => Effect.void,
+      ),
+    );
     await scheduler.accept({
       ...event,
       action: "in_progress",
@@ -312,8 +329,9 @@ describe("Scheduler admission", () => {
     await scheduler.accept(event);
 
     await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.drain(() =>
-        Effect.fail(new ProvisioningError({ step: "container_start", cause: canary })),
+      lifecycle.sweep(
+        () => Effect.fail(new ProvisioningError({ step: "container_start", cause: canary })),
+        () => Effect.void,
       ),
     );
 
@@ -323,6 +341,107 @@ describe("Scheduler admission", () => {
     });
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "failed" }]);
     expect(String(logged.mock.calls[0]?.[0])).not.toContain(canary);
+    logged.mockRestore();
+  });
+
+  it("expires an unassigned attempt past its assignment deadline", async () => {
+    const scheduler = env.SCHEDULER.getByName("assignment-expiry");
+    const event = queuedEvent(6001, "delivery-queued");
+    const accepted = await scheduler.accept(event);
+    if (accepted.runnerName === undefined) throw new Error("accepted attempt has no runner name");
+    const reclaimed: string[] = [];
+
+    await withLifecycle(scheduler, async (lifecycle) => {
+      await lifecycle.sweep(
+        () => Effect.void,
+        () => Effect.void,
+      );
+      await lifecycle.sweep(
+        () => Effect.void,
+        (request) => {
+          reclaimed.push(request.runnerName);
+          return Effect.void;
+        },
+        Date.now() + 6 * 60_000,
+      );
+    });
+
+    expect(reclaimed).toEqual(["jitney-456-6001-1"]);
+    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
+    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+      state: "queued",
+      pending: false,
+    });
+
+    expect(await scheduler.accept({ ...event, deliveryId: "delivery-retry" })).toEqual({
+      outcome: "accepted",
+      runnerName: "jitney-456-6001-2",
+    });
+  });
+
+  it("leaves assigned and on-time attempts untouched by the sweep", async () => {
+    const scheduler = env.SCHEDULER.getByName("expiry-boundaries");
+    const onTime = queuedEvent(6002, "delivery-on-time");
+    const assigned = queuedEvent(6003, "delivery-assigned");
+    await scheduler.accept(onTime);
+    const acceptedAssigned = await scheduler.accept(assigned);
+    if (acceptedAssigned.runnerName === undefined) throw new Error("missing runner name");
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        () => Effect.void,
+        () => Effect.void,
+      ),
+    );
+    await scheduler.accept({
+      ...assigned,
+      action: "in_progress",
+      deliveryId: "delivery-in-progress",
+      runnerName: acceptedAssigned.runnerName,
+    });
+
+    const reclaimed: string[] = [];
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        () => Effect.void,
+        (request) => {
+          reclaimed.push(request.runnerName);
+          return Effect.void;
+        },
+        Date.now() + 6 * 60_000,
+      ),
+    );
+
+    expect(reclaimed).toEqual(["jitney-456-6002-1"]);
+    expect(await scheduler.getAttempts(assigned.workflowJobId)).toMatchObject([
+      { state: "running" },
+    ]);
+    expect(await scheduler.getJob(assigned.workflowJobId)).toMatchObject({ state: "running" });
+  });
+
+  it("expires the attempt even when reclaiming fails", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("expiry-reclaim-failure");
+    const event = queuedEvent(6004, "delivery-queued");
+    await scheduler.accept(event);
+
+    await withLifecycle(scheduler, async (lifecycle) => {
+      await lifecycle.sweep(
+        () => Effect.void,
+        () => Effect.void,
+      );
+      await lifecycle.sweep(
+        () => Effect.void,
+        () => Effect.fail(new ProvisioningError({ step: "runner_deletion", cause: "boom" })),
+        Date.now() + 6 * 60_000,
+      );
+    });
+
+    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
+    const failures = logged.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .filter((record) => record.event === "runner_reclaim_failed");
+    expect(failures).toMatchObject([{ workflowJobId: 6004, step: "runner_deletion" }]);
     logged.mockRestore();
   });
 

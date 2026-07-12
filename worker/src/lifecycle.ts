@@ -3,8 +3,7 @@ import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlit
 import { Either, Effect } from "effect";
 import { assignments, attempts, deliveries, jobs, pending } from "./schema";
 import { isAdmissible, type QueuedJobCandidate, type WorkflowEvent } from "./domain";
-import type { Provision, ProvisionRequest, Reclaim } from "./provisioning";
-import { ProvisioningError } from "./github";
+import type { RunnerAttemptOperations, RunnerAttemptRequest } from "./runner-attempt-operations";
 import { emit } from "./log";
 
 const maxPendingJobs = 10;
@@ -417,10 +416,10 @@ export class SchedulerLifecycle {
       .all()[0];
   }
 
-  async sweep(provision: Provision, reclaim: Reclaim, now = Date.now()): Promise<void> {
-    const morePending = await drainPending(this.#db, this.storage, provision, this.deploymentId);
-    await this.#expireUnassignedAttempts(reclaim, now);
-    await this.#expireRunningAttempts(reclaim, now);
+  async sweep(operations: RunnerAttemptOperations, now = Date.now()): Promise<void> {
+    const morePending = await drainPending(this.#db, this.storage, operations, this.deploymentId);
+    await this.#expireUnassignedAttempts(operations, now);
+    await this.#expireRunningAttempts(operations, now);
 
     const wakeAt = morePending ? now + 1_000 : this.#nextDeadline();
     if (wakeAt !== undefined) {
@@ -443,7 +442,7 @@ export class SchedulerLifecycle {
     return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
   }
 
-  async #expireUnassignedAttempts(reclaim: Reclaim, now: number): Promise<void> {
+  async #expireUnassignedAttempts(operations: RunnerAttemptOperations, now: number): Promise<void> {
     const expired = this.#expiredAttempts(
       and(
         inArray(attempts.state, viableAttemptStates),
@@ -471,11 +470,11 @@ export class SchedulerLifecycle {
           )
           .run();
       });
-      await this.#reclaimExpired(reclaim, row, "assignment_deadline");
+      await this.#reclaimExpired(operations, row, "assignment_deadline");
     }
   }
 
-  async #expireRunningAttempts(reclaim: Reclaim, now: number): Promise<void> {
+  async #expireRunningAttempts(operations: RunnerAttemptOperations, now: number): Promise<void> {
     const expired = this.#expiredAttempts(
       and(eq(attempts.state, "running"), sql`${attempts.runtimeDeadline} <= ${now}`),
     );
@@ -506,7 +505,7 @@ export class SchedulerLifecycle {
           .run();
         this.#db.delete(pending).where(eq(pending.workflowJobId, assignedJobId)).run();
       });
-      await this.#reclaimExpired(reclaim, row, "runtime_deadline");
+      await this.#reclaimExpired(operations, row, "runtime_deadline");
     }
   }
 
@@ -519,7 +518,11 @@ export class SchedulerLifecycle {
       .all();
   }
 
-  async #reclaimExpired(reclaim: Reclaim, row: ExpiredAttempt, stopReason: string): Promise<void> {
+  async #reclaimExpired(
+    operations: RunnerAttemptOperations,
+    row: ExpiredAttempt,
+    stopReason: string,
+  ): Promise<void> {
     const { workflowJobId, attempt, installationId, runnerName, containerName, repositoryId } = row;
     const correlation = {
       installationId,
@@ -533,15 +536,17 @@ export class SchedulerLifecycle {
 
     const { repositoryOwner, repositoryName } = row;
     const result = await Effect.runPromise(
-      reclaim({
-        installationId,
-        repositoryId,
-        repositoryOwner,
-        repositoryName,
-        workflowJobId,
-        runnerName,
-        containerName,
-      }).pipe(Effect.either),
+      operations
+        .reclaim({
+          installationId,
+          repositoryId,
+          repositoryOwner,
+          repositoryName,
+          workflowJobId,
+          runnerName,
+          containerName,
+        })
+        .pipe(Effect.either),
     );
     if (Either.isLeft(result)) {
       emit({ event: "runner_reclaim_failed", ...correlation, step: result.left.step });
@@ -559,7 +564,7 @@ type SchedulerSchema = {
   pending: typeof pending;
 };
 
-type PendingRow = ProvisionRequest & {
+type PendingRow = RunnerAttemptRequest & {
   attempt: number;
   deliveryId: string | null;
 };
@@ -567,7 +572,7 @@ type PendingRow = ProvisionRequest & {
 async function drainPending(
   db: DrizzleSqliteDODatabase<SchedulerSchema>,
   storage: DurableObjectStorage,
-  provision: Provision,
+  operations: RunnerAttemptOperations,
   deploymentId?: string,
 ): Promise<boolean> {
   const row = db
@@ -626,15 +631,17 @@ async function drainPending(
   });
 
   const result = await Effect.runPromise(
-    provision({
-      installationId,
-      repositoryId,
-      repositoryOwner,
-      repositoryName,
-      workflowJobId,
-      runnerName,
-      containerName,
-    }).pipe(Effect.either),
+    operations
+      .provision({
+        installationId,
+        repositoryId,
+        repositoryOwner,
+        repositoryName,
+        workflowJobId,
+        runnerName,
+        containerName,
+      })
+      .pipe(Effect.either),
   );
 
   storage.transactionSync(() => {
@@ -671,7 +678,7 @@ function finishProvisioning(
 function failProvisioning(
   db: DrizzleSqliteDODatabase<SchedulerSchema>,
   pendingRow: PendingRow,
-  error: Effect.Effect.Error<ReturnType<Provision>>,
+  error: Effect.Effect.Error<ReturnType<RunnerAttemptOperations["provision"]>>,
   deploymentId?: string,
 ): void {
   const { deliveryId, installationId, repositoryId, workflowJobId, runnerName, containerName } =
@@ -693,6 +700,6 @@ function failProvisioning(
     workflowJobId,
     runnerName,
     containerName,
-    step: error instanceof ProvisioningError ? error.step : "installation_mismatch",
+    step: error.step,
   });
 }

@@ -1,6 +1,6 @@
 import { Either, Schema } from "effect";
 
-export type WorkflowAction = "queued" | "in_progress" | "completed";
+type WorkflowAction = "queued" | "in_progress" | "completed";
 
 export type WorkflowEvent = {
   deliveryId: string;

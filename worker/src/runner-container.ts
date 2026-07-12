@@ -15,16 +15,9 @@ export class RunnerContainer extends Container<Env> {
   override enableInternet = true;
 
   async startAttempt(request: StartAttempt): Promise<void> {
-    await this.ctx.storage.put("correlation", {
-      installationId: request.installationId,
-      repositoryId: request.repositoryId,
-      workflowJobId: request.workflowJobId,
-      runnerName: request.runnerName,
-      containerName: request.containerName,
-    } satisfies LifecycleFields);
-    await this.start({
-      envVars: { JIT_CONFIG: request.jitConfig },
-    });
+    const { jitConfig, ...correlation } = request;
+    await this.ctx.storage.put("correlation", correlation satisfies LifecycleFields);
+    await this.start({ envVars: { JIT_CONFIG: jitConfig } });
   }
 
   override async onStart(): Promise<void> {

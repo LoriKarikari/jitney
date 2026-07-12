@@ -18,33 +18,41 @@ export type Provision = (
 ) => Effect.Effect<void, InstallationMismatch | ProvisioningError>;
 
 export function createProvisioner(env: Env): Provision {
-  return (request) =>
-    generateJitConfig({
+  return (request) => {
+    const {
+      installationId,
+      repositoryId,
+      repositoryOwner,
+      repositoryName,
+      workflowJobId,
+      runnerName,
+      containerName,
+    } = request;
+    return generateJitConfig({
       appId: env.GITHUB_APP_ID,
       privateKey: env.GITHUB_APP_PRIVATE_KEY,
-      installationId: request.installationId,
-      repositoryId: request.repositoryId,
-      repositoryOwner: request.repositoryOwner,
-      repositoryName: request.repositoryName,
-      runnerName: request.runnerName,
+      installationId,
+      repositoryId,
+      repositoryOwner,
+      repositoryName,
+      runnerName,
     }).pipe(
       Effect.andThen((jitConfig) =>
         Effect.tryPromise({
           try: () =>
             (
-              env.RUNNER_CONTAINERS.getByName(
-                request.containerName,
-              ) as DurableObjectStub<RunnerContainer>
+              env.RUNNER_CONTAINERS.getByName(containerName) as DurableObjectStub<RunnerContainer>
             ).startAttempt({
               jitConfig,
-              installationId: request.installationId,
-              repositoryId: request.repositoryId,
-              workflowJobId: request.workflowJobId,
-              runnerName: request.runnerName,
-              containerName: request.containerName,
+              installationId,
+              repositoryId,
+              workflowJobId,
+              runnerName,
+              containerName,
             }),
           catch: (cause) => new ProvisioningError({ step: "container_start", cause }),
         }),
       ),
     );
+  };
 }

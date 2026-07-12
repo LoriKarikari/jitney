@@ -25,25 +25,35 @@ export type ProvisioningInput = {
 export function generateJitConfig(
   input: ProvisioningInput,
 ): Effect.Effect<string, InstallationMismatch | ProvisioningError> {
+  const {
+    appId,
+    privateKey,
+    installationId,
+    repositoryId,
+    repositoryOwner,
+    repositoryName,
+    runnerName,
+  } = input;
+
   return Effect.gen(function* () {
-    const auth = createAppAuth({ appId: input.appId, privateKey: input.privateKey });
+    const auth = createAppAuth({ appId, privateKey });
     const app = new Octokit({
       authStrategy: createAppAuth,
-      auth: { appId: input.appId, privateKey: input.privateKey },
+      auth: { appId, privateKey },
     });
 
     const installation = yield* Effect.tryPromise({
       try: () =>
         app.rest.apps.getRepoInstallation({
-          owner: input.repositoryOwner,
-          repo: input.repositoryName,
+          owner: repositoryOwner,
+          repo: repositoryName,
         }),
       catch: (cause) => new ProvisioningError({ step: "installation_verification", cause }),
     });
 
-    if (installation.data.id !== input.installationId) {
+    if (installation.data.id !== installationId) {
       return yield* Effect.fail(
-        new InstallationMismatch({ expected: input.installationId, actual: installation.data.id }),
+        new InstallationMismatch({ expected: installationId, actual: installation.data.id }),
       );
     }
 
@@ -51,8 +61,8 @@ export function generateJitConfig(
       try: () =>
         auth({
           type: "installation",
-          installationId: input.installationId,
-          repositoryIds: [input.repositoryId],
+          installationId,
+          repositoryIds: [repositoryId],
           permissions: { administration: "write", actions: "read" },
         }),
       catch: (cause) => new ProvisioningError({ step: "installation_token", cause }),
@@ -62,9 +72,9 @@ export function generateJitConfig(
     const { data } = yield* Effect.tryPromise({
       try: () =>
         repo.rest.actions.generateRunnerJitconfigForRepo({
-          owner: input.repositoryOwner,
-          repo: input.repositoryName,
-          name: input.runnerName,
+          owner: repositoryOwner,
+          repo: repositoryName,
+          name: runnerName,
           runner_group_id: 1,
           labels: ["jitney"],
           work_folder: "_work",

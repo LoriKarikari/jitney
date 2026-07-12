@@ -187,30 +187,33 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   #createAttempt(event: WorkflowEvent, now: number): string {
+    const {
+      deliveryId,
+      installationId,
+      repositoryId,
+      repositoryOwner,
+      repositoryName,
+      workflowJobId,
+    } = event;
     const previousAttempt = this.#db
       .select({ attempt: attempts.attempt })
       .from(attempts)
-      .where(eq(attempts.workflowJobId, event.workflowJobId))
+      .where(eq(attempts.workflowJobId, workflowJobId))
       .orderBy(desc(attempts.attempt))
       .all()[0];
     const attempt = (previousAttempt?.attempt ?? 0) + 1;
-    const runnerName = `jitney-${event.repositoryId}-${event.workflowJobId}-${attempt}`;
-    const containerName = `attempt-${event.repositoryId}-${event.workflowJobId}-${attempt}`;
+    const runnerName = `jitney-${repositoryId}-${workflowJobId}-${attempt}`;
+    const containerName = `attempt-${repositoryId}-${workflowJobId}-${attempt}`;
 
     this.#db
       .insert(jobs)
-      .values({
-        workflowJobId: event.workflowJobId,
-        state: "queued",
-        repositoryId: event.repositoryId,
-        updatedAt: now,
-      })
+      .values({ workflowJobId, state: "queued", repositoryId, updatedAt: now })
       .onConflictDoUpdate({ target: jobs.workflowJobId, set: { state: "queued", updatedAt: now } })
       .run();
     this.#db
       .insert(attempts)
       .values({
-        workflowJobId: event.workflowJobId,
+        workflowJobId,
         attempt,
         state: "created",
         runnerName,
@@ -220,17 +223,17 @@ export class Scheduler extends DurableObject<Env> {
       })
       .run();
     const intent = {
-      deliveryId: event.deliveryId,
-      installationId: event.installationId,
-      repositoryId: event.repositoryId,
-      repositoryOwner: event.repositoryOwner,
-      repositoryName: event.repositoryName,
+      deliveryId,
+      installationId,
+      repositoryId,
+      repositoryOwner,
+      repositoryName,
       runnerName,
       containerName,
     };
     this.#db
       .insert(pending)
-      .values({ workflowJobId: event.workflowJobId, ...intent })
+      .values({ workflowJobId, ...intent })
       .onConflictDoUpdate({ target: pending.workflowJobId, set: intent })
       .run();
     return runnerName;

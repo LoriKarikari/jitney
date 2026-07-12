@@ -59,6 +59,16 @@ export type LifecycleRecord =
       step: string;
       deploymentId?: string | undefined;
     })
+  | { event: "reconciliation_started"; deploymentId: string }
+  | { event: "reconciliation_failed"; deploymentId: string; step: string }
+  | {
+      event: "reconciliation_completed";
+      deploymentId: string;
+      discovered: number;
+      submitted: number;
+      suppressed: number;
+      ignored: number;
+    }
   | (ContainerCorrelation & { event: "runner_container_started" })
   | (ContainerCorrelation & {
       event: "runner_container_stopped";
@@ -88,6 +98,10 @@ const allowedFields = [
   "conclusion",
   "stopReason",
   "exitCode",
+  "discovered",
+  "submitted",
+  "suppressed",
+  "ignored",
 ] as const satisfies readonly LifecycleFieldName[];
 
 const sensitive = [

@@ -1,0 +1,98 @@
+import { env } from "cloudflare:test";
+import { Effect } from "effect";
+import { describe, expect, it, vi } from "vitest";
+import type { QueuedJobCandidate } from "../src/domain";
+import { ProvisioningError } from "../src/github";
+import { reconcile, type Submit } from "../src/reconciliation";
+
+function candidate(workflowJobId: number, overrides?: Partial<QueuedJobCandidate>) {
+  return {
+    installationId: 123,
+    repositoryId: 456,
+    repositoryOwner: "LoriKarikari",
+    repositoryName: "jitney-test",
+    repositoryPrivate: true,
+    workflowJobId,
+    labels: ["jitney"],
+    ...overrides,
+  };
+}
+
+function completedRecords(logged: { mock: { calls: unknown[][] } }) {
+  return logged.mock.calls
+    .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+    .filter((record) => record.event === "reconciliation_completed");
+}
+
+describe("reconciliation", () => {
+  it("backfills a queued job the scheduler does not track", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("reconciliation-backfill");
+    const submit: Submit = (event) => scheduler.accept(event);
+
+    await reconcile(Effect.succeed([candidate(8001)]), submit, "deployment-test");
+
+    expect(await scheduler.getJob(8001)).toMatchObject({ state: "queued", pending: true });
+    expect(await scheduler.getAttempts(8001)).toHaveLength(1);
+    expect(completedRecords(logged)).toMatchObject([
+      { discovered: 1, submitted: 1, suppressed: 0, ignored: 0 },
+    ]);
+    logged.mockRestore();
+  });
+
+  it("does not resubmit a job with a viable attempt", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("reconciliation-duplicate");
+    const submit: Submit = (event) => scheduler.accept(event);
+
+    await reconcile(Effect.succeed([candidate(8002)]), submit, "deployment-test", 1);
+    await reconcile(Effect.succeed([candidate(8002)]), submit, "deployment-test", 2);
+
+    expect(await scheduler.getAttempts(8002)).toHaveLength(1);
+    expect(completedRecords(logged)[1]).toMatchObject({
+      discovered: 1,
+      submitted: 0,
+      suppressed: 1,
+    });
+    logged.mockRestore();
+  });
+
+  it("ignores public repositories and unsupported labels", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const submit = vi.fn<Submit>();
+
+    await reconcile(
+      Effect.succeed([
+        candidate(8003, { repositoryPrivate: false }),
+        candidate(8004, { labels: ["ubuntu-latest"] }),
+        candidate(8005, { labels: ["jitney", "gpu"] }),
+      ]),
+      submit,
+      "deployment-test",
+    );
+
+    expect(submit).not.toHaveBeenCalled();
+    expect(completedRecords(logged)).toMatchObject([
+      { discovered: 3, submitted: 0, suppressed: 0, ignored: 3 },
+    ]);
+    logged.mockRestore();
+  });
+
+  it("reports a discovery failure without submitting", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const submit = vi.fn<Submit>();
+
+    await reconcile(
+      Effect.fail(new ProvisioningError({ step: "run_listing", cause: "boom" })),
+      submit,
+      "deployment-test",
+    );
+
+    expect(submit).not.toHaveBeenCalled();
+    const failures = logged.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .filter((record) => record.event === "reconciliation_failed");
+    expect(failures).toMatchObject([{ step: "run_listing" }]);
+    logged.mockRestore();
+  });
+});

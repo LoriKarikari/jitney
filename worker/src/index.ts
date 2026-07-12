@@ -1,5 +1,7 @@
 import { verify } from "@octokit/webhooks-methods";
 import { parseWorkflowEvent } from "./domain";
+import { discoverQueuedJobs } from "./github";
+import { reconcile } from "./reconciliation";
 import { emit } from "./log";
 
 export { RunnerContainer } from "./runner-container";
@@ -81,4 +83,12 @@ async function fetch(request: Request, env: Env): Promise<Response> {
   return new Response(null, { status: 202 });
 }
 
-export default { fetch };
+async function scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+  await reconcile(
+    discoverQueuedJobs({ appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY }),
+    (event) => env.SCHEDULER.getByName("global-v2").accept(event),
+    env.CF_VERSION_METADATA.id,
+  );
+}
+
+export default { fetch, scheduled };

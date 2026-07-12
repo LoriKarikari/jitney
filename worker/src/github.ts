@@ -1,6 +1,7 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
 import { Data, Effect } from "effect";
+import type { QueuedJobCandidate } from "./domain";
 
 export class InstallationMismatch extends Data.TaggedError("InstallationMismatch")<{
   expected: number;
@@ -31,6 +32,78 @@ export type RunnerCleanupInput = {
   repositoryName: string;
   runnerName: string;
 };
+
+export type DiscoveryInput = {
+  appId: string;
+  privateKey: string;
+};
+
+export function discoverQueuedJobs(
+  input: DiscoveryInput,
+): Effect.Effect<QueuedJobCandidate[], ProvisioningError> {
+  const { appId, privateKey } = input;
+
+  return Effect.gen(function* () {
+    const app = new Octokit({ authStrategy: createAppAuth, auth: { appId, privateKey } });
+    const installations = yield* Effect.tryPromise({
+      try: () => app.rest.apps.listInstallations(),
+      catch: (cause) => new ProvisioningError({ step: "installation_listing", cause }),
+    });
+
+    const candidates: QueuedJobCandidate[] = [];
+    for (const { id: installationId } of installations.data) {
+      const installation = new Octokit({
+        authStrategy: createAppAuth,
+        auth: { appId, privateKey, installationId },
+      });
+      const repositories = yield* Effect.tryPromise({
+        try: () => installation.rest.apps.listReposAccessibleToInstallation(),
+        catch: (cause) => new ProvisioningError({ step: "repository_listing", cause }),
+      });
+
+      for (const repository of repositories.data.repositories) {
+        if (!repository.private) continue;
+        const { id: repositoryId, name: repositoryName, private: repositoryPrivate } = repository;
+        const repositoryOwner = repository.owner.login;
+        const runs = yield* Effect.tryPromise({
+          try: () =>
+            installation.rest.actions.listWorkflowRunsForRepo({
+              owner: repositoryOwner,
+              repo: repositoryName,
+              status: "queued",
+            }),
+          catch: (cause) => new ProvisioningError({ step: "run_listing", cause }),
+        });
+
+        for (const run of runs.data.workflow_runs) {
+          const jobs = yield* Effect.tryPromise({
+            try: () =>
+              installation.rest.actions.listJobsForWorkflowRun({
+                owner: repositoryOwner,
+                repo: repositoryName,
+                run_id: run.id,
+              }),
+            catch: (cause) => new ProvisioningError({ step: "job_listing", cause }),
+          });
+
+          for (const job of jobs.data.jobs) {
+            if (job.status !== "queued") continue;
+            candidates.push({
+              installationId,
+              repositoryId,
+              repositoryOwner,
+              repositoryName,
+              repositoryPrivate,
+              workflowJobId: job.id,
+              labels: [...job.labels],
+            });
+          }
+        }
+      }
+    }
+    return candidates;
+  });
+}
 
 export function deleteRunner(input: RunnerCleanupInput): Effect.Effect<void, ProvisioningError> {
   const { appId, privateKey, installationId, repositoryId, repositoryOwner, repositoryName } =

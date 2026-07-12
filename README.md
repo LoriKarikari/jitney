@@ -1,6 +1,14 @@
-# Jitney
+<h1 align="center">Jitney</h1>
 
-Ephemeral GitHub Actions runners on Cloudflare Containers.
+<p align="center">
+  <strong>Ephemeral GitHub Actions runners on Cloudflare Containers.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/LoriKarikari/jitney/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/LoriKarikari/jitney/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://github.com/LoriKarikari/jitney/actions/workflows/image.yml"><img alt="Runner image" src="https://github.com/LoriKarikari/jitney/actions/workflows/image.yml/badge.svg"></a>
+  <a href="https://github.com/LoriKarikari/jitney/actions/workflows/deploy.yml"><img alt="Deploy" src="https://github.com/LoriKarikari/jitney/actions/workflows/deploy.yml/badge.svg"></a>
+</p>
 
 Jitney is a self-hosted control plane you deploy on your own Cloudflare
 account. When a workflow job with `runs-on: jitney` is queued, it boots a

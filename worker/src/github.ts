@@ -33,11 +33,6 @@ type RunnerCleanupInput = {
   runnerName: string;
 };
 
-type DiscoveryInput = {
-  appId: string;
-  privateKey: string;
-};
-
 type DiscoveryFailure = {
   step: string;
   installationId: number;
@@ -49,9 +44,10 @@ export type DiscoveryResult = {
   failures: DiscoveryFailure[];
 };
 
-export function discoverQueuedJobs(
-  input: DiscoveryInput,
-): Effect.Effect<DiscoveryResult, ProvisioningError> {
+export function discoverQueuedJobs(input: {
+  appId: string;
+  privateKey: string;
+}): Effect.Effect<DiscoveryResult, ProvisioningError> {
   const { appId, privateKey } = input;
 
   return Effect.gen(function* () {

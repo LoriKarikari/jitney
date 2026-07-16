@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import handler from "../src";
 
 const webhookUrl = "https://example.com/webhooks/github";
@@ -40,9 +40,26 @@ async function fetch(url: string, init?: RequestInit): Promise<Response> {
 }
 
 describe("worker entrypoint", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("answers unknown routes with 404", async () => {
     const response = await fetch("https://example.com/anything");
     expect(response.status).toBe(404);
+  });
+
+  it("rejects an oversized GitHub webhook once", async () => {
+    const logged = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const response = await fetch(webhookUrl, {
+      method: "POST",
+      body: "x".repeat(1_048_577),
+    });
+
+    expect(response.status).toBe(413);
+    const classifications = logged.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .filter((record) => record.event === "webhook_classified");
+    expect(classifications).toHaveLength(1);
+    expect(classifications).toMatchObject([{ outcome: "payload_too_large" }]);
   });
 
   it("rejects a GitHub webhook without a signature", async () => {
@@ -116,6 +133,7 @@ describe("worker entrypoint", () => {
   });
 
   it("durably accepts a signed private queued job before returning 202", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const body = queuedPayload();
     const response = await fetch(webhookUrl, {
       method: "POST",
@@ -128,6 +146,21 @@ describe("worker entrypoint", () => {
     });
 
     expect(response.status).toBe(202);
+    const classifications = logged.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .filter((record) => record.event === "webhook_classified");
+    expect(classifications).toHaveLength(1);
+    expect(classifications).toMatchObject([
+      {
+        deliveryId: "delivery-accepted",
+        installationId: 123,
+        repositoryId: 456,
+        workflowJobId: 789,
+        runnerName: "jitney-456-789-1",
+        action: "queued",
+        outcome: "accepted",
+      },
+    ]);
     const job = await env.SCHEDULER.getByName("global-v3").getJob(789);
     expect(job).toEqual({ workflowJobId: 789, state: "queued", repositoryId: 456, pending: true });
   });

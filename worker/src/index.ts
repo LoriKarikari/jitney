@@ -1,5 +1,4 @@
-import { verify } from "@octokit/webhooks-methods";
-import { parseWorkflowEvent } from "./domain";
+import { classifyDelivery } from "./delivery-classification";
 import { discoverQueuedJobs } from "./github";
 import { reconcile } from "./reconciliation";
 import { emit } from "./log";
@@ -13,74 +12,39 @@ async function fetch(request: Request, env: Env): Promise<Response> {
     return new Response(null, { status: 404 });
   }
 
-  const deliveryId = request.headers.get("X-GitHub-Delivery");
   const eventName = request.headers.get("X-GitHub-Event");
   const deploymentId = env.CF_VERSION_METADATA.id;
   emit({
     event: "webhook_received",
-    deliveryId,
+    deliveryId: request.headers.get("X-GitHub-Delivery"),
     deploymentId,
     action: eventName ?? "unknown",
   });
 
-  const body = await request.arrayBuffer();
-  if (body.byteLength > 1_048_576) {
-    emit({
-      event: "webhook_classified",
-      deliveryId,
-      deploymentId,
-      outcome: "payload_too_large",
-    });
-    return new Response(null, { status: 413 });
+  const classification = await classifyDelivery(request, env.GITHUB_WEBHOOK_SECRET);
+  let telemetry;
+  if (classification.outcome === "accepted") {
+    const event = classification.event;
+    const { runnerName, outcome } = await env.SCHEDULER.getByName("global-v3").accept(event);
+    const { installationId, repositoryId, workflowJobId, action } = event;
+    telemetry = {
+      installationId,
+      repositoryId,
+      workflowJobId,
+      runnerName,
+      action,
+      outcome,
+    };
+  } else {
+    telemetry = { outcome: classification.outcome };
   }
-
-  const signature = request.headers.get("X-Hub-Signature-256");
-  const bodyText = new TextDecoder().decode(body);
-  if (!signature || !(await verify(env.GITHUB_WEBHOOK_SECRET, bodyText, signature))) {
-    emit({
-      event: "webhook_classified",
-      deliveryId,
-      deploymentId,
-      outcome: "invalid_signature",
-    });
-    return new Response(null, { status: 401 });
-  }
-
-  if (eventName !== "workflow_job") {
-    emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "ignored" });
-    return new Response(null, { status: 204 });
-  }
-  if (deliveryId === null) {
-    emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "malformed" });
-    return new Response(null, { status: 400 });
-  }
-
-  const parsed = parseWorkflowEvent(deliveryId, body);
-  if (parsed.kind === "malformed") {
-    emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "malformed" });
-    return new Response(null, { status: 400 });
-  }
-  if (parsed.kind === "ignored") {
-    emit({ event: "webhook_classified", deliveryId, deploymentId, outcome: "ignored" });
-    return new Response(null, { status: 204 });
-  }
-
-  const event = parsed.event;
-  const result = await env.SCHEDULER.getByName("global-v3").accept(event);
-  const { installationId, repositoryId, workflowJobId, action } = event;
-  const { runnerName, outcome } = result;
   emit({
     event: "webhook_classified",
-    deliveryId,
+    deliveryId: classification.deliveryId,
     deploymentId,
-    installationId,
-    repositoryId,
-    workflowJobId,
-    runnerName,
-    action,
-    outcome,
+    ...telemetry,
   });
-  return new Response(null, { status: 202 });
+  return new Response(null, { status: classification.status });
 }
 
 async function scheduled(_controller: ScheduledController, env: Env): Promise<void> {

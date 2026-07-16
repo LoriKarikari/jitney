@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/LoriKarikari/jitney/compare/v0.1.0...v0.2.0) (2026-07-16)
+
+
+### Features
+
+* **cli:** automate Cloudflare and GitHub App setup ([#59](https://github.com/LoriKarikari/jitney/issues/59)) ([af1c721](https://github.com/LoriKarikari/jitney/commit/af1c7213f7dbf886304085b52f5e289a125ff493))
+
 ## 0.1.0 (2026-07-16)
 
 

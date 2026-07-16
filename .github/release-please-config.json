@@ -8,6 +8,13 @@
       "package-name": "jitney",
       "initial-version": "0.1.0",
       "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "cli/package.json",
+          "jsonpath": "$.version"
+        }
+      ],
       "version-file": "version.txt"
     }
   }

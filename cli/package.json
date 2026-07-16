@@ -1,0 +1,64 @@
+{
+  "name": "get-jitney",
+  "version": "0.1.0",
+  "description": "Deploy Jitney to Cloudflare and configure its GitHub App",
+  "homepage": "https://github.com/LoriKarikari/jitney#readme",
+  "bugs": "https://github.com/LoriKarikari/jitney/issues",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LoriKarikari/jitney.git",
+    "directory": "cli"
+  },
+  "bin": {
+    "jitney": "dist/cli.js"
+  },
+  "files": [
+    "assets",
+    "dist"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "pnpm build:worker && tsup src/cli.ts --format esm --clean",
+    "prepack": "pnpm build",
+    "build:worker": "wrangler deploy --dry-run --config wrangler.bundle.json --outdir assets/worker",
+    "typecheck": "tsc --noEmit",
+    "fmt": "oxfmt --write .",
+    "fmt:check": "oxfmt --check .",
+    "lint": "oxlint --type-aware --deny-warnings .",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm test && pnpm build"
+  },
+  "dependencies": {
+    "@octokit/auth-app": "^8.2.0",
+    "@octokit/request": "^10.0.11",
+    "effect": "^3.22.0",
+    "open": "^11.0.0",
+    "tar": "^7.5.20",
+    "wrangler": "^4.111.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.73.0",
+    "oxlint-tsgolint": "^0.24.0",
+    "tsup": "^8.5.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.8.0"
+}

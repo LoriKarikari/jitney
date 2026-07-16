@@ -92,6 +92,18 @@ tasks:
     cmds:
       - pnpm check
 
+  cli:install:
+    desc: Install CLI dependencies from the lockfile
+    dir: cli
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  cli:check:
+    desc: Typecheck, lint, test, and package the deployment CLI
+    dir: cli
+    cmds:
+      - pnpm check
+
   build:
     desc: Build the supervisor (static linux/amd64, as shipped in the runner image)
     dir: supervisor
@@ -111,3 +123,4 @@ tasks:
       - task: vuln
       - task: security
       - task: ts:check
+      - task: cli:check

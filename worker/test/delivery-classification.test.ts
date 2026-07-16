@@ -171,7 +171,7 @@ describe("Delivery classification", () => {
     }
   });
 
-  it("verifies the signature against raw non-UTF-8 bytes", async () => {
+  it("rejects non-UTF-8 payload bytes", async () => {
     const body = new Uint8Array([0xff]);
     const request = new Request(webhookUrl, {
       method: "POST",
@@ -184,13 +184,13 @@ describe("Delivery classification", () => {
     });
 
     expect(await classifyDelivery(request, webhookSecret)).toEqual({
-      status: 400,
-      outcome: "malformed",
+      status: 401,
+      outcome: "invalid_signature",
       deliveryId: "delivery-binary",
     });
   });
 
-  it("classifies an empty signed workflow job as malformed", async () => {
+  it("maps the SDK's empty-payload error to an invalid signature", async () => {
     const request = await webhookRequest("", {
       deliveryId: "delivery-empty",
       eventName: "workflow_job",
@@ -198,8 +198,8 @@ describe("Delivery classification", () => {
     });
 
     expect(await classifyDelivery(request, webhookSecret)).toEqual({
-      status: 400,
-      outcome: "malformed",
+      status: 401,
+      outcome: "invalid_signature",
       deliveryId: "delivery-empty",
     });
   });

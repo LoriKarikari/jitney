@@ -1,3 +1,4 @@
+import { verify } from "@octokit/webhooks-methods";
 import { Either, Schema } from "effect";
 import { isAdmissible, type WorkflowEvent } from "./domain";
 
@@ -62,10 +63,10 @@ export async function classifyDelivery(
   if (body === undefined) return { status: 413, outcome: "payload_too_large", deliveryId };
 
   const signature = request.headers.get("X-Hub-Signature-256");
-  if (signature === null || !(await verifySignature(webhookSecret, body, signature))) {
+  const bodyText = new TextDecoder().decode(body);
+  if (signature === null || !(await verifySignature(webhookSecret, bodyText, signature))) {
     return { status: 401, outcome: "invalid_signature", deliveryId };
   }
-  const bodyText = new TextDecoder().decode(body);
 
   if (request.headers.get("X-GitHub-Event") !== "workflow_job") {
     return { status: 204, outcome: "ignored", deliveryId };
@@ -110,30 +111,10 @@ async function readBoundedBody(request: Request): Promise<Uint8Array | undefined
   return body;
 }
 
-async function verifySignature(
-  secret: string,
-  body: Uint8Array,
-  signature: string,
-): Promise<boolean> {
-  const match = /^sha256=([\da-f]{64})$/i.exec(signature);
-  if (match === null) return false;
-
-  const hex = match[1];
-  if (hex === undefined) return false;
-  const expected = new Uint8Array(32);
-  for (let index = 0; index < expected.length; index++) {
-    expected[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
-  }
-
+async function verifySignature(secret: string, body: string, signature: string): Promise<boolean> {
+  if (!/^sha256=[\da-f]{64}$/i.test(signature)) return false;
   try {
-    const key = await crypto.subtle.importKey(
-      "raw",
-      new TextEncoder().encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["verify"],
-    );
-    return await crypto.subtle.verify("HMAC", key, expected, body);
+    return await verify(secret, body, signature);
   } catch {
     return false;
   }

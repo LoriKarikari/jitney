@@ -10,6 +10,7 @@ const maxPendingJobs = 10;
 const maxActiveAttempts = 25;
 const assignmentTimeout = 5 * 60_000;
 const defaultRuntimeTimeout = 60 * 60_000;
+const defaultSchedulerTick = 1_000;
 const viableAttemptStates = ["created", "starting", "waiting_for_assignment"];
 const activeAttemptStates = [...viableAttemptStates, "running"];
 const terminalJobStates = ["completed", "cancelled", "failed"];
@@ -61,6 +62,7 @@ export class SchedulerLifecycle {
     private readonly storage: DurableObjectStorage,
     private readonly deploymentId?: string,
     private readonly runtimeTimeout = defaultRuntimeTimeout,
+    private readonly schedulerTick = defaultSchedulerTick,
   ) {
     this.#db = drizzle(storage, { schema: { deliveries, jobs, attempts, assignments, pending } });
   }
@@ -82,7 +84,7 @@ export class SchedulerLifecycle {
 
     this.#emitTransition(event, result);
     if (event.action === "queued" && result.outcome === "accepted") {
-      await this.storage.setAlarm(now + 1_000);
+      await this.storage.setAlarm(now + this.schedulerTick);
     }
     if (event.action === "in_progress" && result.outcome === "recorded") {
       const deadline = now + this.runtimeTimeout;
@@ -104,7 +106,7 @@ export class SchedulerLifecycle {
       );
     });
     this.#emitTransition({ ...candidate, action: "queued" }, result);
-    if (result.outcome === "accepted") await this.storage.setAlarm(now + 1_000);
+    if (result.outcome === "accepted") await this.storage.setAlarm(now + this.schedulerTick);
     return result;
   }
 
@@ -421,9 +423,9 @@ export class SchedulerLifecycle {
     await this.#expireUnassignedAttempts(operations, now);
     await this.#expireRunningAttempts(operations, now);
 
-    const wakeAt = morePending ? now + 1_000 : this.#nextDeadline();
+    const wakeAt = morePending ? now + this.schedulerTick : this.#nextDeadline();
     if (wakeAt !== undefined) {
-      await this.storage.setAlarm(Math.max(wakeAt, now + 1_000));
+      await this.storage.setAlarm(Math.max(wakeAt, now + this.schedulerTick));
     }
   }
 
@@ -649,12 +651,18 @@ export class SchedulerLifecycle {
     this.#db
       .update(jobs)
       .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
-      .where(eq(jobs.workflowJobId, workflowJobId))
+      .where(and(eq(jobs.workflowJobId, workflowJobId), eq(jobs.state, "provisioning")))
       .run();
     this.#db
       .update(attempts)
       .set({ state: "waiting_for_assignment" })
-      .where(and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.runnerName, runnerName)))
+      .where(
+        and(
+          eq(attempts.workflowJobId, workflowJobId),
+          eq(attempts.runnerName, runnerName),
+          eq(attempts.state, "starting"),
+        ),
+      )
       .run();
   }
 
@@ -667,12 +675,18 @@ export class SchedulerLifecycle {
     this.#db
       .update(jobs)
       .set({ state: "queued", updatedAt: Date.now() })
-      .where(eq(jobs.workflowJobId, workflowJobId))
+      .where(and(eq(jobs.workflowJobId, workflowJobId), eq(jobs.state, "provisioning")))
       .run();
     this.#db
       .update(attempts)
       .set({ state: "failed" })
-      .where(and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.runnerName, runnerName)))
+      .where(
+        and(
+          eq(attempts.workflowJobId, workflowJobId),
+          eq(attempts.runnerName, runnerName),
+          eq(attempts.state, "starting"),
+        ),
+      )
       .run();
     emit({
       event: "runner_provisioning_failed",

@@ -1,6 +1,6 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
 import { SchedulerLifecycle } from "../src/lifecycle";
 import {
@@ -10,12 +10,23 @@ import {
 } from "../src/runner-attempt-operations";
 import { Scheduler } from "../src/scheduler";
 
+const testSchedulerTick = 60_000;
+
 function withLifecycle<Result>(
   scheduler: DurableObjectStub<Scheduler>,
   use: (lifecycle: SchedulerLifecycle) => Promise<Result>,
 ): Promise<Result> {
   return runInDurableObject(scheduler, (_instance, state) =>
-    use(new SchedulerLifecycle(state.storage, "deployment-test")),
+    use(new SchedulerLifecycle(state.storage, "deployment-test", 60 * 60_000, testSchedulerTick)),
+  );
+}
+
+async function disarmSchedulerAlarms(): Promise<void> {
+  const ids = await listDurableObjectIds(env.SCHEDULER);
+  await Promise.all(
+    ids.map((id) =>
+      runInDurableObject(env.SCHEDULER.get(id), (_instance, state) => state.storage.deleteAlarm()),
+    ),
   );
 }
 
@@ -41,6 +52,8 @@ function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
 }
 
 describe("Scheduler admission", () => {
+  afterEach(disarmSchedulerAlarms);
+
   it("suppresses delivery replay and manual redelivery while an attempt is viable", async () => {
     const scheduler = env.SCHEDULER.getByName("duplicate-delivery");
     const event = queuedEvent(1001, "delivery-1");
@@ -278,6 +291,46 @@ describe("Scheduler admission", () => {
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([
       { state: "waiting_for_assignment" },
     ]);
+  });
+
+  it("preserves an assignment recorded while provisioning finishes", async () => {
+    const scheduler = env.SCHEDULER.getByName("assignment-during-provisioning");
+    const event = queuedEvent(5004, "delivery-queued");
+    const accepted = await scheduler.accept(event);
+    const runnerName = accepted.runnerName;
+    if (runnerName === undefined) throw new Error("accepted attempt has no runner name");
+
+    await withLifecycle(scheduler, async (lifecycle) => {
+      let finishProvisioning: () => void = () => undefined;
+      let markProvisioningStarted: () => void = () => undefined;
+      const provisioningStarted = new Promise<void>((resolve) => {
+        markProvisioningStarted = resolve;
+      });
+      const sweep = lifecycle.sweep(
+        operations(() =>
+          Effect.promise(
+            () =>
+              new Promise<void>((resolve) => {
+                finishProvisioning = resolve;
+                markProvisioningStarted();
+              }),
+          ),
+        ),
+      );
+      await provisioningStarted;
+
+      await lifecycle.accept({
+        ...event,
+        action: "in_progress",
+        deliveryId: "delivery-in-progress",
+        runnerName,
+      });
+      finishProvisioning();
+      await sweep;
+    });
+
+    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "running" });
+    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "running" }]);
   });
 
   it("reconstructs one lifecycle from correlated structured events", async () => {
@@ -555,12 +608,28 @@ describe("Scheduler admission", () => {
     logged.mockRestore();
   });
 
+  it("arms accepted work on the configured scheduler tick", async () => {
+    const scheduler = env.SCHEDULER.getByName("configured-scheduler-tick");
+    const before = Date.now();
+
+    await scheduler.accept(queuedEvent(7004, "delivery-queued"));
+
+    await runInDurableObject(scheduler, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).toBeGreaterThanOrEqual(before + testSchedulerTick);
+    });
+  });
+
   it("pulls the alarm earlier when the runtime deadline precedes it", async () => {
     const scheduler = env.SCHEDULER.getByName("runtime-alarm");
     const event = queuedEvent(7004, "delivery-queued");
 
     await runInDurableObject(scheduler, async (_instance, state) => {
-      const lifecycle = new SchedulerLifecycle(state.storage, "deployment-test", 120_000);
+      const lifecycle = new SchedulerLifecycle(
+        state.storage,
+        "deployment-test",
+        120_000,
+        testSchedulerTick,
+      );
       const accepted = await lifecycle.accept(event);
       if (accepted.runnerName === undefined) throw new Error("missing runner name");
       await lifecycle.sweep(operations());

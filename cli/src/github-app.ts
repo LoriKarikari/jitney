@@ -57,7 +57,7 @@ export async function installationCount(credentials: GitHubAppCredentials): Prom
   return response.data.length;
 }
 
-async function listenForManifestCode(
+export async function listenForManifestCode(
   state: string,
   options: { workerName: string; workerUrl: string; organization?: string },
 ): Promise<{ startUrl: string; code: Promise<string> }> {
@@ -81,12 +81,11 @@ async function listenForManifestCode(
       if (returnedState !== state || returnedCode === null) {
         response
           .writeHead(400)
-          .end("Invalid GitHub App callback. Return to the terminal and retry.");
-        rejectCode(new Error("GitHub App callback state did not match"));
-      } else {
-        response.end("Jitney received the GitHub App credentials. You can close this tab.");
-        resolveCode(returnedCode);
+          .end("Invalid GitHub App callback. Complete setup in the GitHub tab.");
+        return;
       }
+      response.end("Jitney received the GitHub App credentials. You can close this tab.");
+      resolveCode(returnedCode);
       server.close();
       return;
     }

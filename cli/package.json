@@ -31,6 +31,7 @@
   },
   "scripts": {
     "build": "pnpm build:worker && tsup src/cli.ts --format esm --clean",
+    "prepack": "pnpm build",
     "build:worker": "wrangler deploy --dry-run --config wrangler.bundle.json --outdir assets/worker",
     "typecheck": "tsc --noEmit",
     "fmt": "oxfmt --write .",

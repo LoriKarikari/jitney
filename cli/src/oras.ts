@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { x as extractTar } from "tar";
@@ -35,6 +35,9 @@ export async function copyRunnerImage(options: {
   const credentials = await registryCredentials(options.configPath);
   if (credentials.account_id !== options.accountId) {
     throw new Error("Cloudflare issued registry credentials for the wrong account");
+  }
+  if (credentials.registry_host !== "registry.cloudflare.com") {
+    throw new Error("Cloudflare issued credentials for an unexpected registry");
   }
 
   const directory = await mkdtemp(join(tmpdir(), "jitney-registry-"));
@@ -125,13 +128,16 @@ async function ensureOras(): Promise<string> {
 
   const directory = await mkdtemp(join(tmpdir(), "jitney-oras-"));
   const archivePath = join(directory, asset);
+  const temporaryBinary = join(cache, `oras-${process.pid}.tmp`);
   try {
     await writeFile(archivePath, archive, { mode: 0o600 });
     await extractTar({ file: archivePath, cwd: directory });
-    await chmod(join(directory, "oras"), 0o755);
-    await rename(join(directory, "oras"), binary);
+    await copyFile(join(directory, "oras"), temporaryBinary);
+    await chmod(temporaryBinary, 0o755);
+    await rename(temporaryBinary, binary);
     return binary;
   } finally {
+    await rm(temporaryBinary, { force: true });
     await rm(directory, { recursive: true, force: true });
   }
 }

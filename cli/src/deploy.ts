@@ -22,6 +22,8 @@ export async function deploy(options: {
   const directory = await mkdtemp(join(tmpdir(), "jitney-deploy-"));
   const configPath = join(directory, "wrangler.json");
   const secretsPath = join(directory, "secrets.json");
+  let bootstrapDeployed = false;
+  let createdAppSlug: string | undefined;
 
   try {
     const destination = `registry.cloudflare.com/${account.id}/jitney:${version}`;
@@ -35,11 +37,14 @@ export async function deploy(options: {
       }),
     );
 
+    await assertWorkerAbsent(configPath, workerName);
+
     console.log(`Copying Jitney ${version} into your Cloudflare registry...`);
     await copyRunnerImage({ accountId: account.id, configPath, version });
 
     console.log(`Deploying bootstrap Worker ${workerName}...`);
     const bootstrap = await wrangler(["deploy", "--config", configPath], { echo: true });
+    bootstrapDeployed = true;
     const workerUrl = deploymentUrl(`${bootstrap.stdout}\n${bootstrap.stderr}`);
 
     const credentials = await createGitHubApp({
@@ -47,6 +52,7 @@ export async function deploy(options: {
       workerUrl,
       ...(options.organization === undefined ? {} : { organization: options.organization }),
     });
+    createdAppSlug = credentials.slug;
     await storeSecrets(secretsPath, configPath, workerName, credentials);
 
     await writeFile(
@@ -71,11 +77,31 @@ export async function deploy(options: {
     console.log("Use `runs-on: jitney` in an installed private repository.");
   } catch (error) {
     console.error(`\nSetup stopped. The Worker name is ${workerName}.`);
-    console.error(`To remove a partial deployment: npx wrangler delete ${workerName} --force`);
+    if (bootstrapDeployed) {
+      console.error(`To remove the partial deployment: npx wrangler delete ${workerName} --force`);
+    }
+    if (createdAppSlug !== undefined) {
+      const settingsUrl = options.organization
+        ? `https://github.com/organizations/${options.organization}/settings/apps/${createdAppSlug}`
+        : `https://github.com/settings/apps/${createdAppSlug}`;
+      console.error(`Delete the partial GitHub App at ${settingsUrl}`);
+    }
     throw error;
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function assertWorkerAbsent(configPath: string, workerName: string): Promise<void> {
+  try {
+    await wrangler(["deployments", "list", "--name", workerName, "--config", configPath]);
+  } catch (error) {
+    if (error instanceof Error && /does not exist|code: 10007/.test(error.message)) return;
+    throw error;
+  }
+  throw new Error(
+    `Worker ${workerName} already exists. Choose another --name; upgrades are not supported yet.`,
+  );
 }
 
 async function storeSecrets(

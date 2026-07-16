@@ -165,8 +165,8 @@ commits on `main`. The PR updates `CHANGELOG.md`, `version.txt`, and the release
 manifest. A maintainer reviews and approves that PR before merging it; the
 workflow never approves or merges its own work. Merging the release PR creates
 the version tag and GitHub release, then publishes the matching runner image as
-`docker.io/lorikarikari/jitney-runner:<version>`. The public `latest` tag points
-to the newest release, but deployments use the versioned tag.
+`ghcr.io/lorikarikari/jitney:<version>`. The public `latest` tag points to the
+newest release, but deployments use the versioned tag.
 
 The repository must enable **Settings → Actions → General → Allow GitHub Actions
 to create and approve pull requests** so the built-in `GITHUB_TOKEN` can open
@@ -174,9 +174,8 @@ the PR. Despite the setting's combined name, Jitney grants no workflow an
 approval step. GitHub does not trigger other workflows for pull requests opened
 with `GITHUB_TOKEN`, so review the generated-only release diff directly. The
 code represented by the release has already passed CI in its originating PRs.
-Before the first release, create the public Docker Hub repository
-`lorikarikari/jitney-runner`. Set the GitHub Actions secret `DOCKERHUB_TOKEN` to
-a Docker Hub personal access token with write access to that repository.
+The runner image is published to GitHub Container Registry with the built-in
+`GITHUB_TOKEN`; it requires no separate registry credentials.
 
 The release manifest starts at `0.0.0`, and the first public release is
 explicitly `0.1.0`. Its changelog includes the full releasable pre-release

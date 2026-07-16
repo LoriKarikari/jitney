@@ -173,10 +173,10 @@ approval step. GitHub does not trigger other workflows for pull requests opened
 with `GITHUB_TOKEN`, so review the generated-only release diff directly. The
 code represented by the release has already passed CI in its originating PRs.
 
-The tracked version starts at `0.0.0`. The bootstrap SHA prevents the first
-release from replaying the repository's full pre-release history. Before 1.0,
-breaking changes bump the minor version; features use the normal minor bump and
-fixes use a patch bump.
+The release manifest starts at `0.0.0`, and the first public release is
+explicitly `0.1.0`. Its changelog includes the full releasable pre-release
+history. Before 1.0, breaking changes bump the minor version; features use the
+normal minor bump and fixes use a patch bump.
 
 ## Issues
 

@@ -7,6 +7,8 @@ export default defineConfig({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
         bindings: {
+          GITHUB_APP_ID: "test-app-id",
+          GITHUB_APP_PRIVATE_KEY: "test-private-key",
           GITHUB_WEBHOOK_SECRET: "test-webhook-secret",
           SCHEDULER_TICK_MS: "60000",
         },

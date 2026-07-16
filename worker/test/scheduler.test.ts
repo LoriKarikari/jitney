@@ -1,4 +1,9 @@
-import { env, listDurableObjectIds, runInDurableObject } from "cloudflare:test";
+import {
+  env,
+  listDurableObjectIds,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
@@ -608,11 +613,24 @@ describe("Scheduler admission", () => {
     logged.mockRestore();
   });
 
+  it("runs the real alarm handler with no pending work", async () => {
+    const scheduler = env.SCHEDULER.getByName("alarm-entrypoint");
+    await runInDurableObject(scheduler, (_instance, state) =>
+      state.storage.setAlarm(Date.now() + testSchedulerTick),
+    );
+
+    expect(await runDurableObjectAlarm(scheduler)).toBe(true);
+
+    await runInDurableObject(scheduler, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).toBeNull();
+    });
+  });
+
   it("arms accepted work on the configured scheduler tick", async () => {
     const scheduler = env.SCHEDULER.getByName("configured-scheduler-tick");
     const before = Date.now();
 
-    await scheduler.accept(queuedEvent(7004, "delivery-queued"));
+    await scheduler.accept(queuedEvent(7005, "delivery-queued"));
 
     await runInDurableObject(scheduler, async (_instance, state) => {
       expect(await state.storage.getAlarm()).toBeGreaterThanOrEqual(before + testSchedulerTick);

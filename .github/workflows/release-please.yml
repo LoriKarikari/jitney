@@ -28,6 +28,37 @@ jobs:
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
 
+  publish_cli:
+    needs: release_please
+    if: needs.release_please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.release_please.outputs.tag_name }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.8.0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: pnpm
+          cache-dependency-path: |
+            cli/pnpm-lock.yaml
+            worker/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: worker
+      - run: pnpm install --frozen-lockfile
+        working-directory: cli
+      - run: pnpm check
+        working-directory: cli
+      - run: npm publish --access public --provenance
+        working-directory: cli
+
   publish_runner_image:
     needs: release_please
     if: needs.release_please.outputs.release_created == 'true'

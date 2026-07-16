@@ -53,58 +53,32 @@ jobs:
 - A Cloudflare account with [Workers Paid](https://developers.cloudflare.com/durable-objects/platform/pricing/)
   (Durable Objects and Containers)
 - A GitHub account or organization where you can create a GitHub App
-- Locally: Node 24 with pnpm, [Wrangler](https://developers.cloudflare.com/workers/wrangler/),
-  and a Docker-compatible engine (Wrangler builds the runner image during
-  deploy)
+- Node.js 24 or newer on macOS or Linux (Intel or ARM64)
 
 ## Setup
 
-### 1. Create a GitHub App
-
-Create a [GitHub App](https://docs.github.com/en/apps/creating-github-apps)
-on your account or organization with:
-
-- **Repository permissions:** Actions (read), Administration (read and write)
-- **Webhook events:** Workflow job
-- **Webhook URL:** `https://jitney.<your-subdomain>.workers.dev/webhooks/github`
-  (you can fill this in after the first deploy)
-- **Webhook secret:** generate one and keep it for step 3
-
-Generate a private key, then install the App on the private repositories that
-should use Jitney runners.
-
-### 2. Deploy the Worker
-
 ```bash
-git clone https://github.com/LoriKarikari/jitney
-cd jitney/worker
-pnpm install
-pnpm exec wrangler deploy
+npx get-jitney deploy
 ```
 
-The deploy builds the runner image, pushes it to your Cloudflare account, and
-prints your Worker URL.
+The installer signs you into Cloudflare if needed, copies the release-pinned
+runner image into your Cloudflare registry, and deploys the Worker. It then
+opens GitHub to create and install a preconfigured private GitHub App. Jitney
+stores the generated App ID, private key, and webhook secret as Cloudflare
+Worker secrets; they are never written to your project.
 
-### 3. Set the secrets
-
-```bash
-pnpm exec wrangler secret put GITHUB_APP_ID
-pnpm exec wrangler secret put GITHUB_WEBHOOK_SECRET
-pnpm exec wrangler secret put GITHUB_APP_PRIVATE_KEY   # paste the PEM, PKCS#8
-```
-
-GitHub issues PKCS#1 keys; convert before pasting:
+To own the GitHub App through an organization instead of your personal account:
 
 ```bash
-openssl pkcs8 -topk8 -nocrypt -in app.private-key.pem
+npx get-jitney deploy --organization YOUR_ORG
 ```
 
-### 4. Run a job
-
-Point a workflow in an installed private repository at `runs-on: jitney` and
-push. The webhook arrives, a container boots, and the job picks up in a few
-seconds. If the webhook is lost, the five-minute reconciliation cron catches
-the queued job instead.
+Once setup finishes, point a workflow in an installed private repository at
+`runs-on: jitney` and push. Install only one Jitney GitHub App on each
+repository; two control planes will both try to provision the same queued job.
+The webhook arrives, a container boots, and the job picks up in a few seconds.
+If the webhook is lost, the five-minute reconciliation cron catches the queued
+job instead.
 
 ## Configuration
 

@@ -165,8 +165,9 @@ commits on `main`. The PR updates `CHANGELOG.md`, `version.txt`, and the release
 manifest. A maintainer reviews and approves that PR before merging it; the
 workflow never approves or merges its own work. Merging the release PR creates
 the version tag and GitHub release, then publishes the matching runner image as
-`ghcr.io/lorikarikari/jitney:<version>`. The public `latest` tag points to the
-newest release, but deployments use the versioned tag.
+`ghcr.io/lorikarikari/jitney:<version>` and the `get-jitney` package to npm. The
+public `latest` image tag points to the newest release, but deployments use the
+versioned tag.
 
 The repository must enable **Settings → Actions → General → Allow GitHub Actions
 to create and approve pull requests** so the built-in `GITHUB_TOKEN` can open
@@ -175,10 +176,10 @@ approval step. GitHub does not trigger other workflows for pull requests opened
 with `GITHUB_TOKEN`, so review the generated-only release diff directly. The
 code represented by the release has already passed CI in its originating PRs.
 The runner image is published to GitHub Container Registry with the built-in
-`GITHUB_TOKEN`; it requires no separate registry credentials. GHCR creates the
-package as private on its first push. After the first release, open the
-`lorikarikari/jitney` package settings and change its visibility to public
-before testing or documenting anonymous pulls.
+`GITHUB_TOKEN`; it requires no separate registry credentials. The npm package
+uses trusted publishing from `.github/workflows/release-please.yml`, with
+provenance, and must not use a long-lived npm token. Configure that workflow as
+the package's trusted publisher before its first release.
 
 The release manifest starts at `0.0.0`, and the first public release is
 explicitly `0.1.0`. Its changelog includes the full releasable pre-release

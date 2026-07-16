@@ -1,0 +1,19 @@
+{
+  "$schema": "../worker/node_modules/wrangler/config-schema.json",
+  "name": "jitney-bundle",
+  "main": "../worker/src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "vars": {
+    "RUNTIME_TIMEOUT_MS": "3600000",
+    "SCHEDULER_TICK_MS": "1000"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "SCHEDULER", "class_name": "Scheduler" },
+      { "name": "RUNNER_CONTAINERS", "class_name": "RunnerContainer" }
+    ]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Scheduler", "RunnerContainer"] }]
+}

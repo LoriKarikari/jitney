@@ -56,6 +56,9 @@ jobs:
         working-directory: cli
       - run: pnpm check
         working-directory: cli
+      - name: Pack the tested CLI
+        run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+        working-directory: cli
       - name: Detect bootstrap credentials
         id: npm-auth
         env:
@@ -68,14 +71,16 @@ jobs:
           fi
       - name: Publish first package with bootstrap credentials
         if: steps.npm-auth.outputs.bootstrap == 'true'
-        run: npm publish --access public --provenance
-        working-directory: cli
+        run: |
+          npm publish "$RUNNER_TEMP/get-jitney-${{ needs.release_please.outputs.version }}.tgz" --ignore-scripts --access public --provenance
+          echo "::warning::Published with NPM_BOOTSTRAP_TOKEN. Configure trusted publishing, then delete and revoke the token."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
       - name: Publish with trusted publishing
         if: steps.npm-auth.outputs.bootstrap == 'false'
-        run: npm publish --access public --provenance
-        working-directory: cli
+        run: npm publish "$RUNNER_TEMP/get-jitney-${{ needs.release_please.outputs.version }}.tgz" --ignore-scripts --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ""
 
   publish_runner_image:
     needs: release_please

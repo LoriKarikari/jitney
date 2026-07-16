@@ -158,6 +158,26 @@ and any alternatives considered. Link the issue. List the tests you ran.
 All PRs are squash-merged into `main`. This produces a linear history with one
 commit per PR, each following the conventional commit format.
 
+## Releases
+
+Release Please opens and updates a bot-authored release PR from conventional
+commits on `main`. The PR updates `CHANGELOG.md`, `version.txt`, and the release
+manifest. A maintainer reviews and approves that PR before merging it; the
+workflow never approves or merges its own work. Merging the release PR creates
+the version tag and GitHub release.
+
+The repository must enable **Settings → Actions → General → Allow GitHub Actions
+to create and approve pull requests** so the built-in `GITHUB_TOKEN` can open
+the PR. Despite the setting's combined name, Jitney grants no workflow an
+approval step. GitHub does not trigger other workflows for pull requests opened
+with `GITHUB_TOKEN`, so review the generated-only release diff directly. The
+code represented by the release has already passed CI in its originating PRs.
+
+The tracked version starts at `0.0.0`. The bootstrap SHA prevents the first
+release from replaying the repository's full pre-release history. Before 1.0,
+breaking changes bump the minor version; features use the normal minor bump and
+fixes use a patch bump.
+
 ## Issues
 
 Issues live on GitHub. Use `gh` CLI for all operations.

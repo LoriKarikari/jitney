@@ -6,7 +6,10 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: "./wrangler.jsonc" },
       miniflare: {
-        bindings: { GITHUB_WEBHOOK_SECRET: "test-webhook-secret" },
+        bindings: {
+          GITHUB_WEBHOOK_SECRET: "test-webhook-secret",
+          SCHEDULER_TICK_MS: "60000",
+        },
       },
     }),
   ],

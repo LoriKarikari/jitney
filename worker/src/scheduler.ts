@@ -27,6 +27,7 @@ export class Scheduler extends DurableObject<Env> {
       ctx.storage,
       env.CF_VERSION_METADATA.id,
       Number(env.RUNTIME_TIMEOUT_MS) || undefined,
+      Number(env.SCHEDULER_TICK_MS) || undefined,
     );
     void ctx.blockConcurrencyWhile(async () => {
       await migrate(db, migrations);

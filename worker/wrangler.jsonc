@@ -12,6 +12,8 @@
   "vars": {
     // Kill running jobs after this long. Overridable per deployment for live probes.
     "RUNTIME_TIMEOUT_MS": "3600000",
+    // Delay before an accepted job is provisioned. Tests lengthen this to avoid wall-clock alarms.
+    "SCHEDULER_TICK_MS": "1000",
   },
   "secrets": {
     "required": ["GITHUB_WEBHOOK_SECRET", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"],

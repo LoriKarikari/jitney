@@ -10,6 +10,7 @@ const maxPendingJobs = 10;
 const maxActiveAttempts = 25;
 const assignmentTimeout = 5 * 60_000;
 const defaultRuntimeTimeout = 60 * 60_000;
+const defaultSchedulerTick = 1_000;
 const viableAttemptStates = ["created", "starting", "waiting_for_assignment"];
 const activeAttemptStates = [...viableAttemptStates, "running"];
 const terminalJobStates = ["completed", "cancelled", "failed"];
@@ -61,6 +62,7 @@ export class SchedulerLifecycle {
     private readonly storage: DurableObjectStorage,
     private readonly deploymentId?: string,
     private readonly runtimeTimeout = defaultRuntimeTimeout,
+    private readonly schedulerTick = defaultSchedulerTick,
   ) {
     this.#db = drizzle(storage, { schema: { deliveries, jobs, attempts, assignments, pending } });
   }
@@ -82,7 +84,7 @@ export class SchedulerLifecycle {
 
     this.#emitTransition(event, result);
     if (event.action === "queued" && result.outcome === "accepted") {
-      await this.storage.setAlarm(now + 1_000);
+      await this.storage.setAlarm(now + this.schedulerTick);
     }
     if (event.action === "in_progress" && result.outcome === "recorded") {
       const deadline = now + this.runtimeTimeout;
@@ -104,7 +106,7 @@ export class SchedulerLifecycle {
       );
     });
     this.#emitTransition({ ...candidate, action: "queued" }, result);
-    if (result.outcome === "accepted") await this.storage.setAlarm(now + 1_000);
+    if (result.outcome === "accepted") await this.storage.setAlarm(now + this.schedulerTick);
     return result;
   }
 
@@ -417,13 +419,13 @@ export class SchedulerLifecycle {
   }
 
   async sweep(operations: RunnerAttemptOperations, now = Date.now()): Promise<void> {
-    const morePending = await drainPending(this.#db, this.storage, operations, this.deploymentId);
+    const morePending = await this.#drainPending(operations);
     await this.#expireUnassignedAttempts(operations, now);
     await this.#expireRunningAttempts(operations, now);
 
-    const wakeAt = morePending ? now + 1_000 : this.#nextDeadline();
+    const wakeAt = morePending ? now + this.schedulerTick : this.#nextDeadline();
     if (wakeAt !== undefined) {
-      await this.storage.setAlarm(Math.max(wakeAt, now + 1_000));
+      await this.storage.setAlarm(Math.max(wakeAt, now + this.schedulerTick));
     }
   }
 
@@ -552,6 +554,152 @@ export class SchedulerLifecycle {
       emit({ event: "runner_reclaim_failed", ...correlation, step: result.left.step });
     }
   }
+
+  async #drainPending(operations: RunnerAttemptOperations): Promise<boolean> {
+    const row = this.#db
+      .select({
+        ...getTableColumns(pending),
+        installationId: attempts.installationId,
+        repositoryId: jobs.repositoryId,
+        repositoryOwner: attempts.repositoryOwner,
+        repositoryName: attempts.repositoryName,
+        runnerName: attempts.runnerName,
+        containerName: attempts.containerName,
+      })
+      .from(pending)
+      .innerJoin(
+        attempts,
+        and(
+          eq(attempts.workflowJobId, pending.workflowJobId),
+          eq(attempts.attempt, pending.attempt),
+        ),
+      )
+      .innerJoin(jobs, eq(jobs.workflowJobId, pending.workflowJobId))
+      .orderBy(pending.workflowJobId)
+      .all()[0];
+    if (row === undefined) return false;
+
+    const pendingRow: PendingRow = row;
+    const {
+      deliveryId,
+      installationId,
+      repositoryId,
+      repositoryOwner,
+      repositoryName,
+      workflowJobId,
+      runnerName,
+      containerName,
+    } = pendingRow;
+    const correlation = {
+      ...(deliveryId && { deliveryId }),
+      deploymentId: this.deploymentId,
+      installationId,
+      repositoryId,
+      workflowJobId,
+      runnerName,
+      containerName,
+    };
+
+    emit({ event: "runner_provisioning_started", ...correlation });
+    this.storage.transactionSync(() => {
+      this.#db
+        .update(jobs)
+        .set({ state: "provisioning", updatedAt: Date.now() })
+        .where(eq(jobs.workflowJobId, workflowJobId))
+        .run();
+      this.#db
+        .update(attempts)
+        .set({ state: "starting" })
+        .where(
+          and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.attempt, pendingRow.attempt)),
+        )
+        .run();
+    });
+
+    const result = await Effect.runPromise(
+      operations
+        .provision({
+          installationId,
+          repositoryId,
+          repositoryOwner,
+          repositoryName,
+          workflowJobId,
+          runnerName,
+          containerName,
+        })
+        .pipe(Effect.either),
+    );
+
+    this.storage.transactionSync(() => {
+      if (Either.isRight(result)) {
+        this.#finishProvisioning(pendingRow);
+      } else {
+        this.#failProvisioning(pendingRow, result.left);
+      }
+      this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
+    });
+    if (Either.isRight(result)) emit({ event: "runner_provisioning_succeeded", ...correlation });
+    const remaining = this.#db
+      .select({ count: sql<number>`count(*)` })
+      .from(pending)
+      .all()[0];
+    return remaining !== undefined && remaining.count > 0;
+  }
+
+  #finishProvisioning(pendingRow: PendingRow): void {
+    const { workflowJobId, runnerName } = pendingRow;
+    this.#db
+      .update(jobs)
+      .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
+      .where(and(eq(jobs.workflowJobId, workflowJobId), eq(jobs.state, "provisioning")))
+      .run();
+    this.#db
+      .update(attempts)
+      .set({ state: "waiting_for_assignment" })
+      .where(
+        and(
+          eq(attempts.workflowJobId, workflowJobId),
+          eq(attempts.runnerName, runnerName),
+          eq(attempts.state, "starting"),
+        ),
+      )
+      .run();
+  }
+
+  #failProvisioning(
+    pendingRow: PendingRow,
+    error: Effect.Effect.Error<ReturnType<RunnerAttemptOperations["provision"]>>,
+  ): void {
+    const { deliveryId, installationId, repositoryId, workflowJobId, runnerName, containerName } =
+      pendingRow;
+    this.#db
+      .update(jobs)
+      .set({ state: "queued", updatedAt: Date.now() })
+      .where(and(eq(jobs.workflowJobId, workflowJobId), eq(jobs.state, "provisioning")))
+      .run();
+    this.#db
+      .update(attempts)
+      .set({ state: "failed" })
+      .where(
+        and(
+          eq(attempts.workflowJobId, workflowJobId),
+          eq(attempts.runnerName, runnerName),
+          eq(attempts.state, "starting"),
+        ),
+      )
+      .run();
+    emit({
+      event: "runner_provisioning_failed",
+      ...(deliveryId && { deliveryId }),
+      deploymentId: this.deploymentId,
+      installationId,
+      repositoryId,
+      workflowJobId,
+      runnerName,
+      containerName,
+      step: error.step,
+    });
+  }
 }
 
 type ExpiredAttempt = typeof attempts.$inferSelect & { repositoryId: number };
@@ -568,138 +716,3 @@ type PendingRow = RunnerAttemptRequest & {
   attempt: number;
   deliveryId: string | null;
 };
-
-async function drainPending(
-  db: DrizzleSqliteDODatabase<SchedulerSchema>,
-  storage: DurableObjectStorage,
-  operations: RunnerAttemptOperations,
-  deploymentId?: string,
-): Promise<boolean> {
-  const row = db
-    .select({
-      ...getTableColumns(pending),
-      installationId: attempts.installationId,
-      repositoryId: jobs.repositoryId,
-      repositoryOwner: attempts.repositoryOwner,
-      repositoryName: attempts.repositoryName,
-      runnerName: attempts.runnerName,
-      containerName: attempts.containerName,
-    })
-    .from(pending)
-    .innerJoin(
-      attempts,
-      and(eq(attempts.workflowJobId, pending.workflowJobId), eq(attempts.attempt, pending.attempt)),
-    )
-    .innerJoin(jobs, eq(jobs.workflowJobId, pending.workflowJobId))
-    .orderBy(pending.workflowJobId)
-    .all()[0];
-  if (row === undefined) return false;
-
-  const pendingRow: PendingRow = row;
-  const {
-    deliveryId,
-    installationId,
-    repositoryId,
-    repositoryOwner,
-    repositoryName,
-    workflowJobId,
-    runnerName,
-    containerName,
-  } = pendingRow;
-  const correlation = {
-    ...(deliveryId && { deliveryId }),
-    deploymentId,
-    installationId,
-    repositoryId,
-    workflowJobId,
-    runnerName,
-    containerName,
-  };
-
-  emit({ event: "runner_provisioning_started", ...correlation });
-  storage.transactionSync(() => {
-    db.update(jobs)
-      .set({ state: "provisioning", updatedAt: Date.now() })
-      .where(eq(jobs.workflowJobId, workflowJobId))
-      .run();
-    db.update(attempts)
-      .set({ state: "starting" })
-      .where(
-        and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.attempt, pendingRow.attempt)),
-      )
-      .run();
-  });
-
-  const result = await Effect.runPromise(
-    operations
-      .provision({
-        installationId,
-        repositoryId,
-        repositoryOwner,
-        repositoryName,
-        workflowJobId,
-        runnerName,
-        containerName,
-      })
-      .pipe(Effect.either),
-  );
-
-  storage.transactionSync(() => {
-    if (Either.isRight(result)) {
-      finishProvisioning(db, pendingRow);
-    } else {
-      failProvisioning(db, pendingRow, result.left, deploymentId);
-    }
-    db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
-  });
-  if (Either.isRight(result)) emit({ event: "runner_provisioning_succeeded", ...correlation });
-  const remaining = db
-    .select({ count: sql<number>`count(*)` })
-    .from(pending)
-    .all()[0];
-  return remaining !== undefined && remaining.count > 0;
-}
-
-function finishProvisioning(
-  db: DrizzleSqliteDODatabase<SchedulerSchema>,
-  pendingRow: PendingRow,
-): void {
-  const { workflowJobId, runnerName } = pendingRow;
-  db.update(jobs)
-    .set({ state: "waiting_for_assignment", updatedAt: Date.now() })
-    .where(eq(jobs.workflowJobId, workflowJobId))
-    .run();
-  db.update(attempts)
-    .set({ state: "waiting_for_assignment" })
-    .where(and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.runnerName, runnerName)))
-    .run();
-}
-
-function failProvisioning(
-  db: DrizzleSqliteDODatabase<SchedulerSchema>,
-  pendingRow: PendingRow,
-  error: Effect.Effect.Error<ReturnType<RunnerAttemptOperations["provision"]>>,
-  deploymentId?: string,
-): void {
-  const { deliveryId, installationId, repositoryId, workflowJobId, runnerName, containerName } =
-    pendingRow;
-  db.update(jobs)
-    .set({ state: "queued", updatedAt: Date.now() })
-    .where(eq(jobs.workflowJobId, workflowJobId))
-    .run();
-  db.update(attempts)
-    .set({ state: "failed" })
-    .where(and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.runnerName, runnerName)))
-    .run();
-  emit({
-    event: "runner_provisioning_failed",
-    ...(deliveryId && { deliveryId }),
-    deploymentId,
-    installationId,
-    repositoryId,
-    workflowJobId,
-    runnerName,
-    containerName,
-    step: error.step,
-  });
-}

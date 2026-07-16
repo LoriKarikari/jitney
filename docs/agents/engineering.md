@@ -250,7 +250,9 @@ live under `worker/`. The root Taskfile delegates to both.
   linting, Knip, and tests. CI runs the same commands as separate PR checks.
 - Scheduler tests exercise lifecycle behavior through `SchedulerLifecycle` and
   fake provisioning adapters; they should not import table declarations or
-  construct a Drizzle database directly.
+  construct a Drizzle database directly. A local `runDurableObjectAlarm` smoke
+  test covers the real alarm wiring with an empty Scheduler. Live canaries cover
+  real binding integration.
 - Do not manually rebuild a record by repeating `field: source.field` for each
   property when its shape already exists. Prefer destructuring, property
   shorthand, object spread, or the library's projection helper (for example,

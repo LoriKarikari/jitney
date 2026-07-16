@@ -174,8 +174,9 @@ the PR. Despite the setting's combined name, Jitney grants no workflow an
 approval step. GitHub does not trigger other workflows for pull requests opened
 with `GITHUB_TOKEN`, so review the generated-only release diff directly. The
 code represented by the release has already passed CI in its originating PRs.
-Set the repository Actions secret `DOCKERHUB_TOKEN` to a Docker Hub personal
-access token with write access to the `lorikarikari/jitney-runner` repository.
+Before the first release, create the public Docker Hub repository
+`lorikarikari/jitney-runner`. Set the GitHub Actions secret `DOCKERHUB_TOKEN` to
+a Docker Hub personal access token with write access to that repository.
 
 The release manifest starts at `0.0.0`, and the first public release is
 explicitly `0.1.0`. Its changelog includes the full releasable pre-release

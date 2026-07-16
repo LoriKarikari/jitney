@@ -1,6 +1,6 @@
 {
   "name": "get-jitney",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Deploy Jitney to Cloudflare and configure its GitHub App",
   "homepage": "https://github.com/LoriKarikari/jitney#readme",
   "bugs": "https://github.com/LoriKarikari/jitney/issues",

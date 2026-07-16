@@ -175,7 +175,10 @@ approval step. GitHub does not trigger other workflows for pull requests opened
 with `GITHUB_TOKEN`, so review the generated-only release diff directly. The
 code represented by the release has already passed CI in its originating PRs.
 The runner image is published to GitHub Container Registry with the built-in
-`GITHUB_TOKEN`; it requires no separate registry credentials.
+`GITHUB_TOKEN`; it requires no separate registry credentials. GHCR creates the
+package as private on its first push. After the first release, open the
+`lorikarikari/jitney` package settings and change its visibility to public
+before testing or documenting anonymous pulls.
 
 The release manifest starts at `0.0.0`, and the first public release is
 explicitly `0.1.0`. Its changelog includes the full releasable pre-release

@@ -151,7 +151,10 @@ export async function listenForManifestCode(
   return {
     startUrl: callbackUrl(server).replace("/callback", "/start"),
     code,
-    close: () => server.close(),
+    close: () => {
+      clearTimeout(timeout);
+      server.close();
+    },
   };
 }
 

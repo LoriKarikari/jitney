@@ -1,47 +1,45 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import { Effect, Schema } from "effect";
 import type { CommandResult } from "./process.js";
-import { run } from "./process.js";
+import { run, type CommandError } from "./process.js";
 
 const require = createRequire(import.meta.url);
 const wranglerBin = join(dirname(require.resolve("wrangler/package.json")), "bin", "wrangler.js");
 
-export async function wrangler(
+export function wrangler(
   args: readonly string[],
   options: { echo?: boolean; cwd?: string } = {},
-): Promise<CommandResult> {
-  return await run(process.execPath, [wranglerBin, ...args], options);
+): Effect.Effect<CommandResult, CommandError> {
+  return run(process.execPath, [wranglerBin, ...args], options);
 }
 
 export type CloudflareAccount = { id: string; name: string };
 
-export async function cloudflareAccounts(): Promise<CloudflareAccount[]> {
-  try {
-    return parseAccounts((await wrangler(["whoami", "--json"])).stdout);
-  } catch {
-    await wrangler(["login"], { echo: true });
-    return parseAccounts((await wrangler(["whoami", "--json"])).stdout);
-  }
+const AccountsResponse = Schema.Struct({
+  accounts: Schema.Array(Schema.Struct({ id: Schema.String, name: Schema.String })),
+});
+
+export function cloudflareAccounts(): Effect.Effect<
+  CloudflareAccount[],
+  CommandError | SyntaxError
+> {
+  const whoami = wrangler(["whoami", "--json"]).pipe(
+    Effect.flatMap(({ stdout }) =>
+      Effect.try({
+        try: () => parseAccounts(stdout),
+        catch: () => new SyntaxError("Wrangler returned invalid account JSON"),
+      }),
+    ),
+  );
+  return whoami.pipe(
+    Effect.catchTag("CommandError", () =>
+      wrangler(["login"], { echo: true }).pipe(Effect.zipRight(whoami)),
+    ),
+  );
 }
 
-function parseAccounts(output: string): CloudflareAccount[] {
-  const value: unknown = JSON.parse(output);
-  if (typeof value !== "object" || value === null || !("accounts" in value)) {
-    throw new Error("Wrangler returned an unexpected account response");
-  }
-  const accounts = value.accounts;
-  if (!Array.isArray(accounts)) throw new Error("Wrangler returned no Cloudflare accounts");
-  return accounts.map((account) => {
-    if (
-      typeof account !== "object" ||
-      account === null ||
-      !("id" in account) ||
-      !("name" in account) ||
-      typeof account.id !== "string" ||
-      typeof account.name !== "string"
-    ) {
-      throw new Error("Wrangler returned an invalid Cloudflare account");
-    }
-    return { id: account.id, name: account.name };
-  });
+export function parseAccounts(output: string): CloudflareAccount[] {
+  const decoded = Schema.decodeUnknownSync(AccountsResponse)(JSON.parse(output));
+  return decoded.accounts.map(({ id, name }) => ({ id, name }));
 }

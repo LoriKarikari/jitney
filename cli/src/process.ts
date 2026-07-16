@@ -1,13 +1,21 @@
 import { spawn } from "node:child_process";
+import { Data, Effect } from "effect";
 
 export type CommandResult = { stdout: string; stderr: string };
 
-export async function run(
+export class CommandError extends Data.TaggedError("CommandError")<{
+  command: string;
+  exitCode?: number;
+  output: string;
+  cause?: unknown;
+}> {}
+
+export function run(
   command: string,
   args: readonly string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv; echo?: boolean } = {},
-): Promise<CommandResult> {
-  return await new Promise((resolve, reject) => {
+): Effect.Effect<CommandResult, CommandError> {
+  return Effect.async<CommandResult, CommandError>((resume) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
@@ -15,6 +23,7 @@ export async function run(
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
       stdout += chunk;
       if (options.echo) process.stdout.write(chunk);
@@ -23,10 +32,36 @@ export async function run(
       stderr += chunk;
       if (options.echo) process.stderr.write(chunk);
     });
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`${command} exited with code ${code}\n${stderr || stdout}`));
+    child.on("error", (cause) => {
+      if (settled) return;
+      settled = true;
+      resume(
+        Effect.fail(
+          new CommandError({
+            command: [command, ...args].join(" "),
+            output: stderr || stdout,
+            cause,
+          }),
+        ),
+      );
     });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      if (code === 0) {
+        resume(Effect.succeed({ stdout, stderr }));
+      } else {
+        resume(
+          Effect.fail(
+            new CommandError({
+              command: [command, ...args].join(" "),
+              ...(code === null ? {} : { exitCode: code }),
+              output: stderr || stdout,
+            }),
+          ),
+        );
+      }
+    });
+    return Effect.sync(() => child.kill("SIGTERM"));
   });
 }

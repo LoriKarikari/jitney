@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { Effect, Schema } from "effect";
 import { x as extractTar } from "tar";
+import { InstallerError, tryPromise, trySync } from "./errors.js";
 import { run } from "./process.js";
 import { wrangler } from "./wrangler.js";
 
@@ -19,59 +21,95 @@ const ORAS_CHECKSUMS: Record<string, string> = {
     "ac7156f93a21e903f7ad606c792f3560f17e0cd0e36365634701b1e7cc4e4eca",
 };
 
-type RegistryCredentials = {
-  account_id: string;
-  registry_host: string;
-  username: string;
-  password: string;
-};
+const RegistryCredentials = Schema.Struct({
+  account_id: Schema.String,
+  registry_host: Schema.String,
+  username: Schema.String,
+  password: Schema.String,
+});
+type RegistryCredentials = typeof RegistryCredentials.Type;
 
-export async function copyRunnerImage(options: {
+export function copyRunnerImage(options: {
   accountId: string;
   configPath: string;
   version: string;
-}): Promise<string> {
-  const oras = await ensureOras();
-  const credentials = await registryCredentials(options.configPath);
-  if (credentials.account_id !== options.accountId) {
-    throw new Error("Cloudflare issued registry credentials for the wrong account");
-  }
-  if (credentials.registry_host !== "registry.cloudflare.com") {
-    throw new Error("Cloudflare issued credentials for an unexpected registry");
-  }
+}): Effect.Effect<string, InstallerError> {
+  return Effect.gen(function* () {
+    const oras = yield* tryPromise(
+      "oras_download",
+      "Could not prepare the ORAS client",
+      ensureOras,
+    );
+    const credentials = yield* registryCredentials(options.configPath);
+    if (credentials.account_id !== options.accountId) {
+      return yield* Effect.fail(
+        new InstallerError({
+          step: "registry_copy",
+          message: "Cloudflare issued registry credentials for the wrong account",
+        }),
+      );
+    }
+    if (credentials.registry_host !== "registry.cloudflare.com") {
+      return yield* Effect.fail(
+        new InstallerError({
+          step: "registry_copy",
+          message: "Cloudflare issued credentials for an unexpected registry",
+        }),
+      );
+    }
 
-  const directory = await mkdtemp(join(tmpdir(), "jitney-registry-"));
-  const authPath = join(directory, "auth.json");
-  try {
-    const auth = Buffer.from(`${credentials.username}:${credentials.password}`).toString("base64");
-    await writeFile(
-      authPath,
-      JSON.stringify({ auths: { [credentials.registry_host]: { auth } } }),
-      { mode: 0o600 },
+    return yield* Effect.acquireUseRelease(
+      tryPromise("filesystem", "Could not create a registry credential directory", () =>
+        mkdtemp(join(tmpdir(), "jitney-registry-")),
+      ),
+      (directory) =>
+        Effect.gen(function* () {
+          const authPath = join(directory, "auth.json");
+          const auth = Buffer.from(`${credentials.username}:${credentials.password}`).toString(
+            "base64",
+          );
+          yield* tryPromise("filesystem", "Could not write temporary registry credentials", () =>
+            writeFile(
+              authPath,
+              JSON.stringify({ auths: { [credentials.registry_host]: { auth } } }),
+              { mode: 0o600 },
+            ),
+          );
+          const destination = `${credentials.registry_host}/${options.accountId}/jitney:${options.version}`;
+          yield* run(
+            oras,
+            [
+              "cp",
+              "--platform",
+              "linux/amd64",
+              "--to-registry-config",
+              authPath,
+              "--no-tty",
+              `ghcr.io/lorikarikari/jitney:${options.version}`,
+              destination,
+            ],
+            { echo: true },
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new InstallerError({
+                  step: "registry_copy",
+                  message: "Could not copy the runner image into Cloudflare",
+                  cause,
+                }),
+            ),
+          );
+          return destination;
+        }),
+      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
     );
-    const destination = `${credentials.registry_host}/${options.accountId}/jitney:${options.version}`;
-    await run(
-      oras,
-      [
-        "cp",
-        "--platform",
-        "linux/amd64",
-        "--to-registry-config",
-        authPath,
-        "--no-tty",
-        `ghcr.io/lorikarikari/jitney:${options.version}`,
-        destination,
-      ],
-      { echo: true },
-    );
-    return destination;
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+  });
 }
 
-async function registryCredentials(configPath: string): Promise<RegistryCredentials> {
-  const { stdout } = await wrangler([
+function registryCredentials(
+  configPath: string,
+): Effect.Effect<RegistryCredentials, InstallerError> {
+  return wrangler([
     "containers",
     "registries",
     "credentials",
@@ -82,20 +120,20 @@ async function registryCredentials(configPath: string): Promise<RegistryCredenti
     "--json",
     "--config",
     configPath,
-  ]);
-  const value: unknown = JSON.parse(stdout);
-  if (!isRegistryCredentials(value))
-    throw new Error("Wrangler returned invalid registry credentials");
-  return value;
-}
-
-function isRegistryCredentials(value: unknown): value is RegistryCredentials {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    ["account_id", "registry_host", "username", "password"].every(
-      (key) => key in value && typeof value[key as keyof typeof value] === "string",
-    )
+  ]).pipe(
+    Effect.mapError(
+      (cause) =>
+        new InstallerError({
+          step: "registry_copy",
+          message: "Could not obtain Cloudflare registry credentials",
+          cause,
+        }),
+    ),
+    Effect.flatMap(({ stdout }) =>
+      trySync("registry_copy", "Wrangler returned invalid registry credentials", () => {
+        return Schema.decodeUnknownSync(RegistryCredentials)(JSON.parse(stdout));
+      }),
+    ),
   );
 }
 

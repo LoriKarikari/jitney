@@ -2,7 +2,9 @@ import { createAppAuth } from "@octokit/auth-app";
 import { request } from "@octokit/request";
 import { randomBytes, createPrivateKey } from "node:crypto";
 import { createServer } from "node:http";
+import { Effect, Schema } from "effect";
 import open from "open";
+import { InstallerError, tryPromise, trySync } from "./errors.js";
 
 export type GitHubAppCredentials = {
   appId: string;
@@ -11,56 +13,95 @@ export type GitHubAppCredentials = {
   slug: string;
 };
 
-type ManifestConversion = {
-  id: number;
-  pem: string;
-  webhook_secret: string;
-  slug: string;
-};
+const ManifestConversion = Schema.Struct({
+  id: Schema.Number,
+  pem: Schema.String,
+  webhook_secret: Schema.String,
+  slug: Schema.String,
+});
 
-export async function createGitHubApp(options: {
+export function createGitHubApp(options: {
   workerName: string;
   workerUrl: string;
   organization?: string;
-}): Promise<GitHubAppCredentials> {
+}): Effect.Effect<GitHubAppCredentials, InstallerError> {
   const state = randomBytes(32).toString("hex");
-  const callback = await listenForManifestCode(state, options);
-  console.log("Opening GitHub to create the App...");
-  await open(callback.startUrl);
-  const code = await callback.code;
-
-  const response = await request("POST /app-manifests/{code}/conversions", { code });
-  if (!isManifestConversion(response.data))
-    throw new Error("GitHub returned an invalid App manifest response");
-  const privateKey = createPrivateKey(response.data.pem)
-    .export({ type: "pkcs8", format: "pem" })
-    .toString();
-  return {
-    appId: String(response.data.id),
-    privateKey,
-    webhookSecret: response.data.webhook_secret,
-    slug: response.data.slug,
-  };
+  return Effect.acquireUseRelease(
+    tryPromise("github_app_setup", "Could not start the local GitHub App callback", () =>
+      listenForManifestCode(state, options),
+    ),
+    (callback) =>
+      Effect.gen(function* () {
+        yield* Effect.sync(() => console.log("Opening GitHub to create the App..."));
+        yield* tryPromise("github_app_setup", "Could not open GitHub App setup", () =>
+          open(callback.startUrl),
+        );
+        const code = yield* tryPromise(
+          "github_app_setup",
+          "GitHub App creation did not complete",
+          () => callback.code,
+        );
+        const response = yield* tryPromise(
+          "github_app_conversion",
+          "Could not exchange the GitHub App manifest code",
+          () => request("POST /app-manifests/{code}/conversions", { code }),
+        );
+        const conversion = yield* trySync(
+          "github_app_conversion",
+          "GitHub returned an invalid App manifest response",
+          () => Schema.decodeUnknownSync(ManifestConversion)(response.data),
+        );
+        const privateKey = yield* trySync(
+          "github_app_conversion",
+          "Could not convert the GitHub App private key",
+          () =>
+            createPrivateKey(conversion.pem).export({ type: "pkcs8", format: "pem" }).toString(),
+        );
+        return {
+          appId: String(conversion.id),
+          privateKey,
+          webhookSecret: conversion.webhook_secret,
+          slug: conversion.slug,
+        };
+      }),
+    (callback) => Effect.sync(callback.close),
+  );
 }
 
-export async function openInstallation(credentials: GitHubAppCredentials): Promise<void> {
-  await open(`https://github.com/apps/${credentials.slug}/installations/new`);
+export function openInstallation(
+  credentials: GitHubAppCredentials,
+): Effect.Effect<void, InstallerError> {
+  return tryPromise(
+    "github_app_installation",
+    "Could not open GitHub App installation",
+    async () => {
+      await open(`https://github.com/apps/${credentials.slug}/installations/new`);
+    },
+  );
 }
 
-export async function installationCount(credentials: GitHubAppCredentials): Promise<number> {
-  const auth = createAppAuth({ appId: credentials.appId, privateKey: credentials.privateKey });
-  const appAuthentication = await auth({ type: "app" });
-  const response = await request("GET /app/installations", {
-    headers: { authorization: `bearer ${appAuthentication.token}` },
-    per_page: 100,
-  });
-  return response.data.length;
+export function installationCount(
+  credentials: GitHubAppCredentials,
+): Effect.Effect<number, InstallerError> {
+  return tryPromise(
+    "github_app_installation",
+    "Could not inspect GitHub App installations",
+    async () => {
+      const auth = createAppAuth({ appId: credentials.appId, privateKey: credentials.privateKey });
+      const appAuthentication = await auth({ type: "app" });
+      const response = await request("GET /app/installations", {
+        headers: { authorization: `bearer ${appAuthentication.token}` },
+        per_page: 100,
+      });
+      return response.data.length;
+    },
+  );
 }
 
 export async function listenForManifestCode(
   state: string,
   options: { workerName: string; workerUrl: string; organization?: string },
-): Promise<{ startUrl: string; code: Promise<string> }> {
+): Promise<{ startUrl: string; code: Promise<string>; close: () => void }> {
   let resolveCode: (code: string) => void;
   let rejectCode: (error: Error) => void;
   const code = new Promise<string>((resolve, reject) => {
@@ -107,7 +148,11 @@ export async function listenForManifestCode(
     () => clearTimeout(timeout),
     () => clearTimeout(timeout),
   );
-  return { startUrl: `${callbackUrl(server).replace("/callback", "/start")}`, code };
+  return {
+    startUrl: callbackUrl(server).replace("/callback", "/start"),
+    code,
+    close: () => server.close(),
+  };
 }
 
 function callbackUrl(server: ReturnType<typeof createServer>): string {
@@ -150,15 +195,4 @@ function escapeHtml(value: string): string {
     .replaceAll('"', "&quot;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
-}
-
-function isManifestConversion(value: unknown): value is ManifestConversion {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as ManifestConversion).id === "number" &&
-    typeof (value as ManifestConversion).pem === "string" &&
-    typeof (value as ManifestConversion).webhook_secret === "string" &&
-    typeof (value as ManifestConversion).slug === "string"
-  );
 }

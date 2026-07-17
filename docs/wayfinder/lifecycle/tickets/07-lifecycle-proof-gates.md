@@ -4,9 +4,8 @@ labels: [wayfinder:grilling]
 status: open
 assignee:
 blocked-by:
-  - 01-cloudflare-resource-lifecycle
-  - 02-github-app-lifecycle
   - 04-transactional-lifecycle
+  - 09-transactional-repair-and-destroy
 ---
 
 ## Question

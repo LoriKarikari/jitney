@@ -13,9 +13,13 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
 
+## Wayfinding operations
+
+Wayfinder maps use the local Markdown tracker under `docs/wayfinder/<effort>/` so their dependency graph and research assets can evolve on a reviewable branch. The map is `map.md`; child tickets live in `tickets/`. Ticket frontmatter records `status`, `assignee`, and `blocked-by`. Claim an open, unblocked ticket by setting `assignee` before doing any work. Record its answer under `## Resolution`, close it by setting `status: closed`, and add one linked gist to the map's **Decisions so far** section.
+
 ## When a skill says "publish to the issue tracker"
 
-Create a GitHub issue.
+Create a GitHub issue unless the skill is operating on a local Wayfinder map.
 
 ## When a skill says "fetch the relevant ticket"
 

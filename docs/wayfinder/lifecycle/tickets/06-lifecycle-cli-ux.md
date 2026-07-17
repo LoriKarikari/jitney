@@ -4,8 +4,8 @@ labels: [wayfinder:prototype]
 status: open
 assignee:
 blocked-by:
-  - 03-deployment-receipt-and-drift
   - 04-transactional-lifecycle
+  - 09-transactional-repair-and-destroy
 ---
 
 ## Question

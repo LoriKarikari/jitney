@@ -176,12 +176,9 @@ approval step. GitHub does not trigger other workflows for pull requests opened
 with `GITHUB_TOKEN`, so review the generated-only release diff directly. The
 code represented by the release has already passed CI in its originating PRs.
 The runner image is published to GitHub Container Registry with the built-in
-`GITHUB_TOKEN`; it requires no separate registry credentials. The npm package
-uses trusted publishing from `.github/workflows/release-please.yml` with
-provenance. For the first publish only, set `NPM_BOOTSTRAP_TOKEN` to a granular
-npm token that can create the package and bypass 2FA. After that publish,
-configure the workflow as the package's trusted publisher, delete the GitHub
-secret, and revoke the bootstrap token. Do not retain a long-lived npm token.
+`GITHUB_TOKEN`; it requires no separate registry credentials. The `get-jitney`
+npm package trusts `.github/workflows/release-please.yml` as its GitHub Actions
+publisher. Releases use npm OIDC with provenance and never use an npm token.
 
 The release manifest starts at `0.0.0`, and the first public release is
 explicitly `0.1.0`. Its changelog includes the full releasable pre-release

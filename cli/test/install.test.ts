@@ -1,4 +1,5 @@
-import { Duration, Effect, Option, Ref } from "effect";
+import { Duration, Effect, Fiber, Option, Ref } from "effect";
+import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 import { InstallerError } from "../src/errors.js";
 import {
@@ -72,7 +73,7 @@ describe("record-intent deployment", () => {
               applicationId: "application-id",
               tags: { current: "image-hash", previous: null },
             },
-            github: { appId: null, appSlug: null },
+            github: { appId: null, appSlug: null, ownerLogin: null },
           });
           yield* record("create-app");
           return {
@@ -128,6 +129,29 @@ describe("record-intent deployment", () => {
       operation: "install",
       outcome: "succeeded",
     });
+  });
+
+  it("renews the lease while a deployment step is still running", async () => {
+    const backend = await makeMemoryBackend();
+    const store = makeReceiptStore(backend.service, { namespaceRemovalDelay: Duration.zero });
+    const platform = successfulPlatform({
+      deployBootstrap: () => Effect.sleep("16 minutes").pipe(Effect.as(stackOutput)),
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fiber = yield* installDeployment(input).pipe(
+          Effect.provideService(DeploymentReceipts, store),
+          Effect.provideService(InstallPlatform, platform),
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust("16 minutes");
+        return yield* Fiber.join(fiber);
+      }).pipe(Effect.provide(TestClock.layer())),
+    );
+
+    expect(result.receipt).toMatchObject({ phase: "active", lease: null });
+    expect(result.receipt.history.at(-1)).toMatchObject({ outcome: "succeeded" });
   });
 
   it("rolls back from the receipt and removes it when a later step fails", async () => {

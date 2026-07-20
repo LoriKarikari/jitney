@@ -67,7 +67,7 @@ export const GitHubInstallation = Schema.Struct({
 const GitHubResources = Schema.Struct({
   appId: Schema.NullOr(Schema.Number),
   appSlug: Schema.NullOr(Schema.String),
-  ownerLogin: Schema.String,
+  ownerLogin: Schema.NullOr(Schema.String),
   ownerType: Schema.Literals(["User", "Organization"]),
   installations: Schema.Array(GitHubInstallation),
 });

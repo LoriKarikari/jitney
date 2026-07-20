@@ -7,8 +7,9 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import { deploy as alchemyDeploy } from "alchemy/Deploy";
 import { destroy as alchemyDestroy } from "alchemy/Destroy";
 import { PlatformServices } from "alchemy/Util/PlatformServices";
-import { hostname, userInfo } from "node:os";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { homedir, hostname, userInfo } from "node:os";
+import { join } from "node:path";
 import { Effect, Layer, Option, Redacted, Ref, Schedule, Schema } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
@@ -24,6 +25,7 @@ import {
   ExistingDeploymentError,
   ExistingWorkerError,
   InstallerError,
+  InstallRollbackError,
   tryPromise,
   trySync,
   type InstallFailure,
@@ -60,6 +62,8 @@ const HealthResponse = Schema.Struct({
   version: Schema.String,
 });
 
+const PackageMetadata = Schema.Struct({ version: Schema.String });
+
 const alchemyCli = Alchemy.Cli.of({
   approvePlan: () => Effect.succeed(true),
   displayPlan: () => Effect.void,
@@ -71,12 +75,25 @@ const alchemyCli = Alchemy.Cli.of({
 });
 
 const platformRuntime = Layer.merge(PlatformServices, FetchHttpClient.layer);
-const commandRuntime = Layer.mergeAll(
-  Alchemy.AlchemyContextLive,
-  Layer.succeed(Alchemy.Cli, alchemyCli),
-  Layer.succeed(AuthProviders, {}),
-).pipe(Layer.provideMerge(platformRuntime));
+const commandRuntime = Layer.merge(platformRuntime, Layer.succeed(AuthProviders, {}));
 const cloudflareRuntime = Cloudflare.CloudflareApiLive().pipe(Layer.provideMerge(commandRuntime));
+
+const withAlchemyWorkspace = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | InstallerError, R> =>
+  Effect.acquireUseRelease(
+    Effect.gen(function* () {
+      const previous = process.cwd();
+      const workspace = join(homedir(), ".cache", "jitney", "alchemy");
+      yield* tryPromise("filesystem", "Could not prepare the Alchemy workspace", () =>
+        mkdir(workspace, { recursive: true }),
+      );
+      yield* Effect.sync(() => process.chdir(workspace));
+      return previous;
+    }),
+    () => effect,
+    (previous) => Effect.sync(() => process.chdir(previous)),
+  );
 
 interface JitneyStackOutput {
   readonly workerUrl: string;
@@ -237,6 +254,38 @@ const assertCloudflareResourcesAbsent = Effect.fn(function* (accountId: string, 
   }
 });
 
+const verifyCloudflareResourcesRemoved = (accountId: string, name: string) => {
+  const pending = new InstallerError({
+    step: "rollback",
+    message: `Cloudflare is still reporting resources for ${name}`,
+  });
+  return Effect.gen(function* () {
+    const workerExists = yield* Workers.getScriptSetting({ accountId, scriptName: name }).pipe(
+      Effect.map((setting) => setting !== undefined),
+      Effect.catchTag("WorkerNotFound", () => Effect.succeed(false)),
+    );
+    const applications = yield* Containers.listContainerApplications({ accountId });
+    if (workerExists || applications.some((application) => application.name === `${name}-runner`)) {
+      return yield* Effect.fail(pending);
+    }
+  }).pipe(
+    Effect.retry({
+      while: (error) => error === pending,
+      schedule: Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(29)]),
+    }),
+    Effect.asVoid,
+    Effect.mapError((cause) =>
+      cause instanceof InstallerError
+        ? cause
+        : new InstallerError({
+            step: "rollback",
+            message: "Could not verify removal of the partial Cloudflare deployment",
+            cause,
+          }),
+    ),
+  );
+};
+
 const githubAppAttributes = (credentials: GitHubAppCredentials): GitHubAppAttributes => ({
   appId: credentials.appId,
   slug: credentials.slug,
@@ -286,33 +335,43 @@ const makeInstallPlatform = Effect.fn(function* (
   // public provider type cannot see that jitneyProviders supplies it.
   const providers = jitneyProviders(githubOperations) as unknown as JitneyProviderLayer;
 
+  const stackFor = (
+    input: InstallInput & { deploymentId: string },
+    credentials?: GitHubAppCredentials,
+  ) =>
+    jitneyStack(
+      {
+        deploymentId: input.deploymentId,
+        workerName: input.name,
+        workerBundlePath: workerBundlePath(),
+        version: input.version,
+        manageGitHubApp: credentials !== undefined,
+        ...(input.organization === undefined ? {} : { organization: input.organization }),
+        ...(credentials === undefined
+          ? {}
+          : {
+              githubCredentials: {
+                appId: Redacted.make(credentials.appId),
+                privateKey: Redacted.make(credentials.privateKey),
+                webhookSecret: Redacted.make(credentials.webhookSecret),
+              },
+            }),
+      },
+      { providers },
+    );
+
+  // Alchemy beta.63's deploy/destroy signatures leak stack services that
+  // evalStack supplies internally. Keep that upstream type mismatch here.
   const runStack = (
     input: InstallInput & { deploymentId: string },
     credentials?: GitHubAppCredentials,
   ) =>
-    alchemyDeploy({
-      stack: jitneyStack(
-        {
-          deploymentId: input.deploymentId,
-          workerName: input.name,
-          workerBundlePath: workerBundlePath(),
-          version: input.version,
-          manageGitHubApp: credentials !== undefined,
-          ...(input.organization === undefined ? {} : { organization: input.organization }),
-          ...(credentials === undefined
-            ? {}
-            : {
-                githubCredentials: {
-                  appId: Redacted.make(credentials.appId),
-                  privateKey: Redacted.make(credentials.privateKey),
-                  webhookSecret: Redacted.make(credentials.webhookSecret),
-                },
-              }),
-        },
-        { providers },
-      ),
-      stage: input.name,
-    }).pipe(
+    withAlchemyWorkspace(
+      alchemyDeploy({
+        stack: stackFor(input, credentials),
+        stage: input.name,
+      }),
+    ).pipe(
       Effect.provideService(Alchemy.Cli, alchemyCli),
       Effect.mapError(
         (cause) =>
@@ -328,29 +387,12 @@ const makeInstallPlatform = Effect.fn(function* (
     input: InstallInput & { deploymentId: string },
     credentials?: GitHubAppCredentials,
   ) =>
-    alchemyDestroy({
-      stack: jitneyStack(
-        {
-          deploymentId: input.deploymentId,
-          workerName: input.name,
-          workerBundlePath: workerBundlePath(),
-          version: input.version,
-          manageGitHubApp: credentials !== undefined,
-          ...(input.organization === undefined ? {} : { organization: input.organization }),
-          ...(credentials === undefined
-            ? {}
-            : {
-                githubCredentials: {
-                  appId: Redacted.make(credentials.appId),
-                  privateKey: Redacted.make(credentials.privateKey),
-                  webhookSecret: Redacted.make(credentials.webhookSecret),
-                },
-              }),
-        },
-        { providers },
-      ),
-      stage: input.name,
-    }).pipe(
+    withAlchemyWorkspace(
+      alchemyDestroy({
+        stack: stackFor(input, credentials),
+        stage: input.name,
+      }),
+    ).pipe(
       Effect.provideService(Alchemy.Cli, alchemyCli),
       Effect.asVoid,
       Effect.mapError(
@@ -474,6 +516,7 @@ const makeInstallPlatform = Effect.fn(function* (
           );
         }
         yield* destroyStack(input, credentials);
+        yield* provideCloudflareApi(verifyCloudflareResourcesRemoved(input.accountId, input.name));
         const registryTag = input.receipt.cloudflare.tags.current;
         if (input.receipt.cloudflare.applicationId !== null && registryTag !== null) {
           const registry = yield* provideCloudflareApi(
@@ -522,13 +565,10 @@ const makeInstallPlatform = Effect.fn(function* (
 
 function isInstallFailure(cause: unknown): cause is InstallFailure {
   return (
-    typeof cause === "object" &&
-    cause !== null &&
-    "_tag" in cause &&
-    (cause._tag === "InstallerError" ||
-      cause._tag === "ExistingWorkerError" ||
-      cause._tag === "ExistingDeploymentError" ||
-      cause._tag === "InstallRollbackError")
+    cause instanceof InstallerError ||
+    cause instanceof ExistingWorkerError ||
+    cause instanceof ExistingDeploymentError ||
+    cause instanceof InstallRollbackError
   );
 }
 
@@ -537,18 +577,11 @@ function packageVersion(): Effect.Effect<string, InstallerError> {
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ).pipe(
     Effect.flatMap((contents) =>
-      trySync("filesystem", "Jitney package version is missing", () => {
-        const value: unknown = JSON.parse(contents);
-        if (
-          typeof value !== "object" ||
-          value === null ||
-          !("version" in value) ||
-          typeof value.version !== "string"
-        ) {
-          throw new TypeError("missing package version");
-        }
-        return value.version;
-      }),
+      trySync(
+        "filesystem",
+        "Jitney package version is missing",
+        () => Schema.decodeUnknownSync(PackageMetadata)(JSON.parse(contents)).version,
+      ),
     ),
   );
 }

@@ -6,6 +6,7 @@ import {
   generateDeploymentId,
   type DeploymentReceipt,
   type GitHubInstallation,
+  type OperationLease,
 } from "./receipts/schema.js";
 import type { LeaseContext, ReceiptStore, ReceiptStoreError } from "./receipts/store.js";
 
@@ -84,11 +85,25 @@ const receiptError = (message: string) =>
     (cause: ReceiptStoreError) => new InstallerError({ step: "receipt_store", message, cause }),
   );
 
+type HeldDeploymentReceipt = DeploymentReceipt & { readonly lease: OperationLease };
+
+const requireHeldReceipt = (
+  receipt: DeploymentReceipt,
+): Effect.Effect<HeldDeploymentReceipt, InstallerError> =>
+  receipt.lease === null
+    ? Effect.fail(
+        new InstallerError({
+          step: "receipt_store",
+          message: `Deployment ${receipt.name} lost its operation lease`,
+        }),
+      )
+    : Effect.succeed({ ...receipt, lease: receipt.lease });
+
 const leaseContext = (
   name: string,
-  receipt: DeploymentReceipt,
+  receipt: HeldDeploymentReceipt,
   now: DateTime.Utc,
-): LeaseContext => ({ name, lease: receipt.lease!, now });
+): LeaseContext => ({ name, lease: receipt.lease, now });
 
 export const installDeployment = Effect.fn(function* (input: InstallInput) {
   const receipts = yield* DeploymentReceipts;
@@ -112,7 +127,7 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
     github: {
       appId: null,
       appSlug: null,
-      ownerLogin: input.organization ?? "pending",
+      ownerLogin: input.organization ?? null,
       ownerType: input.organization === undefined ? "User" : "Organization",
       installations: [],
     },
@@ -120,11 +135,32 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
   });
   let held = yield* receipts
     .createWithInstallLease(initial, input.actor, startedAt)
-    .pipe(receiptError("Could not create the deployment receipt"));
+    .pipe(
+      receiptError("Could not create the deployment receipt"),
+      Effect.flatMap(requireHeldReceipt),
+    );
   let credentials: GitHubAppCredentials | undefined;
 
+  const renewHeldLease = Effect.fn(function* () {
+    const now = yield* DateTime.now;
+    held = yield* receipts
+      .renewLease(leaseContext(input.name, held, now))
+      .pipe(receiptError("Could not renew the install lease"), Effect.flatMap(requireHeldReceipt));
+  });
+  const withLeaseHeartbeat = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    renewHeldLease().pipe(
+      Effect.andThen(
+        Effect.raceFirst(
+          effect,
+          Effect.forever(Effect.sleep("5 minutes").pipe(Effect.andThen(renewHeldLease()))),
+        ),
+      ),
+    );
+
   const operation = Effect.gen(function* () {
-    const bootstrap = yield* platform.deployBootstrap({ ...input, deploymentId });
+    const bootstrap = yield* withLeaseHeartbeat(
+      platform.deployBootstrap({ ...input, deploymentId }),
+    );
 
     const resourcesRecordedAt = yield* DateTime.now;
     held = yield* receipts
@@ -135,12 +171,17 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
           tags: { current: bootstrap.registryTag, previous: null },
         },
       })
-      .pipe(receiptError("Could not record the created Cloudflare resources"));
+      .pipe(
+        receiptError("Could not record the created Cloudflare resources"),
+        Effect.flatMap(requireHeldReceipt),
+      );
 
-    const githubApp = yield* platform.createGitHubApp({
-      ...input,
-      workerUrl: bootstrap.workerUrl,
-    });
+    const githubApp = yield* withLeaseHeartbeat(
+      platform.createGitHubApp({
+        ...input,
+        workerUrl: bootstrap.workerUrl,
+      }),
+    );
     credentials = githubApp.credentials;
     const appRecordedAt = yield* DateTime.now;
     held = yield* receipts
@@ -153,25 +194,32 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
           ownerType: githubApp.ownerType,
         },
       })
-      .pipe(receiptError("Could not record the created GitHub App"));
+      .pipe(
+        receiptError("Could not record the created GitHub App"),
+        Effect.flatMap(requireHeldReceipt),
+      );
 
-    yield* platform.activate({ ...input, deploymentId, credentials: githubApp.credentials });
+    yield* withLeaseHeartbeat(
+      platform.activate({ ...input, deploymentId, credentials: githubApp.credentials }),
+    );
 
-    const renewalTime = yield* DateTime.now;
-    held = yield* receipts
-      .renewLease(leaseContext(input.name, held, renewalTime))
-      .pipe(receiptError("Could not renew the install lease"));
-
-    const installations = yield* platform.installGitHubApp(githubApp.credentials);
+    const installations = yield* withLeaseHeartbeat(
+      platform.installGitHubApp(githubApp.credentials),
+    );
     const installationsRecordedAt = yield* DateTime.now;
     held = yield* receipts
       .updateOperation(leaseContext(input.name, held, installationsRecordedAt), {
         github: { ...held.github, installations: [...installations] },
       })
-      .pipe(receiptError("Could not record the GitHub App installations"));
+      .pipe(
+        receiptError("Could not record the GitHub App installations"),
+        Effect.flatMap(requireHeldReceipt),
+      );
 
-    yield* platform.claimRepositories(githubApp.credentials, deploymentId, installations);
-    yield* platform.checkHealth(bootstrap.workerUrl, input.version);
+    yield* withLeaseHeartbeat(
+      platform.claimRepositories(githubApp.credentials, deploymentId, installations),
+    );
+    yield* withLeaseHeartbeat(platform.checkHealth(bootstrap.workerUrl, input.version));
 
     const completedAt = yield* DateTime.now;
     const receipt = yield* receipts
@@ -191,21 +239,14 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
   return yield* operation.pipe(
     Effect.catch((cause: InstallFailure) => {
       if (input.keepPartial === true) return Effect.fail(cause);
-      return DateTime.now.pipe(
-        Effect.flatMap((now) =>
-          receipts.renewLease(leaseContext(input.name, held, now)).pipe(
-            receiptError("Could not renew the install lease for rollback"),
-            Effect.tap((renewed) => Effect.sync(() => (held = renewed))),
-          ),
-        ),
-        Effect.flatMap(() =>
-          platform.rollback({
-            ...input,
-            deploymentId,
-            receipt: held,
-            ...(credentials === undefined ? {} : { credentials }),
-          }),
-        ),
+      return withLeaseHeartbeat(
+        platform.rollback({
+          ...input,
+          deploymentId,
+          receipt: held,
+          ...(credentials === undefined ? {} : { credentials }),
+        }),
+      ).pipe(
         Effect.flatMap(() =>
           DateTime.now.pipe(
             Effect.flatMap((now) =>

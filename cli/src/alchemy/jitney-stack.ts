@@ -6,6 +6,11 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
 import type * as Redacted from "effect/Redacted";
 import * as Output from "alchemy/Output";
+import {
+  JITNEY_WORKER_TAG,
+  deploymentWorkerTag,
+  runnerApplicationName,
+} from "../cloudflare-inventory.js";
 import { RECEIPT_NAMESPACE_TITLE } from "../receipts/cloudflare.js";
 import { GitHubApp, type GitHubAppResource } from "./github-app.js";
 
@@ -48,7 +53,7 @@ export function jitneyStack(
       const runnerApplication = yield* Cloudflare.Containers.ContainerPlatform(
         "RunnerApplication",
         {
-          name: `${input.workerName}-runner`,
+          name: runnerApplicationName(input.workerName),
           image: `ghcr.io/lorikarikari/jitney:${input.version}`,
           instances: 0,
           maxInstances: 5,
@@ -72,7 +77,7 @@ export function jitneyStack(
           enabled: true,
           headSamplingRate: 1,
         },
-        tags: ["jitney", `jitney-deployment:${input.deploymentId}`],
+        tags: [JITNEY_WORKER_TAG, deploymentWorkerTag(input.deploymentId)],
         env: {
           SCHEDULER: scheduler,
           RUNNER_CONTAINERS: runnerContainers,

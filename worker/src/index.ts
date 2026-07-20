@@ -1,3 +1,4 @@
+import { Data, Effect } from "effect";
 import { classifyDelivery } from "./delivery-classification";
 import { discoverQueuedJobs } from "./github";
 import { reconcile } from "./reconciliation";
@@ -6,7 +7,9 @@ import { emit } from "./log";
 export { RunnerContainer } from "./runner-container";
 export { Scheduler } from "./scheduler";
 
-async function fetch(request: Request, env: Env): Promise<Response> {
+class SchedulerRpcError extends Data.TaggedError("SchedulerRpcError")<{ cause: unknown }> {}
+
+const handleRequest = Effect.fn("IngressWorker.fetch")(function* (request: Request, env: Env) {
   const url = new URL(request.url);
   if (request.method !== "POST" || url.pathname !== "/webhooks/github") {
     return new Response(null, { status: 404 });
@@ -14,45 +17,86 @@ async function fetch(request: Request, env: Env): Promise<Response> {
 
   const eventName = request.headers.get("X-GitHub-Event");
   const deploymentId = env.CF_VERSION_METADATA.id;
-  emit({
-    event: "webhook_received",
-    deliveryId: request.headers.get("X-GitHub-Delivery"),
-    deploymentId,
-    action: eventName ?? "unknown",
-  });
+  yield* Effect.sync(() =>
+    emit({
+      event: "webhook_received",
+      deliveryId: request.headers.get("X-GitHub-Delivery"),
+      deploymentId,
+      action: eventName ?? "unknown",
+    }),
+  );
 
-  const classification = await classifyDelivery(request, env.GITHUB_WEBHOOK_SECRET);
-  let telemetry;
-  if (classification.outcome === "accepted") {
-    const event = classification.event;
-    const { runnerName, outcome } = await env.SCHEDULER.getByName("global-v3").accept(event);
-    const { installationId, repositoryId, workflowJobId, action } = event;
-    telemetry = {
+  const classification = yield* classifyDelivery(request, env.GITHUB_WEBHOOK_SECRET);
+  if (classification.outcome !== "accepted") {
+    yield* Effect.sync(() =>
+      emit({
+        event: "webhook_classified",
+        deliveryId: classification.deliveryId,
+        deploymentId,
+        outcome: classification.outcome,
+      }),
+    );
+    return new Response(null, { status: classification.status });
+  }
+
+  const event = classification.event;
+  const accepted = yield* Effect.tryPromise({
+    try: () => env.SCHEDULER.getByName("global-v3").accept(event),
+    catch: (cause) => new SchedulerRpcError({ cause }),
+  }).pipe(
+    Effect.catchTag("SchedulerRpcError", () =>
+      Effect.gen(function* () {
+        yield* Effect.sync(() =>
+          emit({
+            event: "scheduler_accept_failed",
+            deliveryId: event.deliveryId,
+            deploymentId,
+            installationId: event.installationId,
+            repositoryId: event.repositoryId,
+            workflowJobId: event.workflowJobId,
+          }),
+        );
+        return new Response(null, { status: 500 });
+      }),
+    ),
+  );
+  if (accepted instanceof Response) return accepted;
+
+  const { installationId, repositoryId, workflowJobId, action } = event;
+  yield* Effect.sync(() =>
+    emit({
+      event: "webhook_classified",
+      deliveryId: classification.deliveryId,
+      deploymentId,
       installationId,
       repositoryId,
       workflowJobId,
-      runnerName,
+      runnerName: accepted.runnerName,
       action,
-      outcome,
-    };
-  } else {
-    telemetry = { outcome: classification.outcome };
-  }
-  emit({
-    event: "webhook_classified",
-    deliveryId: classification.deliveryId,
-    deploymentId,
-    ...telemetry,
-  });
+      outcome: accepted.outcome,
+    }),
+  );
   return new Response(null, { status: classification.status });
-}
+});
 
-async function scheduled(_controller: ScheduledController, env: Env): Promise<void> {
-  await reconcile(
+const handleScheduled = Effect.fn("IngressWorker.scheduled")(function* (env: Env) {
+  yield* reconcile(
     discoverQueuedJobs({ appId: env.GITHUB_APP_ID, privateKey: env.GITHUB_APP_PRIVATE_KEY }),
-    (candidate) => env.SCHEDULER.getByName("global-v3").reconcile(candidate),
+    (candidate) =>
+      Effect.tryPromise({
+        try: () => env.SCHEDULER.getByName("global-v3").reconcile(candidate),
+        catch: (cause) => new SchedulerRpcError({ cause }),
+      }),
     env.CF_VERSION_METADATA.id,
   );
+});
+
+function fetch(request: Request, env: Env): Promise<Response> {
+  return Effect.runPromise(handleRequest(request, env));
+}
+
+function scheduled(_controller: ScheduledController, env: Env): Promise<void> {
+  return Effect.runPromise(handleScheduled(env));
 }
 
 export default { fetch, scheduled };

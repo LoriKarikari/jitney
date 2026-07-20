@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import { DurableObject } from "cloudflare:workers";
+import { Effect } from "effect";
 import migrations from "../drizzle/migrations";
 import type { QueuedJobCandidate, WorkflowEvent } from "./domain";
 import {
@@ -35,11 +36,11 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   accept(event: WorkflowEvent): Promise<AcceptResult> {
-    return this.#lifecycle.accept(event);
+    return Effect.runPromise(this.#lifecycle.accept(event));
   }
 
   reconcile(candidate: QueuedJobCandidate): Promise<AcceptResult> {
-    return this.#lifecycle.reconcile(candidate);
+    return Effect.runPromise(this.#lifecycle.reconcile(candidate));
   }
 
   getJob(workflowJobId: number): JobSnapshot | undefined {
@@ -54,7 +55,7 @@ export class Scheduler extends DurableObject<Env> {
     return this.#lifecycle.getAssignment(workflowJobId);
   }
 
-  override async alarm(): Promise<void> {
-    await this.#lifecycle.sweep(createRunnerAttemptOperations(this.env));
+  override alarm(): Promise<void> {
+    return Effect.runPromise(this.#lifecycle.sweep(createRunnerAttemptOperations(this.env)));
   }
 }

@@ -25,13 +25,12 @@ export type DiscoveryResult = {
   failures: DiscoveryFailure[];
 };
 
-export function discoverQueuedJobs(input: {
+export const discoverQueuedJobs: (input: {
   appId: string;
   privateKey: string;
-}): Effect.Effect<DiscoveryResult, DiscoveryError> {
-  const { appId, privateKey } = input;
-
-  return Effect.gen(function* () {
+}) => Effect.Effect<DiscoveryResult, DiscoveryError> = Effect.fn("GitHub.discoverQueuedJobs")(
+  function* (input: { appId: string; privateKey: string }) {
+    const { appId, privateKey } = input;
     const app = new Octokit({ authStrategy: createAppAuth, auth: { appId, privateKey } });
     const installations = yield* Effect.tryPromise({
       try: () => app.paginate(app.rest.apps.listInstallations, { per_page: 100 }),
@@ -113,5 +112,5 @@ export function discoverQueuedJobs(input: {
       }
     }
     return result;
-  });
-}
+  },
+);

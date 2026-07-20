@@ -91,6 +91,34 @@ publishes four opaque canonical labels: `jitney`, `jitney-4cpu`,
 `jitney-docker`, `jitney-docker-4cpu`. Exactly one Jitney label per job.
 _Avoid_: tag, selector
 
+**Deployment**:
+One named Jitney installation: a Worker, its container application, and a
+GitHub App in one Cloudflare account. The name is the CLI handle; an
+immutable ULID minted at install is the ownership identity that every
+ownership marker and proof matches on.
+_Avoid_: environment, instance
+
+**Deployment Receipt**:
+The non-secret cloud-side record of one Deployment, stored as JSON in the
+shared account-level `jitney-receipts` KV namespace under the Deployment
+name. It carries identity, phase, resource inventory, current and previous
+versions, and capped operation history. It survives Worker deletion and is
+reachable from any machine.
+_Avoid_: state file, config, local state
+
+**Lifecycle Phase**:
+The Deployment's coarse state: `installing | active | upgrading | repairing
+| destroying`. Receipts own deployment-level phases; per-resource recovery
+state belongs to Alchemy's state store.
+_Avoid_: status
+
+**Operation Lease**:
+The single-writer lock recorded inside a Deployment Receipt: `{operation,
+actor (user@host), expiresAt}`. Fifteen-minute TTL, renewed by the running
+command, released together with the phase transition in the same receipt
+write. An expired lease blocks every command until `repair` releases it.
+_Avoid_: mutex, lock file
+
 ## Relationships
 
 - A **Delivery** carries one **Workflow Event**.
@@ -103,6 +131,9 @@ _Avoid_: tag, selector
 - The **Scheduler** owns all **Job** and **Runner Attempt** lifecycle state.
 - The **Ingress Worker** never touches GitHub APIs or container startup.
 - The **Control Plane** never enters the **Data Plane**.
+- A **Deployment** has exactly one **Deployment Receipt**, keyed by its name.
+- A **Deployment Receipt** holds at most one **Operation Lease** at a time.
+- Deployment ownership always matches on the ULID, never the name.
 
 ## Architecture
 

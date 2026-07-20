@@ -5,6 +5,7 @@ import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
 import type * as Redacted from "effect/Redacted";
 import * as Output from "alchemy/Output";
+import { RECEIPT_NAMESPACE_TITLE } from "../receipts/cloudflare.js";
 import { GitHubApp, type GitHubAppResource } from "./github-app.js";
 
 export interface JitneyStackInput {
@@ -39,7 +40,7 @@ export function jitneyStack(
     },
     Effect.gen(function* () {
       const receipts = yield* Cloudflare.KV.Namespace("LifecycleReceipts", {
-        title: "jitney-receipts",
+        title: RECEIPT_NAMESPACE_TITLE,
       }).pipe(retain());
       const runnerApplication = yield* Cloudflare.Containers.ContainerPlatform(
         "RunnerApplication",

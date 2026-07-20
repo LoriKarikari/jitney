@@ -3,9 +3,9 @@ import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { QueuedJobCandidate } from "../src/domain";
 import { DiscoveryError } from "../src/github";
-import { reconcile } from "../src/reconciliation";
+import { reconcile, type ReconciliationSubmission } from "../src/reconciliation";
 
-type Submit = Parameters<typeof reconcile>[1];
+type Submit = ReconciliationSubmission;
 
 function candidate(workflowJobId: number, overrides?: Partial<QueuedJobCandidate>) {
   return {
@@ -30,15 +30,17 @@ describe("reconciliation", () => {
   it("backfills a queued job the scheduler does not track", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("reconciliation-backfill");
-    const submit: Submit = (candidate) => scheduler.reconcile(candidate);
+    const submit: Submit = (candidate) => Effect.promise(() => scheduler.reconcile(candidate));
 
-    await reconcile(
-      Effect.succeed({
-        candidates: [candidate(8001)],
-        failures: [{ installationId: 999, step: "repository_listing" }],
-      }),
-      submit,
-      "deployment-test",
+    await Effect.runPromise(
+      reconcile(
+        Effect.succeed({
+          candidates: [candidate(8001)],
+          failures: [{ installationId: 999, step: "repository_listing" }],
+        }),
+        submit,
+        "deployment-test",
+      ),
     );
 
     expect(await scheduler.getJob(8001)).toMatchObject({ state: "queued", pending: true });
@@ -52,17 +54,21 @@ describe("reconciliation", () => {
   it("does not resubmit a job with a viable attempt", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("reconciliation-duplicate");
-    const submit: Submit = (candidate) => scheduler.reconcile(candidate);
+    const submit: Submit = (candidate) => Effect.promise(() => scheduler.reconcile(candidate));
 
-    await reconcile(
-      Effect.succeed({ candidates: [candidate(8002)], failures: [] }),
-      submit,
-      "deployment-test",
+    await Effect.runPromise(
+      reconcile(
+        Effect.succeed({ candidates: [candidate(8002)], failures: [] }),
+        submit,
+        "deployment-test",
+      ),
     );
-    await reconcile(
-      Effect.succeed({ candidates: [candidate(8002)], failures: [] }),
-      submit,
-      "deployment-test",
+    await Effect.runPromise(
+      reconcile(
+        Effect.succeed({ candidates: [candidate(8002)], failures: [] }),
+        submit,
+        "deployment-test",
+      ),
     );
 
     expect(await scheduler.getAttempts(8002)).toHaveLength(1);
@@ -121,19 +127,21 @@ describe("reconciliation", () => {
   it("ignores public repositories and unsupported labels", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("reconciliation-admission");
-    const submit: Submit = (candidate) => scheduler.reconcile(candidate);
+    const submit: Submit = (candidate) => Effect.promise(() => scheduler.reconcile(candidate));
 
-    await reconcile(
-      Effect.succeed({
-        candidates: [
-          candidate(8003, { repositoryPrivate: false }),
-          candidate(8004, { labels: ["ubuntu-latest"] }),
-          candidate(8005, { labels: ["jitney", "gpu"] }),
-        ],
-        failures: [],
-      }),
-      submit,
-      "deployment-test",
+    await Effect.runPromise(
+      reconcile(
+        Effect.succeed({
+          candidates: [
+            candidate(8003, { repositoryPrivate: false }),
+            candidate(8004, { labels: ["ubuntu-latest"] }),
+            candidate(8005, { labels: ["jitney", "gpu"] }),
+          ],
+          failures: [],
+        }),
+        submit,
+        "deployment-test",
+      ),
     );
 
     expect(await scheduler.getJob(8003)).toBeUndefined();
@@ -149,10 +157,12 @@ describe("reconciliation", () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const submit = vi.fn<Submit>();
 
-    await reconcile(
-      Effect.fail(new DiscoveryError({ step: "run_listing", cause: "boom" })),
-      submit,
-      "deployment-test",
+    await Effect.runPromise(
+      reconcile(
+        Effect.fail(new DiscoveryError({ step: "run_listing", cause: "boom" })),
+        submit,
+        "deployment-test",
+      ),
     );
 
     expect(submit).not.toHaveBeenCalled();

@@ -1,5 +1,5 @@
 import { verify } from "@octokit/webhooks-methods";
-import { Either, Schema } from "effect";
+import { Data, Effect, Either, Schema } from "effect";
 import { isAdmissible, type WorkflowEvent } from "./domain";
 
 const payloadLimit = 1_048_576;
@@ -32,6 +32,15 @@ export type DeliveryClassification =
       deliveryId: string | null;
     };
 
+class BodyReadError extends Data.TaggedError("BodyReadError")<{ cause: unknown }> {}
+class SignatureVerificationError extends Data.TaggedError("SignatureVerificationError")<{
+  cause: unknown;
+}> {}
+
+const Action = Schema.Struct({
+  action: Schema.Literal("queued", "in_progress", "completed"),
+});
+
 const Payload = Schema.Struct({
   action: Schema.Literal("queued", "in_progress", "completed"),
   installation: Schema.Struct({ id: Schema.Number }),
@@ -49,94 +58,100 @@ const Payload = Schema.Struct({
   }),
 });
 
-export async function classifyDelivery(
+const decodeJson = Schema.decodeUnknownEither(Schema.parseJson(Schema.Unknown));
+const decodeAction = Schema.decodeUnknownEither(Action);
+const decodePayload = Schema.decodeUnknownEither(Payload);
+
+export const classifyDelivery: (
   request: Request,
   webhookSecret: string,
-): Promise<DeliveryClassification> {
+) => Effect.Effect<DeliveryClassification> = Effect.fn("IngressWorker.classifyDelivery")(function* (
+  request: Request,
+  webhookSecret: string,
+) {
   const deliveryId = request.headers.get("X-GitHub-Delivery");
-  let body: Uint8Array | undefined;
-  try {
-    body = await readBoundedBody(request);
-  } catch {
-    return { status: 400, outcome: "malformed", deliveryId };
+  const read = yield* readBoundedBody(request).pipe(Effect.either);
+  if (Either.isLeft(read)) return { status: 400, outcome: "malformed", deliveryId } as const;
+  if (read.right === undefined) {
+    return { status: 413, outcome: "payload_too_large", deliveryId } as const;
   }
-  if (body === undefined) return { status: 413, outcome: "payload_too_large", deliveryId };
 
   const signature = request.headers.get("X-Hub-Signature-256");
-  const bodyText = new TextDecoder().decode(body);
-  if (signature === null || !(await verifySignature(webhookSecret, bodyText, signature))) {
-    return { status: 401, outcome: "invalid_signature", deliveryId };
-  }
+  const bodyText = new TextDecoder().decode(read.right);
+  const valid =
+    signature === null ? false : yield* verifySignature(webhookSecret, bodyText, signature);
+  if (!valid) return { status: 401, outcome: "invalid_signature", deliveryId } as const;
 
   if (request.headers.get("X-GitHub-Event") !== "workflow_job") {
-    return { status: 204, outcome: "ignored", deliveryId };
+    return { status: 204, outcome: "ignored", deliveryId } as const;
   }
-  if (deliveryId === null) return { status: 400, outcome: "malformed", deliveryId };
+  if (deliveryId === null) return { status: 400, outcome: "malformed", deliveryId } as const;
 
   const event = decodeWorkflowEvent(deliveryId, bodyText);
-  if (event === "ignored") return { status: 204, outcome: "ignored", deliveryId };
-  if (event === "malformed") return { status: 400, outcome: "malformed", deliveryId };
-  return { status: 202, outcome: "accepted", deliveryId, event };
-}
+  if (event === "ignored") return { status: 204, outcome: "ignored", deliveryId } as const;
+  if (event === "malformed") return { status: 400, outcome: "malformed", deliveryId } as const;
+  return { status: 202, outcome: "accepted", deliveryId, event } as const;
+});
 
-async function readBoundedBody(request: Request): Promise<Uint8Array | undefined> {
+function readBoundedBody(request: Request): Effect.Effect<Uint8Array | undefined, BodyReadError> {
   const declaredLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(declaredLength) && declaredLength > payloadLimit) return undefined;
-  if (request.body === null) return new Uint8Array();
-
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      length += value.byteLength;
-      if (length > payloadLimit) {
-        await reader.cancel().catch(() => undefined);
-        return undefined;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
+  if (Number.isFinite(declaredLength) && declaredLength > payloadLimit) {
+    return Effect.succeed(undefined);
   }
+  if (request.body === null) return Effect.succeed(new Uint8Array());
 
-  const body = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return body;
+  return Effect.acquireUseRelease(
+    Effect.try({
+      try: () => request.body!.getReader(),
+      catch: (cause) => new BodyReadError({ cause }),
+    }),
+    (reader) =>
+      Effect.tryPromise({
+        try: async () => {
+          const chunks: Uint8Array[] = [];
+          let length = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            length += value.byteLength;
+            if (length > payloadLimit) {
+              await reader.cancel().catch(() => undefined);
+              return undefined;
+            }
+            chunks.push(value);
+          }
+
+          const body = new Uint8Array(length);
+          let offset = 0;
+          for (const chunk of chunks) {
+            body.set(chunk, offset);
+            offset += chunk.byteLength;
+          }
+          return body;
+        },
+        catch: (cause) => new BodyReadError({ cause }),
+      }),
+    (reader) => Effect.sync(() => reader.releaseLock()),
+  );
 }
 
-async function verifySignature(secret: string, body: string, signature: string): Promise<boolean> {
-  if (!/^sha256=[\da-f]{64}$/i.test(signature)) return false;
-  try {
-    return await verify(secret, body, signature);
-  } catch {
-    return false;
-  }
+function verifySignature(secret: string, body: string, signature: string): Effect.Effect<boolean> {
+  if (!/^sha256=[\da-f]{64}$/i.test(signature)) return Effect.succeed(false);
+  return Effect.tryPromise({
+    try: () => verify(secret, body, signature),
+    catch: (cause) => new SignatureVerificationError({ cause }),
+  }).pipe(Effect.catchAll(() => Effect.succeed(false)));
 }
 
 function decodeWorkflowEvent(
   deliveryId: string,
   body: string,
 ): WorkflowEvent | "ignored" | "malformed" {
-  let json: unknown;
-  try {
-    json = JSON.parse(body);
-  } catch {
-    return "malformed";
-  }
+  const json = decodeJson(body);
+  if (Either.isLeft(json)) return "malformed";
+  if (Either.isLeft(decodeAction(json.right))) return "ignored";
 
-  const action = Schema.decodeUnknownEither(
-    Schema.Struct({ action: Schema.Literal("queued", "in_progress", "completed") }),
-  )(json);
-  if (Either.isLeft(action)) return "ignored";
-
-  const decoded = Schema.decodeUnknownEither(Payload)(json);
+  const decoded = decodePayload(json.right);
   if (Either.isLeft(decoded)) return "malformed";
   const payload = decoded.right;
   if (!isAdmissible(payload.repository.private, payload.workflow_job.labels)) return "ignored";

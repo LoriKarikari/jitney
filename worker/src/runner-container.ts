@@ -1,4 +1,5 @@
 import { Container, type StopParams } from "@cloudflare/containers";
+import { Data, Effect } from "effect";
 import { emit, type RunnerCorrelation } from "./log";
 
 export type StartAttempt = RunnerCorrelation & { jitConfig: string };
@@ -8,45 +9,100 @@ type ContainerCorrelation = RunnerCorrelation & {
   deploymentId: string;
 };
 
+type RunnerContainerOperation = "correlation_read" | "correlation_write" | "container_start";
+
+class RunnerContainerError extends Data.TaggedError("RunnerContainerError")<{
+  operation: RunnerContainerOperation;
+  cause: unknown;
+}> {}
+
 export class RunnerContainer extends Container<Env> {
   override sleepAfter = "10m";
   override enableInternet = true;
 
-  async startAttempt(request: StartAttempt): Promise<void> {
+  startAttempt(request: StartAttempt): Promise<void> {
     const { jitConfig, ...correlation } = request;
-    await this.ctx.storage.put("correlation", correlation satisfies RunnerCorrelation);
-    await this.start({ envVars: { JIT_CONFIG: jitConfig } });
+    return Effect.runPromise(
+      Effect.gen(this, function* () {
+        yield* Effect.tryPromise({
+          try: () => this.ctx.storage.put("correlation", correlation satisfies RunnerCorrelation),
+          catch: (cause) => new RunnerContainerError({ operation: "correlation_write", cause }),
+        });
+        yield* Effect.tryPromise({
+          try: () => this.start({ envVars: { JIT_CONFIG: jitConfig } }),
+          catch: (cause) => new RunnerContainerError({ operation: "container_start", cause }),
+        });
+      }),
+    );
   }
 
-  override async onStart(): Promise<void> {
-    emit({ event: "runner_container_started", ...(await this.#correlation()) });
+  override onStart(): Promise<void> {
+    return Effect.runPromise(
+      this.#correlation().pipe(
+        Effect.tap((correlation) =>
+          Effect.sync(() => emit({ event: "runner_container_started", ...correlation })),
+        ),
+        Effect.asVoid,
+      ),
+    );
   }
 
-  override async onStop({ exitCode, reason }: StopParams): Promise<void> {
-    emit({
-      event: "runner_container_stopped",
-      ...(await this.#correlation()),
-      exitCode,
-      stopReason: reason,
-    });
+  override onStop({ exitCode, reason }: StopParams): Promise<void> {
+    return Effect.runPromise(
+      this.#correlation().pipe(
+        Effect.tap((correlation) =>
+          Effect.sync(() =>
+            emit({
+              event: "runner_container_stopped",
+              ...correlation,
+              exitCode,
+              stopReason: reason,
+            }),
+          ),
+        ),
+        Effect.asVoid,
+      ),
+    );
   }
 
   override async onError(error: unknown): Promise<never> {
-    emit({
-      event: "runner_container_failed",
-      ...(await this.#correlation()),
-      outcome: error instanceof Error ? "classified_error" : "unknown_error",
-    });
+    // Container hooks are the runtime boundary. Preserve the original rejection
+    // after running the structured logging effect.
+    await Effect.runPromise(
+      this.#correlation().pipe(
+        Effect.tap((correlation) =>
+          Effect.sync(() =>
+            emit({
+              event: "runner_container_failed",
+              ...correlation,
+              outcome: error instanceof Error ? "classified_error" : "unknown_error",
+            }),
+          ),
+        ),
+      ),
+    );
     throw error;
   }
 
-  async #correlation(): Promise<ContainerCorrelation> {
-    const correlation = await this.ctx.storage.get<RunnerCorrelation>("correlation");
-    if (correlation === undefined) throw new Error("runner correlation is missing");
-    return {
-      ...correlation,
-      containerId: this.ctx.id.toString(),
-      deploymentId: this.env.CF_VERSION_METADATA.id,
-    };
+  #correlation(): Effect.Effect<ContainerCorrelation, RunnerContainerError> {
+    return Effect.tryPromise({
+      try: () => this.ctx.storage.get<RunnerCorrelation>("correlation"),
+      catch: (cause) => new RunnerContainerError({ operation: "correlation_read", cause }),
+    }).pipe(
+      Effect.flatMap((correlation) =>
+        correlation === undefined
+          ? Effect.fail(
+              new RunnerContainerError({
+                operation: "correlation_read",
+                cause: new Error("runner correlation is missing"),
+              }),
+            )
+          : Effect.succeed({
+              ...correlation,
+              containerId: this.ctx.id.toString(),
+              deploymentId: this.env.CF_VERSION_METADATA.id,
+            }),
+      ),
+    );
   }
 }

@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { classifyDelivery } from "../src/delivery-classification";
 
@@ -55,39 +56,17 @@ async function webhookRequest(body: string, options: RequestOptions = {}): Promi
   return new Request(webhookUrl, { method: "POST", headers, body });
 }
 
+// The Worker entrypoint suite covers the shared webhook paths at the higher
+// seam (oversized bodies, signature failures, unrelated events, malformed and
+// inadmissible payloads). This suite keeps only the classification behavior
+// the entrypoint cannot observe.
 describe("Delivery classification", () => {
   it.each([
-    {
-      name: "rejects an oversized body before signature verification",
-      body: "x".repeat(1_048_577),
-      options: {},
-      expected: { status: 413, outcome: "payload_too_large", deliveryId: null },
-    },
     {
       name: "rejects a declared oversized body without reading it",
       body: "small",
       options: { contentLength: 1_048_577 },
       expected: { status: 413, outcome: "payload_too_large", deliveryId: null },
-    },
-    {
-      name: "rejects a missing signature",
-      body: "{}",
-      options: { deliveryId: "delivery-unsigned", eventName: "workflow_job" },
-      expected: { status: 401, outcome: "invalid_signature", deliveryId: "delivery-unsigned" },
-    },
-    {
-      name: "rejects a signature for different bytes",
-      body: "{}",
-      options: {
-        deliveryId: "delivery-wrong-signature",
-        eventName: "workflow_job",
-        signature: `sha256=${"0".repeat(64)}`,
-      },
-      expected: {
-        status: 401,
-        outcome: "invalid_signature",
-        deliveryId: "delivery-wrong-signature",
-      },
     },
     {
       name: "rejects a malformed signature",
@@ -104,26 +83,10 @@ describe("Delivery classification", () => {
       },
     },
     {
-      name: "ignores an unrelated signed event",
-      body: "{}",
-      options: { deliveryId: "delivery-ping", eventName: "ping", signed: true },
-      expected: { status: 204, outcome: "ignored", deliveryId: "delivery-ping" },
-    },
-    {
       name: "rejects a workflow job without Delivery identity",
       body: queuedPayload(),
       options: { eventName: "workflow_job", signed: true },
       expected: { status: 400, outcome: "malformed", deliveryId: null },
-    },
-    {
-      name: "rejects malformed workflow job JSON",
-      body: "{",
-      options: {
-        deliveryId: "delivery-malformed",
-        eventName: "workflow_job",
-        signed: true,
-      },
-      expected: { status: 400, outcome: "malformed", deliveryId: "delivery-malformed" },
     },
     {
       name: "ignores an unsupported workflow action",
@@ -135,20 +98,10 @@ describe("Delivery classification", () => {
       },
       expected: { status: 204, outcome: "ignored", deliveryId: "delivery-unsupported" },
     },
-    {
-      name: "ignores an inadmissible workflow job",
-      body: queuedPayload({ workflow_job: { id: 789, labels: ["ubuntu-latest"] } }),
-      options: {
-        deliveryId: "delivery-inadmissible",
-        eventName: "workflow_job",
-        signed: true,
-      },
-      expected: { status: 204, outcome: "ignored", deliveryId: "delivery-inadmissible" },
-    },
   ])("$name", async ({ body, options, expected }) => {
     const request = await webhookRequest(body, options);
 
-    expect(await classifyDelivery(request, webhookSecret)).toEqual(expected);
+    expect(await Effect.runPromise(classifyDelivery(request, webhookSecret))).toEqual(expected);
   });
 
   it("classifies an unreadable request body as malformed", async () => {
@@ -161,7 +114,7 @@ describe("Delivery classification", () => {
     if (reader === undefined) throw new Error("expected request body");
 
     try {
-      expect(await classifyDelivery(request, webhookSecret)).toEqual({
+      expect(await Effect.runPromise(classifyDelivery(request, webhookSecret))).toEqual({
         status: 400,
         outcome: "malformed",
         deliveryId: "delivery-unreadable",
@@ -183,7 +136,7 @@ describe("Delivery classification", () => {
       body,
     });
 
-    expect(await classifyDelivery(request, webhookSecret)).toEqual({
+    expect(await Effect.runPromise(classifyDelivery(request, webhookSecret))).toEqual({
       status: 401,
       outcome: "invalid_signature",
       deliveryId: "delivery-binary",
@@ -197,7 +150,7 @@ describe("Delivery classification", () => {
       signed: true,
     });
 
-    expect(await classifyDelivery(request, webhookSecret)).toEqual({
+    expect(await Effect.runPromise(classifyDelivery(request, webhookSecret))).toEqual({
       status: 401,
       outcome: "invalid_signature",
       deliveryId: "delivery-empty",
@@ -212,7 +165,7 @@ describe("Delivery classification", () => {
       signed: true,
     });
 
-    expect(await classifyDelivery(request, webhookSecret)).toEqual({
+    expect(await Effect.runPromise(classifyDelivery(request, webhookSecret))).toEqual({
       status: 400,
       outcome: "malformed",
       deliveryId: "delivery-at-limit",
@@ -226,7 +179,7 @@ describe("Delivery classification", () => {
       signed: true,
     });
 
-    expect(await classifyDelivery(request, webhookSecret)).toEqual({
+    expect(await Effect.runPromise(classifyDelivery(request, webhookSecret))).toEqual({
       status: 202,
       outcome: "accepted",
       deliveryId: "delivery-accepted",

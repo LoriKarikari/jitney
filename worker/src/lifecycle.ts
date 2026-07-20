@@ -1,6 +1,6 @@
 import { and, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
-import { Either, Effect } from "effect";
+import { Data, Either, Effect } from "effect";
 import { assignments, attempts, deliveries, jobs, pending } from "./schema";
 import { isAdmissible, type QueuedJobCandidate, type WorkflowEvent } from "./domain";
 import type { RunnerAttemptOperations, RunnerAttemptRequest } from "./runner-attempt-operations";
@@ -48,6 +48,11 @@ export type AssignmentSnapshot = typeof assignments.$inferSelect & {
   containerName: string;
 };
 
+export class SchedulerStorageError extends Data.TaggedError("SchedulerStorageError")<{
+  operation: "transaction" | "get_alarm" | "set_alarm";
+  cause: unknown;
+}> {}
+
 type TransitionInput = QueuedJobCandidate & {
   action: string;
   deliveryId?: string | undefined;
@@ -67,47 +72,51 @@ export class SchedulerLifecycle {
     this.#db = drizzle(storage, { schema: { deliveries, jobs, attempts, assignments, pending } });
   }
 
-  async accept(event: WorkflowEvent): Promise<AcceptResult> {
-    const now = Date.now();
-    const result = this.storage.transactionSync(() => {
-      if (!this.#recordDelivery(event, now)) return { outcome: "duplicate" } as const;
+  accept(event: WorkflowEvent): Effect.Effect<AcceptResult, SchedulerStorageError> {
+    return Effect.gen(this, function* () {
+      const now = Date.now();
+      const result = yield* this.#transaction(() => {
+        if (!this.#recordDelivery(event, now)) return { outcome: "duplicate" } as const;
 
-      const dominant = this.#dominantOutcome(event.workflowJobId, event.action);
-      if (dominant !== undefined) return dominant;
-      if (event.action === "queued") return this.#acceptQueued(event, event.deliveryId, now);
-      if (event.action === "in_progress" && event.runnerName !== undefined) {
-        return this.#recordAssignment(event, event.runnerName, now);
+        const dominant = this.#dominantOutcome(event.workflowJobId, event.action);
+        if (dominant !== undefined) return dominant;
+        if (event.action === "queued") return this.#acceptQueued(event, event.deliveryId, now);
+        if (event.action === "in_progress" && event.runnerName !== undefined) {
+          return this.#recordAssignment(event, event.runnerName, now);
+        }
+        if (event.action === "completed") this.#recordCompletion(event, now);
+        return { outcome: "recorded" } as const;
+      });
+
+      this.#emitTransition(event, result);
+      if (event.action === "queued" && result.outcome === "accepted") {
+        yield* this.#setAlarm(now + this.schedulerTick);
       }
-      if (event.action === "completed") this.#recordCompletion(event, now);
-      return { outcome: "recorded" } as const;
+      if (event.action === "in_progress" && result.outcome === "recorded") {
+        const deadline = now + this.runtimeTimeout;
+        const alarm = yield* this.#getAlarm();
+        if (alarm === null || alarm > deadline) yield* this.#setAlarm(deadline);
+      }
+      return result;
     });
-
-    this.#emitTransition(event, result);
-    if (event.action === "queued" && result.outcome === "accepted") {
-      await this.storage.setAlarm(now + this.schedulerTick);
-    }
-    if (event.action === "in_progress" && result.outcome === "recorded") {
-      const deadline = now + this.runtimeTimeout;
-      const alarm = await this.storage.getAlarm();
-      if (alarm === null || alarm > deadline) await this.storage.setAlarm(deadline);
-    }
-    return result;
   }
 
-  async reconcile(candidate: QueuedJobCandidate): Promise<AcceptResult> {
-    const now = Date.now();
-    const result = this.storage.transactionSync(() => {
-      if (!isAdmissible(candidate.repositoryPrivate, candidate.labels)) {
-        return { outcome: "ignored" as const };
-      }
-      return (
-        this.#dominantOutcome(candidate.workflowJobId, "queued") ??
-        this.#acceptQueued(candidate, null, now)
-      );
+  reconcile(candidate: QueuedJobCandidate): Effect.Effect<AcceptResult, SchedulerStorageError> {
+    return Effect.gen(this, function* () {
+      const now = Date.now();
+      const result = yield* this.#transaction(() => {
+        if (!isAdmissible(candidate.repositoryPrivate, candidate.labels)) {
+          return { outcome: "ignored" as const };
+        }
+        return (
+          this.#dominantOutcome(candidate.workflowJobId, "queued") ??
+          this.#acceptQueued(candidate, null, now)
+        );
+      });
+      this.#emitTransition({ ...candidate, action: "queued" }, result);
+      if (result.outcome === "accepted") yield* this.#setAlarm(now + this.schedulerTick);
+      return result;
     });
-    this.#emitTransition({ ...candidate, action: "queued" }, result);
-    if (result.outcome === "accepted") await this.storage.setAlarm(now + this.schedulerTick);
-    return result;
   }
 
   #dominantOutcome(workflowJobId: number, action: string): AcceptResult | undefined {
@@ -418,15 +427,20 @@ export class SchedulerLifecycle {
       .all()[0];
   }
 
-  async sweep(operations: RunnerAttemptOperations, now = Date.now()): Promise<void> {
-    const morePending = await this.#drainPending(operations);
-    await this.#expireUnassignedAttempts(operations, now);
-    await this.#expireRunningAttempts(operations, now);
+  sweep(
+    operations: RunnerAttemptOperations,
+    now = Date.now(),
+  ): Effect.Effect<void, SchedulerStorageError> {
+    return Effect.gen(this, function* () {
+      const morePending = yield* this.#drainPending(operations);
+      yield* this.#expireUnassignedAttempts(operations, now);
+      yield* this.#expireRunningAttempts(operations, now);
 
-    const wakeAt = morePending ? now + this.schedulerTick : this.#nextDeadline();
-    if (wakeAt !== undefined) {
-      await this.storage.setAlarm(Math.max(wakeAt, now + this.schedulerTick));
-    }
+      const wakeAt = morePending ? now + this.schedulerTick : this.#nextDeadline();
+      if (wakeAt !== undefined) {
+        yield* this.#setAlarm(Math.max(wakeAt, now + this.schedulerTick));
+      }
+    });
   }
 
   #nextDeadline(): number | undefined {
@@ -444,71 +458,81 @@ export class SchedulerLifecycle {
     return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
   }
 
-  async #expireUnassignedAttempts(operations: RunnerAttemptOperations, now: number): Promise<void> {
-    const expired = this.#expiredAttempts(
-      and(
-        inArray(attempts.state, viableAttemptStates),
-        sql`${attempts.assignmentDeadline} <= ${now}`,
-      ),
-    );
+  #expireUnassignedAttempts(
+    operations: RunnerAttemptOperations,
+    now: number,
+  ): Effect.Effect<void, SchedulerStorageError> {
+    return Effect.gen(this, function* () {
+      const expired = this.#expiredAttempts(
+        and(
+          inArray(attempts.state, viableAttemptStates),
+          sql`${attempts.assignmentDeadline} <= ${now}`,
+        ),
+      );
 
-    for (const row of expired) {
-      const { workflowJobId, runnerName } = row;
-      this.storage.transactionSync(() => {
-        this.#db
-          .update(attempts)
-          .set({ state: "expired" })
-          .where(eq(attempts.runnerName, runnerName))
-          .run();
-        this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
-        this.#db
-          .update(jobs)
-          .set({ state: "queued", updatedAt: now })
-          .where(
-            and(
-              eq(jobs.workflowJobId, workflowJobId),
-              inArray(jobs.state, ["queued", "provisioning", "waiting_for_assignment"]),
-            ),
-          )
-          .run();
-      });
-      await this.#reclaimExpired(operations, row, "assignment_deadline");
-    }
+      for (const row of expired) {
+        const { workflowJobId, runnerName } = row;
+        yield* this.#transaction(() => {
+          this.#db
+            .update(attempts)
+            .set({ state: "expired" })
+            .where(eq(attempts.runnerName, runnerName))
+            .run();
+          this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
+          this.#db
+            .update(jobs)
+            .set({ state: "queued", updatedAt: now })
+            .where(
+              and(
+                eq(jobs.workflowJobId, workflowJobId),
+                inArray(jobs.state, ["queued", "provisioning", "waiting_for_assignment"]),
+              ),
+            )
+            .run();
+        });
+        yield* this.#reclaimExpired(operations, row, "assignment_deadline");
+      }
+    });
   }
 
-  async #expireRunningAttempts(operations: RunnerAttemptOperations, now: number): Promise<void> {
-    const expired = this.#expiredAttempts(
-      and(eq(attempts.state, "running"), sql`${attempts.runtimeDeadline} <= ${now}`),
-    );
+  #expireRunningAttempts(
+    operations: RunnerAttemptOperations,
+    now: number,
+  ): Effect.Effect<void, SchedulerStorageError> {
+    return Effect.gen(this, function* () {
+      const expired = this.#expiredAttempts(
+        and(eq(attempts.state, "running"), sql`${attempts.runtimeDeadline} <= ${now}`),
+      );
 
-    for (const row of expired) {
-      const { runnerName } = row;
-      const assignment = this.#db
-        .select()
-        .from(assignments)
-        .where(
-          and(
-            eq(assignments.triggeringWorkflowJobId, row.workflowJobId),
-            eq(assignments.attempt, row.attempt),
-          ),
-        )
-        .all()[0];
-      const assignedJobId = assignment?.workflowJobId ?? row.workflowJobId;
-      this.storage.transactionSync(() => {
-        this.#db
-          .update(attempts)
-          .set({ state: "expired" })
-          .where(eq(attempts.runnerName, runnerName))
-          .run();
-        this.#db
-          .update(jobs)
-          .set({ state: "failed", conclusion: "timed_out", updatedAt: now })
-          .where(eq(jobs.workflowJobId, assignedJobId))
-          .run();
-        this.#db.delete(pending).where(eq(pending.workflowJobId, assignedJobId)).run();
-      });
-      await this.#reclaimExpired(operations, row, "runtime_deadline");
-    }
+      for (const row of expired) {
+        const { runnerName } = row;
+        const assignment = this.#db
+          .select()
+          .from(assignments)
+          .where(
+            and(
+              eq(assignments.triggeringWorkflowJobId, row.workflowJobId),
+              eq(assignments.attempt, row.attempt),
+            ),
+          )
+          .all()[0];
+        const assignedJobId = assignment?.workflowJobId ?? row.workflowJobId;
+        yield* this.#transaction(() => {
+          this.#db
+            .update(attempts)
+            .set({ state: "expired" })
+            .where(eq(attempts.runnerName, runnerName))
+            .run();
+          this.#db
+            .update(jobs)
+            .set({ state: "failed", conclusion: "timed_out", updatedAt: now })
+            .where(eq(jobs.workflowJobId, assignedJobId))
+            .run();
+          this.#db.delete(pending).where(eq(pending.workflowJobId, assignedJobId)).run();
+        });
+        yield* this.#reclaimExpired(operations, row, "runtime_deadline");
+      }
+    });
   }
 
   #expiredAttempts(condition: ReturnType<typeof and>): ExpiredAttempt[] {
@@ -520,25 +544,28 @@ export class SchedulerLifecycle {
       .all();
   }
 
-  async #reclaimExpired(
+  #reclaimExpired(
     operations: RunnerAttemptOperations,
     row: ExpiredAttempt,
     stopReason: string,
-  ): Promise<void> {
-    const { workflowJobId, attempt, installationId, runnerName, containerName, repositoryId } = row;
-    const correlation = {
-      installationId,
-      repositoryId,
-      workflowJobId,
-      runnerName,
-      containerName,
-      deploymentId: this.deploymentId,
-    };
-    emit({ event: "runner_attempt_expired", ...correlation, attempt, stopReason });
+  ): Effect.Effect<void> {
+    return Effect.gen(this, function* () {
+      const { workflowJobId, attempt, installationId, runnerName, containerName, repositoryId } =
+        row;
+      const correlation = {
+        installationId,
+        repositoryId,
+        workflowJobId,
+        runnerName,
+        containerName,
+        deploymentId: this.deploymentId,
+      };
+      yield* Effect.sync(() =>
+        emit({ event: "runner_attempt_expired", ...correlation, attempt, stopReason }),
+      );
 
-    const { repositoryOwner, repositoryName } = row;
-    const result = await Effect.runPromise(
-      operations
+      const { repositoryOwner, repositoryName } = row;
+      const result = yield* operations
         .reclaim({
           installationId,
           repositoryId,
@@ -548,76 +575,83 @@ export class SchedulerLifecycle {
           runnerName,
           containerName,
         })
-        .pipe(Effect.either),
-    );
-    if (Either.isLeft(result)) {
-      emit({ event: "runner_reclaim_failed", ...correlation, step: result.left.step });
-    }
+        .pipe(Effect.either);
+      if (Either.isLeft(result)) {
+        yield* Effect.sync(() =>
+          emit({ event: "runner_reclaim_failed", ...correlation, step: result.left.step }),
+        );
+      }
+    });
   }
 
-  async #drainPending(operations: RunnerAttemptOperations): Promise<boolean> {
-    const row = this.#db
-      .select({
-        ...getTableColumns(pending),
-        installationId: attempts.installationId,
-        repositoryId: jobs.repositoryId,
-        repositoryOwner: attempts.repositoryOwner,
-        repositoryName: attempts.repositoryName,
-        runnerName: attempts.runnerName,
-        containerName: attempts.containerName,
-      })
-      .from(pending)
-      .innerJoin(
-        attempts,
-        and(
-          eq(attempts.workflowJobId, pending.workflowJobId),
-          eq(attempts.attempt, pending.attempt),
-        ),
-      )
-      .innerJoin(jobs, eq(jobs.workflowJobId, pending.workflowJobId))
-      .orderBy(pending.workflowJobId)
-      .all()[0];
-    if (row === undefined) return false;
-
-    const pendingRow: PendingRow = row;
-    const {
-      deliveryId,
-      installationId,
-      repositoryId,
-      repositoryOwner,
-      repositoryName,
-      workflowJobId,
-      runnerName,
-      containerName,
-    } = pendingRow;
-    const correlation = {
-      ...(deliveryId && { deliveryId }),
-      deploymentId: this.deploymentId,
-      installationId,
-      repositoryId,
-      workflowJobId,
-      runnerName,
-      containerName,
-    };
-
-    emit({ event: "runner_provisioning_started", ...correlation });
-    this.storage.transactionSync(() => {
-      this.#db
-        .update(jobs)
-        .set({ state: "provisioning", updatedAt: Date.now() })
-        .where(eq(jobs.workflowJobId, workflowJobId))
-        .run();
-      this.#db
-        .update(attempts)
-        .set({ state: "starting" })
-        .where(
-          and(eq(attempts.workflowJobId, workflowJobId), eq(attempts.attempt, pendingRow.attempt)),
+  #drainPending(
+    operations: RunnerAttemptOperations,
+  ): Effect.Effect<boolean, SchedulerStorageError> {
+    return Effect.gen(this, function* () {
+      const row = this.#db
+        .select({
+          ...getTableColumns(pending),
+          installationId: attempts.installationId,
+          repositoryId: jobs.repositoryId,
+          repositoryOwner: attempts.repositoryOwner,
+          repositoryName: attempts.repositoryName,
+          runnerName: attempts.runnerName,
+          containerName: attempts.containerName,
+        })
+        .from(pending)
+        .innerJoin(
+          attempts,
+          and(
+            eq(attempts.workflowJobId, pending.workflowJobId),
+            eq(attempts.attempt, pending.attempt),
+          ),
         )
-        .run();
-    });
+        .innerJoin(jobs, eq(jobs.workflowJobId, pending.workflowJobId))
+        .orderBy(pending.workflowJobId)
+        .all()[0];
+      if (row === undefined) return false;
 
-    const result = await Effect.runPromise(
-      operations
+      const pendingRow: PendingRow = row;
+      const {
+        deliveryId,
+        installationId,
+        repositoryId,
+        repositoryOwner,
+        repositoryName,
+        workflowJobId,
+        runnerName,
+        containerName,
+      } = pendingRow;
+      const correlation = {
+        ...(deliveryId && { deliveryId }),
+        deploymentId: this.deploymentId,
+        installationId,
+        repositoryId,
+        workflowJobId,
+        runnerName,
+        containerName,
+      };
+
+      yield* Effect.sync(() => emit({ event: "runner_provisioning_started", ...correlation }));
+      yield* this.#transaction(() => {
+        this.#db
+          .update(jobs)
+          .set({ state: "provisioning", updatedAt: Date.now() })
+          .where(eq(jobs.workflowJobId, workflowJobId))
+          .run();
+        this.#db
+          .update(attempts)
+          .set({ state: "starting" })
+          .where(
+            and(
+              eq(attempts.workflowJobId, workflowJobId),
+              eq(attempts.attempt, pendingRow.attempt),
+            ),
+          )
+          .run();
+      });
+
+      const result = yield* operations
         .provision({
           installationId,
           repositoryId,
@@ -627,23 +661,25 @@ export class SchedulerLifecycle {
           runnerName,
           containerName,
         })
-        .pipe(Effect.either),
-    );
+        .pipe(Effect.either);
 
-    this.storage.transactionSync(() => {
+      yield* this.#transaction(() => {
+        if (Either.isRight(result)) {
+          this.#finishProvisioning(pendingRow);
+        } else {
+          this.#failProvisioning(pendingRow, result.left);
+        }
+        this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
+      });
       if (Either.isRight(result)) {
-        this.#finishProvisioning(pendingRow);
-      } else {
-        this.#failProvisioning(pendingRow, result.left);
+        yield* Effect.sync(() => emit({ event: "runner_provisioning_succeeded", ...correlation }));
       }
-      this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
+      const remaining = this.#db
+        .select({ count: sql<number>`count(*)` })
+        .from(pending)
+        .all()[0];
+      return remaining !== undefined && remaining.count > 0;
     });
-    if (Either.isRight(result)) emit({ event: "runner_provisioning_succeeded", ...correlation });
-    const remaining = this.#db
-      .select({ count: sql<number>`count(*)` })
-      .from(pending)
-      .all()[0];
-    return remaining !== undefined && remaining.count > 0;
   }
 
   #finishProvisioning(pendingRow: PendingRow): void {
@@ -664,6 +700,27 @@ export class SchedulerLifecycle {
         ),
       )
       .run();
+  }
+
+  #transaction<Result>(run: () => Result): Effect.Effect<Result, SchedulerStorageError> {
+    return Effect.try({
+      try: () => this.storage.transactionSync(run),
+      catch: (cause) => new SchedulerStorageError({ operation: "transaction", cause }),
+    });
+  }
+
+  #getAlarm(): Effect.Effect<number | null, SchedulerStorageError> {
+    return Effect.tryPromise({
+      try: () => this.storage.getAlarm(),
+      catch: (cause) => new SchedulerStorageError({ operation: "get_alarm", cause }),
+    });
+  }
+
+  #setAlarm(scheduledTime: number): Effect.Effect<void, SchedulerStorageError> {
+    return Effect.tryPromise({
+      try: () => this.storage.setAlarm(scheduledTime),
+      catch: (cause) => new SchedulerStorageError({ operation: "set_alarm", cause }),
+    });
   }
 
   #failProvisioning(

@@ -59,6 +59,12 @@ export type LifecycleRecord =
       step: string;
       deploymentId?: string | undefined;
     })
+  | (DeliveryCorrelation & {
+      event: "scheduler_accept_failed";
+      installationId: number;
+      repositoryId: number;
+      workflowJobId: number;
+    })
   | { event: "reconciliation_started"; deploymentId: string }
   | { event: "reconciliation_failed"; deploymentId: string; step: string }
   | {

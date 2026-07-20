@@ -4,7 +4,7 @@ import {
   runDurableObjectAlarm,
   runInDurableObject,
 } from "cloudflare:test";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
 import { SchedulerLifecycle } from "../src/lifecycle";
@@ -17,12 +17,14 @@ import { Scheduler } from "../src/scheduler";
 
 const testSchedulerTick = 60_000;
 
-function withLifecycle<Result>(
+function withLifecycle<Result, Error>(
   scheduler: DurableObjectStub<Scheduler>,
-  use: (lifecycle: SchedulerLifecycle) => Promise<Result>,
+  use: (lifecycle: SchedulerLifecycle) => Effect.Effect<Result, Error>,
 ): Promise<Result> {
   return runInDurableObject(scheduler, (_instance, state) =>
-    use(new SchedulerLifecycle(state.storage, "deployment-test", 60 * 60_000, testSchedulerTick)),
+    Effect.runPromise(
+      use(new SchedulerLifecycle(state.storage, "deployment-test", 60 * 60_000, testSchedulerTick)),
+    ),
   );
 }
 
@@ -305,34 +307,38 @@ describe("Scheduler admission", () => {
     const runnerName = accepted.runnerName;
     if (runnerName === undefined) throw new Error("accepted attempt has no runner name");
 
-    await withLifecycle(scheduler, async (lifecycle) => {
-      let finishProvisioning: () => void = () => undefined;
-      let markProvisioningStarted: () => void = () => undefined;
-      const provisioningStarted = new Promise<void>((resolve) => {
-        markProvisioningStarted = resolve;
-      });
-      const sweep = lifecycle.sweep(
-        operations(() =>
-          Effect.promise(
-            () =>
-              new Promise<void>((resolve) => {
-                finishProvisioning = resolve;
-                markProvisioningStarted();
-              }),
+    await withLifecycle(scheduler, (lifecycle) =>
+      Effect.gen(function* () {
+        let finishProvisioning: () => void = () => undefined;
+        let markProvisioningStarted: () => void = () => undefined;
+        const provisioningStarted = new Promise<void>((resolve) => {
+          markProvisioningStarted = resolve;
+        });
+        const sweep = yield* Effect.fork(
+          lifecycle.sweep(
+            operations(() =>
+              Effect.promise(
+                () =>
+                  new Promise<void>((resolve) => {
+                    finishProvisioning = resolve;
+                    markProvisioningStarted();
+                  }),
+              ),
+            ),
           ),
-        ),
-      );
-      await provisioningStarted;
+        );
+        yield* Effect.promise(() => provisioningStarted);
 
-      await lifecycle.accept({
-        ...event,
-        action: "in_progress",
-        deliveryId: "delivery-in-progress",
-        runnerName,
-      });
-      finishProvisioning();
-      await sweep;
-    });
+        yield* lifecycle.accept({
+          ...event,
+          action: "in_progress",
+          deliveryId: "delivery-in-progress",
+          runnerName,
+        });
+        finishProvisioning();
+        yield* Fiber.join(sweep);
+      }),
+    );
 
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "running" });
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "running" }]);
@@ -417,19 +423,21 @@ describe("Scheduler admission", () => {
     if (accepted.runnerName === undefined) throw new Error("accepted attempt has no runner name");
     const reclaimed: string[] = [];
 
-    await withLifecycle(scheduler, async (lifecycle) => {
-      await lifecycle.sweep(operations());
-      await lifecycle.sweep(
-        operations(
-          () => Effect.void,
-          (request) => {
-            reclaimed.push(request.runnerName);
-            return Effect.void;
-          },
-        ),
-        Date.now() + 6 * 60_000,
-      );
-    });
+    await withLifecycle(scheduler, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.sweep(operations());
+        yield* lifecycle.sweep(
+          operations(
+            () => Effect.void,
+            (request) => {
+              reclaimed.push(request.runnerName);
+              return Effect.void;
+            },
+          ),
+          Date.now() + 6 * 60_000,
+        );
+      }),
+    );
 
     expect(reclaimed).toEqual(["jitney-456-6001-1"]);
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
@@ -487,16 +495,18 @@ describe("Scheduler admission", () => {
     const event = queuedEvent(6004, "delivery-queued");
     await scheduler.accept(event);
 
-    await withLifecycle(scheduler, async (lifecycle) => {
-      await lifecycle.sweep(operations());
-      await lifecycle.sweep(
-        operations(
-          () => Effect.void,
-          () => Effect.fail(new RunnerAttemptFailure({ step: "runner_deletion", cause: "boom" })),
-        ),
-        Date.now() + 6 * 60_000,
-      );
-    });
+    await withLifecycle(scheduler, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.sweep(operations());
+        yield* lifecycle.sweep(
+          operations(
+            () => Effect.void,
+            () => Effect.fail(new RunnerAttemptFailure({ step: "runner_deletion", cause: "boom" })),
+          ),
+          Date.now() + 6 * 60_000,
+        );
+      }),
+    );
 
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
     const failures = logged.mock.calls
@@ -521,8 +531,8 @@ describe("Scheduler admission", () => {
     });
 
     const reclaimed: string[] = [];
-    await withLifecycle(scheduler, async (lifecycle) => {
-      await lifecycle.sweep(
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
         operations(
           () => Effect.void,
           (request) => {
@@ -531,8 +541,8 @@ describe("Scheduler admission", () => {
           },
         ),
         Date.now() + 61 * 60_000,
-      );
-    });
+      ),
+    );
 
     expect(reclaimed).toEqual(["jitney-456-7001-1"]);
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
@@ -648,18 +658,20 @@ describe("Scheduler admission", () => {
         120_000,
         testSchedulerTick,
       );
-      const accepted = await lifecycle.accept(event);
+      const accepted = await Effect.runPromise(lifecycle.accept(event));
       if (accepted.runnerName === undefined) throw new Error("missing runner name");
-      await lifecycle.sweep(operations());
+      await Effect.runPromise(lifecycle.sweep(operations()));
       const armed = await state.storage.getAlarm();
       if (armed === null) throw new Error("expected an assignment alarm");
 
-      await lifecycle.accept({
-        ...event,
-        action: "in_progress",
-        deliveryId: "delivery-in-progress",
-        runnerName: accepted.runnerName,
-      });
+      await Effect.runPromise(
+        lifecycle.accept({
+          ...event,
+          action: "in_progress",
+          deliveryId: "delivery-in-progress",
+          runnerName: accepted.runnerName,
+        }),
+      );
 
       const alarm = await state.storage.getAlarm();
       if (alarm === null) throw new Error("expected a runtime alarm");

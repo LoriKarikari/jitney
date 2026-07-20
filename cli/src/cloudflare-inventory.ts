@@ -8,14 +8,18 @@ import { ExistingWorkerError, InstallerError } from "./errors.js";
 /** Cloudflare Worker tag that marks a Worker as Jitney-shaped. */
 export const JITNEY_WORKER_TAG = "jitney";
 
+const DEPLOYMENT_TAG_PREFIX = "jitney-deployment:";
+
 export const deploymentWorkerTag = (deploymentId: string): string =>
-  `jitney-deployment:${deploymentId}`;
+  `${DEPLOYMENT_TAG_PREFIX}${deploymentId}`;
 
 export const runnerApplicationName = (name: string): string => `${name}-runner`;
 
 export interface LiveWorker {
   readonly name: string;
   readonly jitneyTagged: boolean;
+  /** Deployment ULID from the Worker's tag, the id proof for re-derivation. */
+  readonly deploymentId: string | null;
 }
 
 export interface LiveApplication {
@@ -48,6 +52,10 @@ export const observeAccount = Effect.fn(function* (accountId: string) {
             {
               name: script.id,
               jitneyTagged: Arr.contains(script.tags ?? [], JITNEY_WORKER_TAG),
+              deploymentId:
+                (script.tags ?? [])
+                  .find((tag) => tag.startsWith(DEPLOYMENT_TAG_PREFIX))
+                  ?.slice(DEPLOYMENT_TAG_PREFIX.length) ?? null,
             },
           ],
     ),

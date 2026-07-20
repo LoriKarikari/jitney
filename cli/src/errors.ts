@@ -15,6 +15,7 @@ export type InstallerStep =
   | "registry_cleanup"
   | "registry_copy"
   | "registry_inspection"
+  | "repair"
   | "repository_ownership"
   | "receipt_store"
   | "rollback"

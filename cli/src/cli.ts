@@ -5,6 +5,7 @@ import { Cause, Effect, Exit, Option } from "effect";
 import { deploy } from "./deploy.js";
 import { InstallerError, isInstallFailure, renderFailure, trySync } from "./errors.js";
 import { listCommand } from "./list-command.js";
+import { repairCommand } from "./repair-command.js";
 
 const program = Effect.gen(function* () {
   const { positionals, values } = yield* trySync(
@@ -18,6 +19,8 @@ const program = Effect.gen(function* () {
           organization: { type: "string" },
           "keep-partial": { type: "boolean" },
           json: { type: "boolean" },
+          yes: { type: "boolean", short: "y" },
+          adopt: { type: "string", multiple: true },
           help: { type: "boolean", short: "h" },
         },
       }),
@@ -30,15 +33,26 @@ const program = Effect.gen(function* () {
 Commands:
   deploy                       Install a Jitney deployment
   list                         Inspect deployments and report drift
+  repair <name>                Reconcile a deployment with its receipt
 
 Options:
   --name <name>                Cloudflare Worker name (default: jitney)
   --organization <login>       Register the GitHub App under an organization
   --keep-partial               Keep an installing receipt instead of rolling back
   --json                       Print list output as JSON
+  --yes, -y                    Apply the repair plan without confirming
+  --adopt application:<id>     Adopt an unprovable container application (repeatable)
   -h, --help                   Show this help`),
     );
     return;
+  }
+
+  if (positionals[0] === "repair" && positionals.length === 2) {
+    return yield* repairCommand({
+      name: positionals[1]!,
+      ...(values.yes === undefined ? {} : { yes: values.yes }),
+      ...(values.adopt === undefined ? {} : { adopt: values.adopt }),
+    });
   }
 
   if (positionals.length === 1 && positionals[0] === "list") {

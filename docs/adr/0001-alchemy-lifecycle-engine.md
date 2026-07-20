@@ -23,6 +23,10 @@ programmatically from the CLI. Specifically:
   API calls Alchemy does not cover (KV values, listing). This is the same
   client Alchemy's own providers use internally; it ships with Alchemy, so
   declaring it directly costs no extra packages.
+- Declare `@distilled.cloud/cloudflare-runtime` directly for the runtime
+  services required by Alchemy's selected Worker and Container providers.
+  Alchemy already installs the package transitively, but beta.63 does not
+  export its runtime-services layer.
 - Replace Alchemy's Docker-based remote image transfer with the existing
   Dockerless ORAS copy path.
 - Keep the GitHub App as a custom provider, but keep App *deletion* outside

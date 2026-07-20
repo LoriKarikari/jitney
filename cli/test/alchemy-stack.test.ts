@@ -24,6 +24,7 @@ describe("Jitney Alchemy stack", () => {
           workerName: "jitney-test",
           workerBundlePath: "assets/worker/index.js",
           version: "0.3.0",
+          manageGitHubApp: true,
           githubCredentials: {
             appId: Redacted.make("12345"),
             privateKey: Redacted.make("private-key"),
@@ -59,11 +60,13 @@ describe("Jitney Alchemy stack", () => {
       workerName: "jitney-test",
       workerUrl: "https://jitney-test.example.workers.dev",
       runnerApplicationId: "application-RunnerApplication",
+      runnerImage: "ghcr.io/lorikarikari/jitney:0.3.0",
       receiptNamespaceId: "namespace-LifecycleReceipts",
-      githubAppId: "github-app-GitHubApp",
-      githubAppSlug: "jitney-test",
     });
-    expect(result.second).toEqual(result.first);
+    expect(result.second).toEqual({
+      ...result.first,
+      runnerImage: "ghcr.io/lorikarikari/jitney:0.3.1",
+    });
     expect(result.events).toContain("container:reconcile:0.3.0");
     expect(result.events).toContain("container:reconcile:0.3.1");
     expect(result.events.slice(-2)).toEqual([
@@ -95,6 +98,8 @@ function makeProviders(events: Ref.Ref<string[]>) {
             appId: "github-app-GitHubApp",
             slug: desired.name,
             settingsUrl: `https://github.com/settings/apps/${desired.name}`,
+            ownerLogin: "LoriKarikari",
+            ownerType: "User",
           },
         ),
       ),

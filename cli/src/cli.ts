@@ -15,6 +15,7 @@ const program = Effect.gen(function* () {
         options: {
           name: { type: "string", default: "jitney" },
           organization: { type: "string" },
+          "keep-partial": { type: "boolean" },
           help: { type: "boolean", short: "h" },
         },
       }),
@@ -27,6 +28,7 @@ const program = Effect.gen(function* () {
 Options:
   --name <name>                Cloudflare Worker name (default: jitney)
   --organization <login>       Register the GitHub App under an organization
+  --keep-partial               Keep an installing receipt instead of rolling back
   -h, --help                   Show this help`),
     );
     return;
@@ -44,6 +46,7 @@ Options:
   yield* deploy({
     workerName: values.name,
     ...(values.organization === undefined ? {} : { organization: values.organization }),
+    ...(values["keep-partial"] === undefined ? {} : { keepPartial: values["keep-partial"] }),
   });
 });
 
@@ -66,6 +69,9 @@ function isInstallFailure(error: unknown): error is InstallFailure {
     typeof error === "object" &&
     error !== null &&
     "_tag" in error &&
-    (error._tag === "InstallerError" || error._tag === "ExistingWorkerError")
+    (error._tag === "InstallerError" ||
+      error._tag === "ExistingWorkerError" ||
+      error._tag === "ExistingDeploymentError" ||
+      error._tag === "InstallRollbackError")
   );
 }

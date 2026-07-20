@@ -88,13 +88,16 @@ export interface LeaseContext {
   readonly now: DateTime.Utc;
 }
 
-export interface OperationCompletion {
-  readonly phase: DeploymentPhase;
-  readonly outcome: "succeeded" | "failed";
+export interface OperationUpdate {
   readonly versions?: DeploymentReceipt["versions"];
   readonly cloudflare?: DeploymentReceipt["cloudflare"];
   readonly github?: DeploymentReceipt["github"];
   readonly autoUpgrade?: DeploymentReceipt["autoUpgrade"];
+}
+
+export interface OperationCompletion extends OperationUpdate {
+  readonly phase: DeploymentPhase;
+  readonly outcome: "succeeded" | "failed";
 }
 
 export interface ReceiptStoreOptions {
@@ -111,6 +114,11 @@ export interface ReceiptStoreOptions {
 export interface ReceiptStore {
   readonly get: (name: string) => Effect.Effect<Option.Option<DeploymentReceipt>, ReceiptReadError>;
   readonly create: (receipt: DeploymentReceipt) => Effect.Effect<void, ReceiptStoreError>;
+  readonly createWithInstallLease: (
+    receipt: DeploymentReceipt,
+    actor: string,
+    now: DateTime.Utc,
+  ) => Effect.Effect<DeploymentReceipt, ReceiptStoreError>;
   readonly acquireLease: (
     name: string,
     operation: DeploymentOperation,
@@ -119,6 +127,10 @@ export interface ReceiptStore {
   ) => Effect.Effect<DeploymentReceipt, ReceiptStoreError>;
   readonly renewLease: (
     context: LeaseContext,
+  ) => Effect.Effect<DeploymentReceipt, ReceiptStoreError>;
+  readonly updateOperation: (
+    context: LeaseContext,
+    update: OperationUpdate,
   ) => Effect.Effect<DeploymentReceipt, ReceiptStoreError>;
   readonly finishOperation: (
     context: LeaseContext,
@@ -269,6 +281,53 @@ export function makeReceiptStore(
           });
         }
       }),
+    createWithInstallLease: (receipt, actor, now) =>
+      Effect.gen(function* () {
+        const existing = yield* get(receipt.name);
+        if (Option.isSome(existing)) {
+          return yield* new ReceiptAlreadyExistsError({
+            name: receipt.name,
+            existingId: existing.value.id,
+          });
+        }
+        const lease: OperationLease = {
+          operation: "install",
+          actor,
+          expiresAt: DateTime.addDuration(now, "15 minutes"),
+        };
+        const attempted: DeploymentReceipt = {
+          ...receipt,
+          updatedAt: now,
+          phase: "installing",
+          lease,
+          history: [
+            {
+              operation: "install",
+              actor,
+              startedAt: now,
+              completedAt: null,
+              outcome: null,
+            },
+          ],
+        };
+        yield* backend.put(receipt.name, encodeReceipt(attempted));
+        const observed = yield* get(receipt.name);
+        if (Option.isNone(observed) || observed.value.id !== receipt.id) {
+          return yield* new ReceiptCreationRaceError({
+            name: receipt.name,
+            attemptedId: receipt.id,
+            observedId: Option.isSome(observed) ? observed.value.id : null,
+          });
+        }
+        if (observed.value.lease === null || !leaseMatches(lease, observed.value.lease)) {
+          return yield* new LeaseRaceError({
+            name: receipt.name,
+            attempted: lease,
+            observed: observed.value.lease,
+          });
+        }
+        return observed.value;
+      }),
     acquireLease: (name, operation, actor, now) =>
       Effect.gen(function* () {
         const receipt = yield* getRequired(name);
@@ -317,6 +376,20 @@ export function makeReceiptStore(
           { ...receipt, updatedAt: context.now, lease: renewed },
           renewed,
         );
+      }),
+    updateOperation: (context, update) =>
+      Effect.gen(function* () {
+        const receipt = yield* getRequired(context.name);
+        yield* requireLease(context, receipt);
+        const next: DeploymentReceipt = {
+          ...receipt,
+          ...(update.versions === undefined ? {} : { versions: update.versions }),
+          ...(update.cloudflare === undefined ? {} : { cloudflare: update.cloudflare }),
+          ...(update.github === undefined ? {} : { github: update.github }),
+          ...(update.autoUpgrade === undefined ? {} : { autoUpgrade: update.autoUpgrade }),
+          updatedAt: context.now,
+        };
+        return yield* putAndConfirmLease(next, context.lease);
       }),
     finishOperation: (context, completion) =>
       Effect.gen(function* () {

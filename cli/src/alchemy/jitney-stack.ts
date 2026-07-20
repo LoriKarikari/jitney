@@ -1,5 +1,6 @@
 import * as Alchemy from "alchemy";
 import type * as Provider from "alchemy/Provider";
+import { adopt } from "alchemy/AdoptPolicy";
 import { retain } from "alchemy/RemovalPolicy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
@@ -14,6 +15,7 @@ export interface JitneyStackInput {
   workerBundlePath: string;
   version: string;
   organization?: string;
+  manageGitHubApp?: boolean;
   githubCredentials?: {
     appId: Redacted.Redacted<string>;
     privateKey: Redacted.Redacted<string>;
@@ -24,6 +26,7 @@ export interface JitneyStackInput {
 type JitneyProviders = Cloudflare.Providers | Provider.Provider<GitHubAppResource>;
 type JitneyRequirements = JitneyProviders | Alchemy.StackServices;
 type JitneyStackProps = Alchemy.StackProps<JitneyRequirements>;
+export type JitneyProviderLayer = JitneyStackProps["providers"];
 
 export function jitneyStack(
   input: JitneyStackInput,
@@ -41,7 +44,7 @@ export function jitneyStack(
     Effect.gen(function* () {
       const receipts = yield* Cloudflare.KV.Namespace("LifecycleReceipts", {
         title: RECEIPT_NAMESPACE_TITLE,
-      }).pipe(retain());
+      }).pipe(adopt(true), retain());
       const runnerApplication = yield* Cloudflare.Containers.ContainerPlatform(
         "RunnerApplication",
         {
@@ -64,7 +67,7 @@ export function jitneyStack(
           date: "2026-07-01",
           flags: ["nodejs_compat"],
         },
-        crons: ["*/5 * * * *"],
+        crons: input.githubCredentials === undefined ? [] : ["*/5 * * * *"],
         observability: {
           enabled: true,
           headSamplingRate: 1,
@@ -74,6 +77,7 @@ export function jitneyStack(
           RUNNER_CONTAINERS: runnerContainers,
           JITNEY_RECEIPTS: receipts,
           JITNEY_DEPLOYMENT: input.deploymentId,
+          JITNEY_VERSION: input.version,
           CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
           RUNTIME_TIMEOUT_MS: "3600000",
           SCHEDULER_TICK_MS: "1000",
@@ -102,22 +106,25 @@ export function jitneyStack(
       yield* worker.bind("RunnerApplication", {
         containers: [{ className: "RunnerContainer", dev: undefined }],
       });
-      // GitHub App deletion requires browser confirmation and residue verification,
-      // so the command owns that step after Alchemy removes the Cloudflare resources.
-      const githubApp = yield* GitHubApp("GitHubApp", {
-        name: input.workerName,
-        webhookUrl: worker.url.as<string>().pipe(Output.map((url) => `${url}/webhook`)),
-        ...(input.organization === undefined ? {} : { organization: input.organization }),
-      }).pipe(retain());
+      if (input.manageGitHubApp === true) {
+        // GitHub App deletion requires browser confirmation and residue verification,
+        // so the command owns that step after Alchemy removes the Cloudflare resources.
+        yield* GitHubApp("GitHubApp", {
+          name: input.workerName,
+          webhookUrl: worker.url.as<string>().pipe(Output.map((url) => `${url}/webhooks/github`)),
+          ...(input.organization === undefined ? {} : { organization: input.organization }),
+        }).pipe(retain());
+      }
 
       return {
         deploymentId: input.deploymentId,
         workerName: worker.workerName,
         workerUrl: worker.url.as<string>(),
         runnerApplicationId: runnerApplication.applicationId,
+        runnerImage: runnerApplication.configuration.pipe(
+          Output.map((configuration) => configuration.image),
+        ),
         receiptNamespaceId: receipts.namespaceId,
-        githubAppId: githubApp.appId,
-        githubAppSlug: githubApp.slug,
       };
     }),
   );

@@ -7,3 +7,8 @@ npx get-jitney deploy
 ```
 
 Use `--organization YOUR_ORG` to register the GitHub App under an organization.
+If setup fails, Jitney rolls back every recorded resource. Pass
+`--keep-partial` to leave the installing receipt and resources for repair.
+
+Deployments created by 0.2.x must be removed before their names can be reused.
+See the [reinstall steps](https://github.com/LoriKarikari/jitney/blob/main/docs/operations/reinstall-pre-receipt-deployment.md).

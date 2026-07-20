@@ -1,28 +1,7 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { deploymentUrl } from "../src/deploy.js";
 import { ExistingWorkerError, InstallerError, renderFailure } from "../src/errors.js";
 import { run } from "../src/process.js";
-import { parseAccounts } from "../src/wrangler.js";
-
-describe("Wrangler boundaries", () => {
-  it("parses Cloudflare accounts", () => {
-    expect(
-      parseAccounts(JSON.stringify({ accounts: [{ id: "account-id", name: "Example" }] })),
-    ).toEqual([{ id: "account-id", name: "Example" }]);
-  });
-
-  it("rejects malformed account data", () => {
-    expect(() => parseAccounts('{"accounts":[{"id":1}]}')).toThrow();
-  });
-
-  it("extracts the deployed workers.dev URL", () => {
-    expect(deploymentUrl("Deployed\n  https://jitney-example.owner.workers.dev\n")).toBe(
-      "https://jitney-example.owner.workers.dev",
-    );
-  });
-});
-
 describe("subprocess boundary", () => {
   it("returns command failures through the Effect error channel", async () => {
     const exit = await Effect.runPromiseExit(

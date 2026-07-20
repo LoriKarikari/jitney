@@ -1,201 +1,535 @@
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createInterface } from "node:readline/promises";
-import { Effect, Ref, Schedule } from "effect";
-import { renderWranglerConfig, validateWorkerName } from "./config.js";
+import * as Containers from "@distilled.cloud/cloudflare/containers";
+import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
+import * as Workers from "@distilled.cloud/cloudflare/workers";
+import * as Alchemy from "alchemy";
+import { AuthProviders } from "alchemy/Auth";
+import * as Cloudflare from "alchemy/Cloudflare";
+import { deploy as alchemyDeploy } from "alchemy/Deploy";
+import { destroy as alchemyDestroy } from "alchemy/Destroy";
+import { PlatformServices } from "alchemy/Util/PlatformServices";
+import { hostname, userInfo } from "node:os";
+import { readFile } from "node:fs/promises";
+import { Effect, Layer, Option, Redacted, Ref, Schedule, Schema } from "effect";
+import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
+import * as HttpClient from "effect/unstable/http/HttpClient";
+import { jitneyProviders } from "./alchemy/providers.js";
+import { jitneyStack, type JitneyProviderLayer } from "./alchemy/jitney-stack.js";
 import {
+  GitHubAppOperationError,
+  GitHubAppOperations,
+  type GitHubAppAttributes,
+} from "./alchemy/github-app.js";
+import { workerBundlePath, validateWorkerName } from "./config.js";
+import {
+  ExistingDeploymentError,
   ExistingWorkerError,
   InstallerError,
   tryPromise,
   trySync,
   type InstallFailure,
-  type InstallerStep,
 } from "./errors.js";
 import {
+  claimGitHubRepositories,
+  releaseGitHubRepositories,
+  waitForGitHubInstallations,
+} from "./github-installations.js";
+import {
   createGitHubApp,
-  installationCount,
+  openGitHubAppDeletion,
   openInstallation,
+  waitForGitHubAppDeletion,
   type GitHubAppCredentials,
 } from "./github-app.js";
-import { copyRunnerImage } from "./oras.js";
-import type { CommandError, CommandResult } from "./process.js";
-import { cloudflareAccounts, type CloudflareAccount, wrangler } from "./wrangler.js";
+import {
+  DeploymentReceipts,
+  InstallPlatform,
+  installDeployment,
+  type InstallInput,
+  type InstallStackOutput,
+} from "./install.js";
+import {
+  ensureCloudflareReceiptNamespace,
+  findCloudflareReceiptNamespace,
+  makeCloudflareReceiptBackend,
+} from "./receipts/cloudflare.js";
+import { deleteImage } from "./oras.js";
+import { makeReceiptStore, type ReceiptStore } from "./receipts/store.js";
 
-type SetupState = { bootstrapDeployed: boolean; appSlug?: string };
+const HealthResponse = Schema.Struct({
+  status: Schema.Literal("ok"),
+  version: Schema.String,
+});
+
+const alchemyCli = Alchemy.Cli.of({
+  approvePlan: () => Effect.succeed(true),
+  displayPlan: () => Effect.void,
+  startApplySession: () =>
+    Effect.succeed({
+      emit: () => Effect.void,
+      done: () => Effect.void,
+    }),
+});
+
+const platformRuntime = Layer.merge(PlatformServices, FetchHttpClient.layer);
+const commandRuntime = Layer.mergeAll(
+  Alchemy.AlchemyContextLive,
+  Layer.succeed(Alchemy.Cli, alchemyCli),
+  Layer.succeed(AuthProviders, {}),
+).pipe(Layer.provideMerge(platformRuntime));
+const cloudflareRuntime = Cloudflare.CloudflareApiLive().pipe(Layer.provideMerge(commandRuntime));
+
+interface JitneyStackOutput {
+  readonly workerUrl: string;
+  readonly runnerApplicationId: string;
+  readonly runnerImage: string;
+}
 
 export function deploy(options: {
   workerName: string;
   organization?: string;
+  keepPartial?: boolean;
 }): Effect.Effect<void, InstallFailure> {
   return Effect.gen(function* () {
-    const workerName = yield* trySync("argument_parsing", "The Worker name is invalid", () =>
+    const name = yield* trySync("argument_parsing", "The Worker name is invalid", () =>
       validateWorkerName(options.workerName),
     );
     const version = yield* packageVersion();
-    const accounts = yield* cloudflareAccounts().pipe(
+    const actor = yield* trySync(
+      "argument_parsing",
+      "Could not identify the command actor",
+      () => `${userInfo().username}@${hostname()}`,
+    );
+    const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
+    const existingScope = yield* findCloudflareReceiptNamespace(accountId).pipe(
       Effect.mapError(
         (cause) =>
           new InstallerError({
-            step: "cloudflare_authentication",
-            message: "Could not authenticate with Cloudflare",
+            step: "receipt_store",
+            message: "Could not inspect the deployment receipt store",
             cause,
           }),
       ),
     );
-    const account = yield* selectAccount(accounts);
-    const state = yield* Ref.make<SetupState>({ bootstrapDeployed: false });
+    const existingStore = yield* Option.match(existingScope, {
+      onNone: () => Effect.succeed(Option.none<ReceiptStore>()),
+      onSome: (scope) => Effect.map(makeCloudflareStore(scope), Option.some),
+    });
+    if (Option.isSome(existingStore)) {
+      yield* assertDeploymentAbsent(name, existingStore.value);
+    }
+    yield* assertCloudflareResourcesAbsent(accountId, name);
 
-    return yield* Effect.acquireUseRelease(
-      tryPromise("filesystem", "Could not create a deployment workspace", () =>
-        mkdtemp(join(tmpdir(), "jitney-deploy-")),
-      ),
-      (directory) =>
-        installInDirectory({
-          account,
-          directory,
-          options,
-          state,
-          version,
-          workerName,
-        }).pipe(
-          Effect.catch((error) =>
-            reportPartialSetup(state, workerName, options.organization).pipe(
-              Effect.andThen(Effect.fail(error)),
-            ),
+    const receipts = yield* Option.match(existingStore, {
+      onNone: () =>
+        ensureCloudflareReceiptNamespace(accountId).pipe(
+          Effect.mapError(
+            (cause) =>
+              new InstallerError({
+                step: "receipt_store",
+                message: "Could not prepare the deployment receipt store",
+                cause,
+              }),
           ),
+          Effect.flatMap(makeCloudflareStore),
         ),
-      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
-    );
-  });
-}
-
-function installInDirectory(input: {
-  account: CloudflareAccount;
-  directory: string;
-  options: { workerName: string; organization?: string };
-  state: Ref.Ref<SetupState>;
-  version: string;
-  workerName: string;
-}): Effect.Effect<void, InstallFailure> {
-  const { account, directory, options, state, version, workerName } = input;
-  const configPath = join(directory, "wrangler.json");
-  const secretsPath = join(directory, "secrets.json");
-  const destination = `registry.cloudflare.com/${account.id}/jitney:${version}`;
-
-  return Effect.gen(function* () {
-    yield* writeConfig(configPath, {
-      accountId: account.id,
-      image: destination,
-      workerName,
-      configured: false,
+      onSome: Effect.succeed,
     });
-    yield* assertWorkerAbsent(configPath, workerName);
+    const credentials = yield* Ref.make(Option.none<GitHubAppCredentials>());
+    const platform = yield* makeInstallPlatform(credentials);
 
-    yield* Effect.sync(() =>
-      console.log(`Copying Jitney ${version} into your Cloudflare registry...`),
-    );
-    yield* copyRunnerImage({ accountId: account.id, configPath, version });
-
-    yield* Effect.sync(() => console.log(`Deploying bootstrap Worker ${workerName}...`));
-    const bootstrap = yield* command(
-      "worker_deployment",
-      "Could not deploy the bootstrap Worker",
-      wrangler(["deploy", "--config", configPath], { echo: true }),
-    );
-    yield* Ref.update(state, (current) => ({ ...current, bootstrapDeployed: true }));
-    const workerUrl = yield* trySync(
-      "worker_deployment",
-      "Wrangler did not report a workers.dev URL",
-      () => deploymentUrl(`${bootstrap.stdout}\n${bootstrap.stderr}`),
-    );
-
-    const credentials = yield* createGitHubApp({
-      workerName,
-      workerUrl,
+    const result = yield* installDeployment({
+      name,
+      accountId,
+      version,
+      actor,
       ...(options.organization === undefined ? {} : { organization: options.organization }),
-    });
-    yield* Ref.update(state, (current) => ({ ...current, appSlug: credentials.slug }));
-    yield* storeSecrets(secretsPath, configPath, workerName, credentials);
-
-    yield* writeConfig(configPath, {
-      accountId: account.id,
-      image: destination,
-      workerName,
-      configured: true,
-    });
-    yield* Effect.sync(() => console.log("Enabling webhooks and reconciliation..."));
-    yield* command(
-      "worker_deployment",
-      "Could not enable the configured Worker",
-      wrangler(["deploy", "--config", configPath], { echo: true }),
+      ...(options.keepPartial === undefined ? {} : { keepPartial: options.keepPartial }),
+    }).pipe(
+      Effect.provideService(DeploymentReceipts, receipts),
+      Effect.provideService(InstallPlatform, platform),
     );
-
-    yield* Effect.sync(() =>
-      console.log(
-        "Opening GitHub to install the App. Choose the private repositories that may use Jitney.",
-      ),
-    );
-    yield* openInstallation(credentials);
-    yield* waitForInstallation(credentials);
 
     yield* Effect.sync(() => {
-      console.log(`\nJitney is ready at ${workerUrl}`);
+      console.log(`\nJitney is ready at ${result.workerUrl}`);
       console.log("Use `runs-on: jitney` in an installed private repository.");
     });
-  });
-}
-
-function assertWorkerAbsent(
-  configPath: string,
-  workerName: string,
-): Effect.Effect<void, InstallerError | ExistingWorkerError> {
-  return wrangler(["deployments", "list", "--name", workerName, "--config", configPath]).pipe(
-    Effect.matchEffect({
-      onFailure: (error) =>
-        /does not exist|code: 10007/.test(error.output)
-          ? Effect.void
-          : Effect.fail(
-              new InstallerError({
-                step: "existing_worker_check",
-                message: "Could not check whether the Worker already exists",
-                cause: error,
-              }),
-            ),
-      onSuccess: () => Effect.fail(new ExistingWorkerError({ workerName })),
-    }),
+  }).pipe(
+    Effect.provide(cloudflareRuntime),
+    Effect.mapError(
+      (cause): InstallFailure =>
+        isInstallFailure(cause)
+          ? cause
+          : new InstallerError({
+              step: "cloudflare_authentication",
+              message: "Could not authenticate with Cloudflare",
+              cause,
+            }),
+    ),
   );
 }
 
-function storeSecrets(
-  secretsPath: string,
-  configPath: string,
-  workerName: string,
-  credentials: GitHubAppCredentials,
-): Effect.Effect<void, InstallerError> {
-  return Effect.gen(function* () {
-    yield* tryPromise("secret_storage", "Could not write temporary Worker secrets", () =>
-      writeFile(
-        secretsPath,
-        JSON.stringify({
-          GITHUB_APP_ID: credentials.appId,
-          GITHUB_APP_PRIVATE_KEY: credentials.privateKey,
-          GITHUB_WEBHOOK_SECRET: credentials.webhookSecret,
+const makeCloudflareStore = Effect.fn(function* (
+  scope: Parameters<typeof makeCloudflareReceiptBackend>[0],
+) {
+  const backend = yield* makeCloudflareReceiptBackend(scope).pipe(
+    Effect.mapError(
+      (cause) =>
+        new InstallerError({
+          step: "receipt_store",
+          message: "Could not connect to the deployment receipt store",
+          cause,
         }),
-        { mode: 0o600 },
-      ),
+    ),
+  );
+  return makeReceiptStore(backend);
+});
+
+const assertDeploymentAbsent = Effect.fn(function* (name: string, receipts: ReceiptStore) {
+  const existingReceipt = yield* receipts.get(name).pipe(
+    Effect.mapError(
+      (cause) =>
+        new InstallerError({
+          step: "receipt_store",
+          message: `Could not check deployment ${name}`,
+          cause,
+        }),
+    ),
+  );
+  if (Option.isSome(existingReceipt)) {
+    return yield* new ExistingDeploymentError({
+      name,
+      deploymentId: existingReceipt.value.id,
+      phase: existingReceipt.value.phase,
+    });
+  }
+});
+
+const assertCloudflareResourcesAbsent = Effect.fn(function* (accountId: string, name: string) {
+  const worker = yield* Workers.getScriptSetting({ accountId, scriptName: name }).pipe(
+    Effect.map(Option.fromUndefinedOr),
+    Effect.catchTag("WorkerNotFound", () => Effect.succeed(Option.none())),
+    Effect.mapError(
+      (cause) =>
+        new InstallerError({
+          step: "existing_worker_check",
+          message: "Could not check whether the Worker already exists",
+          cause,
+        }),
+    ),
+  );
+  if (Option.isSome(worker)) return yield* new ExistingWorkerError({ workerName: name });
+
+  const applications = yield* Containers.listContainerApplications({ accountId }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new InstallerError({
+          step: "existing_worker_check",
+          message: "Could not check whether the container application already exists",
+          cause,
+        }),
+    ),
+  );
+  if (applications.some((application) => application.name === `${name}-runner`)) {
+    return yield* new InstallerError({
+      step: "existing_worker_check",
+      message: `Container application ${name}-runner already exists. Refusing to overwrite it.`,
+    });
+  }
+});
+
+const githubAppAttributes = (credentials: GitHubAppCredentials): GitHubAppAttributes => ({
+  appId: credentials.appId,
+  slug: credentials.slug,
+  settingsUrl:
+    credentials.ownerType === "Organization"
+      ? `https://github.com/organizations/${credentials.ownerLogin}/settings/apps/${credentials.slug}`
+      : `https://github.com/settings/apps/${credentials.slug}`,
+  ownerLogin: credentials.ownerLogin,
+  ownerType: credentials.ownerType,
+});
+
+const makeInstallPlatform = Effect.fn(function* (
+  capturedCredentials: Ref.Ref<Option.Option<GitHubAppCredentials>>,
+) {
+  const credentialsService = yield* Credentials;
+  const httpClient = yield* HttpClient.HttpClient;
+  const provideCloudflareApi = <A, E>(
+    effect: Effect.Effect<A, E, Credentials | HttpClient.HttpClient>,
+  ) =>
+    effect.pipe(
+      Effect.provideService(Credentials, credentialsService),
+      Effect.provideService(HttpClient.HttpClient, httpClient),
     );
-    yield* tryPromise("secret_storage", "Could not protect temporary Worker secrets", () =>
-      chmod(secretsPath, 0o600),
-    );
-    yield* command(
-      "secret_storage",
-      "Could not store the GitHub App credentials in Cloudflare",
-      wrangler(["secret", "bulk", secretsPath, "--name", workerName, "--config", configPath], {
-        echo: true,
-      }),
-    );
+
+  const githubOperations = Layer.succeed(GitHubAppOperations, {
+    reconcile: ({ current }) => {
+      if (current !== undefined) return Effect.succeed(current);
+      return Ref.get(capturedCredentials).pipe(
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new GitHubAppOperationError({
+                  operation: "reconcile",
+                  cause: new Error("GitHub App credentials are unavailable"),
+                }),
+              ),
+            onSome: (credentials) => Effect.succeed(githubAppAttributes(credentials)),
+          }),
+        ),
+      );
+    },
+    delete: () => Effect.void,
+    list: () => Effect.succeed([]),
   });
+  // Alchemy beta.63 keeps its local-runtime state service private, so the
+  // public provider type cannot see that jitneyProviders supplies it.
+  const providers = jitneyProviders(githubOperations) as unknown as JitneyProviderLayer;
+
+  const runStack = (
+    input: InstallInput & { deploymentId: string },
+    credentials?: GitHubAppCredentials,
+  ) =>
+    alchemyDeploy({
+      stack: jitneyStack(
+        {
+          deploymentId: input.deploymentId,
+          workerName: input.name,
+          workerBundlePath: workerBundlePath(),
+          version: input.version,
+          manageGitHubApp: credentials !== undefined,
+          ...(input.organization === undefined ? {} : { organization: input.organization }),
+          ...(credentials === undefined
+            ? {}
+            : {
+                githubCredentials: {
+                  appId: Redacted.make(credentials.appId),
+                  privateKey: Redacted.make(credentials.privateKey),
+                  webhookSecret: Redacted.make(credentials.webhookSecret),
+                },
+              }),
+        },
+        { providers },
+      ),
+      stage: input.name,
+    }).pipe(
+      Effect.provideService(Alchemy.Cli, alchemyCli),
+      Effect.mapError(
+        (cause) =>
+          new InstallerError({
+            step: "worker_deployment",
+            message: "Could not deploy the Jitney resource stack",
+            cause,
+          }),
+      ),
+    ) as unknown as Effect.Effect<JitneyStackOutput, InstallerError>;
+
+  const destroyStack = (
+    input: InstallInput & { deploymentId: string },
+    credentials?: GitHubAppCredentials,
+  ) =>
+    alchemyDestroy({
+      stack: jitneyStack(
+        {
+          deploymentId: input.deploymentId,
+          workerName: input.name,
+          workerBundlePath: workerBundlePath(),
+          version: input.version,
+          manageGitHubApp: credentials !== undefined,
+          ...(input.organization === undefined ? {} : { organization: input.organization }),
+          ...(credentials === undefined
+            ? {}
+            : {
+                githubCredentials: {
+                  appId: Redacted.make(credentials.appId),
+                  privateKey: Redacted.make(credentials.privateKey),
+                  webhookSecret: Redacted.make(credentials.webhookSecret),
+                },
+              }),
+        },
+        { providers },
+      ),
+      stage: input.name,
+    }).pipe(
+      Effect.provideService(Alchemy.Cli, alchemyCli),
+      Effect.asVoid,
+      Effect.mapError(
+        (cause) =>
+          new InstallerError({
+            step: "rollback",
+            message: "Could not remove the partial Cloudflare deployment",
+            cause,
+          }),
+      ),
+    ) as Effect.Effect<void, InstallerError>;
+
+  return InstallPlatform.of({
+    deployBootstrap: (input) =>
+      Effect.gen(function* () {
+        yield* Effect.sync(() =>
+          console.log(`Deploying Jitney ${input.version} as ${input.name}...`),
+        );
+        const output = yield* runStack(input);
+        const imagePrefix = `registry.cloudflare.com/${input.accountId}/${input.name}-runner:`;
+        if (
+          !output.runnerImage.startsWith(imagePrefix) ||
+          output.runnerImage.length === imagePrefix.length
+        ) {
+          return yield* new InstallerError({
+            step: "registry_copy",
+            message: `Cloudflare returned an unexpected runner image: ${output.runnerImage}`,
+          });
+        }
+        return {
+          workerUrl: output.workerUrl,
+          applicationId: output.runnerApplicationId,
+          registryTag: output.runnerImage.slice(imagePrefix.length),
+        } satisfies InstallStackOutput;
+      }),
+    createGitHubApp: (input) =>
+      createGitHubApp({
+        workerName: input.name,
+        workerUrl: input.workerUrl,
+        ...(input.organization === undefined ? {} : { organization: input.organization }),
+      }).pipe(
+        Effect.tap((credentials) => Ref.set(capturedCredentials, Option.some(credentials))),
+        Effect.flatMap((credentials) => {
+          const appId = Number(credentials.appId);
+          return Number.isSafeInteger(appId)
+            ? Effect.succeed({
+                appId,
+                appSlug: credentials.slug,
+                ownerLogin: credentials.ownerLogin,
+                ownerType: credentials.ownerType,
+                credentials,
+              })
+            : Effect.fail(
+                new InstallerError({
+                  step: "github_app_conversion",
+                  message: "GitHub returned an invalid App id",
+                }),
+              );
+        }),
+      ),
+    activate: (input) =>
+      Effect.sync(() => console.log("Enabling webhooks and reconciliation...")).pipe(
+        Effect.andThen(runStack(input, input.credentials)),
+        Effect.asVoid,
+      ),
+    installGitHubApp: (credentials) =>
+      Effect.gen(function* () {
+        yield* Effect.sync(() =>
+          console.log(
+            "Opening GitHub to install the App. Choose the private repositories that may use Jitney.",
+          ),
+        );
+        yield* openInstallation(credentials);
+        return yield* waitForGitHubInstallations(credentials);
+      }),
+    claimRepositories: claimGitHubRepositories,
+    checkHealth: (workerUrl, version) =>
+      httpClient.get(`${workerUrl}/health`).pipe(
+        Effect.flatMap((response) => response.json),
+        Effect.flatMap((body) =>
+          Effect.try({
+            try: () => Schema.decodeUnknownSync(HealthResponse)(body),
+            catch: (cause) =>
+              new InstallerError({
+                step: "health_check",
+                message: "Jitney returned an invalid health response",
+                cause,
+              }),
+          }),
+        ),
+        Effect.flatMap((health) =>
+          health.version === version
+            ? Effect.void
+            : Effect.fail(
+                new InstallerError({
+                  step: "health_check",
+                  message: `Jitney reported version ${health.version}; expected ${version}`,
+                }),
+              ),
+        ),
+        Effect.retry(Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(29)])),
+        Effect.mapError((cause) =>
+          cause instanceof InstallerError
+            ? cause
+            : new InstallerError({
+                step: "health_check",
+                message: "Jitney did not become healthy",
+                cause,
+              }),
+        ),
+      ),
+    rollback: (input) =>
+      Effect.gen(function* () {
+        const captured = Option.getOrUndefined(yield* Ref.get(capturedCredentials));
+        const credentials = input.credentials ?? captured;
+        if (credentials !== undefined) {
+          yield* releaseGitHubRepositories(
+            credentials,
+            input.deploymentId,
+            input.receipt.github.installations,
+          );
+        }
+        yield* destroyStack(input, credentials);
+        const registryTag = input.receipt.cloudflare.tags.current;
+        if (input.receipt.cloudflare.applicationId !== null && registryTag !== null) {
+          const registry = yield* provideCloudflareApi(
+            Containers.createContainerRegistryCredentials({
+              accountId: input.accountId,
+              registryId: "registry.cloudflare.com",
+              permissions: ["pull", "push"],
+              expirationMinutes: 60,
+            }),
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new InstallerError({
+                  step: "registry_cleanup",
+                  message: "Could not obtain credentials to remove the partial runner image",
+                  cause,
+                }),
+            ),
+          );
+          const username = registry.username ?? registry.user;
+          if (username === null || username === undefined) {
+            return yield* new InstallerError({
+              step: "registry_cleanup",
+              message: "Cloudflare registry credentials did not include a username",
+            });
+          }
+          yield* deleteImage({
+            image: `registry.cloudflare.com/${input.accountId}/${input.receipt.cloudflare.registryRepo}:${registryTag}`,
+            registryHost: "registry.cloudflare.com",
+            username,
+            password: registry.password,
+          });
+        }
+        if (credentials !== undefined) {
+          yield* Effect.sync(() =>
+            console.log(
+              `Delete the partial GitHub App ${credentials.slug} in the browser to finish rollback.`,
+            ),
+          );
+          yield* openGitHubAppDeletion(credentials);
+          yield* waitForGitHubAppDeletion(credentials);
+        }
+      }),
+  });
+});
+
+function isInstallFailure(cause: unknown): cause is InstallFailure {
+  return (
+    typeof cause === "object" &&
+    cause !== null &&
+    "_tag" in cause &&
+    (cause._tag === "InstallerError" ||
+      cause._tag === "ExistingWorkerError" ||
+      cause._tag === "ExistingDeploymentError" ||
+      cause._tag === "InstallRollbackError")
+  );
 }
 
 function packageVersion(): Effect.Effect<string, InstallerError> {
@@ -217,114 +551,4 @@ function packageVersion(): Effect.Effect<string, InstallerError> {
       }),
     ),
   );
-}
-
-function selectAccount(
-  accounts: CloudflareAccount[],
-): Effect.Effect<CloudflareAccount, InstallerError> {
-  if (accounts.length === 0) {
-    return Effect.fail(
-      new InstallerError({
-        step: "cloudflare_account_selection",
-        message: "Your Cloudflare login has no accounts",
-      }),
-    );
-  }
-  if (accounts.length === 1) return Effect.succeed(accounts[0]!);
-  return Effect.gen(function* () {
-    yield* Effect.sync(() => {
-      console.log("Cloudflare accounts:");
-      accounts.forEach((account, index) => console.log(`  ${index + 1}. ${account.name}`));
-    });
-    const answer = yield* tryPromise(
-      "cloudflare_account_selection",
-      "Could not read the Cloudflare account selection",
-      () => waitForEnter("Choose an account number: "),
-    );
-    const selected = accounts[Number(answer) - 1];
-    if (selected === undefined) {
-      return yield* Effect.fail(
-        new InstallerError({
-          step: "cloudflare_account_selection",
-          message: "Invalid Cloudflare account selection",
-        }),
-      );
-    }
-    return selected;
-  });
-}
-
-function waitForInstallation(
-  credentials: GitHubAppCredentials,
-): Effect.Effect<void, InstallerError> {
-  const pending = new InstallerError({
-    step: "github_app_installation",
-    message: "The GitHub App has not been installed yet",
-  });
-  const check = installationCount(credentials).pipe(
-    Effect.flatMap((count) => (count > 0 ? Effect.void : Effect.fail(pending))),
-  );
-  return Effect.sync(() => process.stdout.write("Waiting for the GitHub App installation")).pipe(
-    Effect.andThen(
-      check.pipe(Effect.retry(Schedule.max([Schedule.spaced("5 seconds"), Schedule.recurs(119)]))),
-    ),
-    Effect.tap(() => Effect.sync(() => process.stdout.write(" done\n"))),
-  );
-}
-
-function reportPartialSetup(
-  state: Ref.Ref<SetupState>,
-  workerName: string,
-  organization?: string,
-): Effect.Effect<void> {
-  return Ref.get(state).pipe(
-    Effect.flatMap((current) =>
-      Effect.sync(() => {
-        console.error(`\nSetup stopped. The Worker name is ${workerName}.`);
-        if (current.bootstrapDeployed) {
-          console.error(
-            `To remove the partial deployment: npx wrangler delete ${workerName} --force`,
-          );
-        }
-        if (current.appSlug !== undefined) {
-          const settingsUrl = organization
-            ? `https://github.com/organizations/${organization}/settings/apps/${current.appSlug}`
-            : `https://github.com/settings/apps/${current.appSlug}`;
-          console.error(`Delete the partial GitHub App at ${settingsUrl}`);
-        }
-      }),
-    ),
-  );
-}
-
-function writeConfig(
-  configPath: string,
-  config: Parameters<typeof renderWranglerConfig>[0],
-): Effect.Effect<void, InstallerError> {
-  return tryPromise("filesystem", "Could not write the Wrangler configuration", () =>
-    writeFile(configPath, renderWranglerConfig(config)),
-  );
-}
-
-function command<A extends CommandResult>(
-  step: InstallerStep,
-  message: string,
-  effect: Effect.Effect<A, CommandError>,
-): Effect.Effect<A, InstallerError> {
-  return effect.pipe(Effect.mapError((cause) => new InstallerError({ step, message, cause })));
-}
-
-async function waitForEnter(prompt: string): Promise<string> {
-  const readline = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return await readline.question(prompt);
-  } finally {
-    readline.close();
-  }
-}
-
-export function deploymentUrl(output: string): string {
-  const match = output.match(/https:\/\/[^\s]+\.workers\.dev/);
-  if (match === null) throw new Error("missing workers.dev URL");
-  return match[0];
 }

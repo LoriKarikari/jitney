@@ -32,6 +32,30 @@ export const findCloudflareReceiptNamespace = Effect.fn(function* (accountId: st
   return Option.map(namespace, ({ id }) => ({ accountId, namespaceId: id }));
 });
 
+export const ensureCloudflareReceiptNamespace = Effect.fn(function* (accountId: string) {
+  const existing = yield* findCloudflareReceiptNamespace(accountId);
+  if (Option.isSome(existing)) return existing.value;
+
+  const created = yield* KV.createNamespace({
+    accountId,
+    title: RECEIPT_NAMESPACE_TITLE,
+  }).pipe(
+    Effect.map(({ id }) => Option.some({ accountId, namespaceId: id })),
+    Effect.catchTag("NamespaceTitleAlreadyExists", () => findCloudflareReceiptNamespace(accountId)),
+    mapBackendError("find_namespace"),
+  );
+  return yield* Option.match(created, {
+    onNone: () =>
+      Effect.fail(
+        backendError(
+          "find_namespace",
+          new Error("Receipt namespace exists but could not be found after a creation race"),
+        ),
+      ),
+    onSome: Effect.succeed,
+  });
+});
+
 export const makeCloudflareReceiptBackend = Effect.fn(function* (scope: CloudflareReceiptScope) {
   const credentials = yield* Credentials;
   const httpClient = yield* HttpClient.HttpClient;

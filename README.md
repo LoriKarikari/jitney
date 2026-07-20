@@ -57,6 +57,11 @@ jobs:
 
 ## Setup
 
+Deployments created by Jitney 0.2.x must be removed and reinstalled once; the
+lifecycle-aware CLI does not adopt them. Follow the
+[pre-receipt reinstall steps](docs/operations/reinstall-pre-receipt-deployment.md)
+before reusing the old deployment name.
+
 ```bash
 npx get-jitney deploy
 ```

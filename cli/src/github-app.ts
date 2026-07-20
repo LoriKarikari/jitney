@@ -2,7 +2,7 @@ import { createAppAuth } from "@octokit/auth-app";
 import { request } from "@octokit/request";
 import { randomBytes, createPrivateKey } from "node:crypto";
 import { createServer } from "node:http";
-import { Effect, Schema } from "effect";
+import { Effect, Schedule, Schema } from "effect";
 import open from "open";
 import { InstallerError, tryPromise, trySync } from "./errors.js";
 
@@ -11,6 +11,8 @@ export type GitHubAppCredentials = {
   privateKey: string;
   webhookSecret: string;
   slug: string;
+  ownerLogin: string;
+  ownerType: "User" | "Organization";
 };
 
 const ManifestConversion = Schema.Struct({
@@ -18,6 +20,10 @@ const ManifestConversion = Schema.Struct({
   pem: Schema.String,
   webhook_secret: Schema.String,
   slug: Schema.String,
+  owner: Schema.Struct({
+    login: Schema.String,
+    type: Schema.Literals(["User", "Organization"]),
+  }),
 });
 
 export function createGitHubApp(options: {
@@ -62,6 +68,8 @@ export function createGitHubApp(options: {
           privateKey,
           webhookSecret: conversion.webhook_secret,
           slug: conversion.slug,
+          ownerLogin: conversion.owner.login,
+          ownerType: conversion.owner.type,
         };
       }),
     (callback) => Effect.sync(callback.close),
@@ -77,6 +85,35 @@ export function openInstallation(
     async () => {
       await open(`https://github.com/apps/${credentials.slug}/installations/new`);
     },
+  );
+}
+
+export function openGitHubAppDeletion(
+  credentials: GitHubAppCredentials,
+): Effect.Effect<void, InstallerError> {
+  const settingsUrl =
+    credentials.ownerType === "Organization"
+      ? `https://github.com/organizations/${credentials.ownerLogin}/settings/apps/${credentials.slug}/advanced`
+      : `https://github.com/settings/apps/${credentials.slug}/advanced`;
+  return tryPromise("rollback", "Could not open GitHub App deletion settings", () =>
+    open(settingsUrl),
+  ).pipe(Effect.asVoid);
+}
+
+export function waitForGitHubAppDeletion(
+  credentials: GitHubAppCredentials,
+): Effect.Effect<void, InstallerError> {
+  const pending = new InstallerError({
+    step: "rollback",
+    message: `GitHub App ${credentials.slug} still exists`,
+  });
+  const check = tryPromise("rollback", "Could not verify GitHub App deletion", () =>
+    fetch(`https://github.com/apps/${credentials.slug}`, { redirect: "manual" }),
+  ).pipe(
+    Effect.flatMap((response) => (response.status === 404 ? Effect.void : Effect.fail(pending))),
+  );
+  return check.pipe(
+    Effect.retry(Schedule.max([Schedule.spaced("5 seconds"), Schedule.recurs(119)])),
   );
 }
 
@@ -188,7 +225,7 @@ export function githubAppManifest(
     redirect_url: redirectUrl,
     public: false,
     default_events: ["workflow_job"],
-    default_permissions: { actions: "read", administration: "write" },
+    default_permissions: { actions: "read", administration: "write", variables: "write" },
   };
 }
 

@@ -6,11 +6,16 @@ export type InstallerStep =
   | "cloudflare_account_selection"
   | "existing_worker_check"
   | "filesystem"
+  | "health_check"
   | "github_app_conversion"
   | "github_app_installation"
   | "github_app_setup"
   | "oras_download"
+  | "registry_cleanup"
   | "registry_copy"
+  | "repository_ownership"
+  | "receipt_store"
+  | "rollback"
   | "secret_storage"
   | "worker_deployment";
 
@@ -24,7 +29,22 @@ export class ExistingWorkerError extends Data.TaggedError("ExistingWorkerError")
   workerName: string;
 }> {}
 
-export type InstallFailure = InstallerError | ExistingWorkerError;
+export class ExistingDeploymentError extends Data.TaggedError("ExistingDeploymentError")<{
+  name: string;
+  deploymentId: string;
+  phase: string;
+}> {}
+
+export class InstallRollbackError extends Data.TaggedError("InstallRollbackError")<{
+  cause: unknown;
+  rollbackCause: unknown;
+}> {}
+
+export type InstallFailure =
+  | InstallerError
+  | ExistingWorkerError
+  | ExistingDeploymentError
+  | InstallRollbackError;
 
 export function tryPromise<A>(
   step: InstallerStep,
@@ -51,6 +71,12 @@ export function trySync<A>(
 export function renderFailure(error: InstallFailure): string {
   if (error._tag === "ExistingWorkerError") {
     return `Worker ${error.workerName} already exists. Choose another --name; upgrades are not supported yet.`;
+  }
+  if (error._tag === "ExistingDeploymentError") {
+    return `Deployment ${error.name} already exists (${error.deploymentId}, phase: ${error.phase}). Refusing to overwrite it.`;
+  }
+  if (error._tag === "InstallRollbackError") {
+    return "Installation failed and cleanup was incomplete. The deployment receipt was kept for repair.";
   }
   return `${error.message} (${error.step})`;
 }

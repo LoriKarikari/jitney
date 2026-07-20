@@ -70,8 +70,8 @@ The installer signs you into Cloudflare if needed, records the deployment
 before creating resources, and uses its embedded lifecycle engine to call the
 Cloudflare APIs directly. It copies the release-pinned runner image into your
 Cloudflare registry, creates the Container Application, and deploys the Worker
-with its Durable Objects and bindings. You do not need Wrangler, Docker, or a
-separate Alchemy installation.
+with its Durable Objects and bindings. You do not need Docker or any separate
+deployment tooling.
 
 The installer then opens GitHub to create and install a preconfigured private
 GitHub App. Jitney stores the generated App ID, private key, and webhook secret
@@ -94,8 +94,7 @@ job instead.
 
 ## Deployment defaults
 
-These values are currently managed by the installer rather than a local
-`wrangler.jsonc` file.
+These values are currently managed by the installer.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |

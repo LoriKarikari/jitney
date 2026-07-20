@@ -7,7 +7,7 @@ npx get-jitney deploy
 ```
 
 The installer deploys through Cloudflare's APIs using its embedded lifecycle
-engine. Users do not need Wrangler, Docker, or a separate Alchemy installation.
+engine. Users do not need Docker or any separate deployment tooling.
 
 Use `--organization YOUR_ORG` to register the GitHub App under an organization.
 If setup fails, Jitney rolls back every recorded resource. Pass

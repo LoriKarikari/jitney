@@ -14,11 +14,20 @@ export interface CloudflareReceiptScope {
 const backendError = (operation: ReceiptBackendError["operation"], cause: unknown) =>
   new ReceiptBackendError({ operation, cause });
 
+const mapBackendError = (operation: ReceiptBackendError["operation"]) =>
+  Effect.mapError((cause: unknown) => backendError(operation, cause));
+
+const voidResult = <A, E, R>(
+  operation: ReceiptBackendError["operation"],
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<void, ReceiptBackendError, R> =>
+  effect.pipe(Effect.asVoid, mapBackendError(operation));
+
 export const findCloudflareReceiptNamespace = Effect.fn(function* (accountId: string) {
   const namespace = yield* KV.listNamespaces.items({ accountId }).pipe(
     Stream.filter((candidate) => candidate.title === RECEIPT_NAMESPACE_TITLE),
     Stream.runHead,
-    Effect.mapError((cause) => backendError("find_namespace", cause)),
+    mapBackendError("find_namespace"),
   );
   return Option.map(namespace, ({ id }) => ({ accountId, namespaceId: id }));
 });
@@ -34,46 +43,20 @@ export const makeCloudflareReceiptBackend = Effect.fn(function* (scope: Cloudfla
 
   return {
     get: (name) =>
-      provideApi(
-        KV.getNamespaceValue({
-          ...scope,
-          keyName: name,
-        }),
-      ).pipe(
+      provideApi(KV.getNamespaceValue({ ...scope, keyName: name })).pipe(
         Effect.map((value) => String(value)),
         Effect.catchTag("KeyNotFound", () => Effect.succeed(undefined)),
-        Effect.mapError((cause) => backendError("get", cause)),
+        mapBackendError("get"),
       ),
     put: (name, value) =>
-      provideApi(
-        KV.putNamespaceValue({
-          ...scope,
-          keyName: name,
-          value,
-        }),
-      ).pipe(
-        Effect.asVoid,
-        Effect.mapError((cause) => backendError("put", cause)),
-      ),
+      voidResult("put", provideApi(KV.putNamespaceValue({ ...scope, keyName: name, value }))),
     remove: (name) =>
-      provideApi(
-        KV.deleteNamespaceValue({
-          ...scope,
-          keyName: name,
-        }),
-      ).pipe(
-        Effect.asVoid,
-        Effect.mapError((cause) => backendError("remove", cause)),
-      ),
+      voidResult("remove", provideApi(KV.deleteNamespaceValue({ ...scope, keyName: name }))),
     listKeys: () =>
       provideApi(KV.listNamespaceKeys.items(scope).pipe(Stream.runCollect)).pipe(
         Effect.map((keys) => [...keys].map((key) => key.name)),
-        Effect.mapError((cause) => backendError("list_keys", cause)),
+        mapBackendError("list_keys"),
       ),
-    removeNamespace: () =>
-      provideApi(KV.deleteNamespace(scope)).pipe(
-        Effect.asVoid,
-        Effect.mapError((cause) => backendError("remove_namespace", cause)),
-      ),
+    removeNamespace: () => voidResult("remove_namespace", provideApi(KV.deleteNamespace(scope))),
   } satisfies ReceiptBackend;
 });

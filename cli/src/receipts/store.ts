@@ -1,4 +1,4 @@
-import { Array as Arr, Data, DateTime, Effect, Option, Schema } from "effect";
+import { Array as Arr, Data, DateTime, Duration, Effect, Option, Schema } from "effect";
 import {
   DeploymentReceiptSchema,
   type DeploymentOperation,
@@ -81,14 +81,31 @@ export type ReceiptStoreError =
   | LeaseExpiredError
   | DeploymentOwnershipError;
 
-export interface OperationCompletion {
+/** The lease a running command holds, bundled with the deployment it locks. */
+export interface LeaseContext {
+  readonly name: string;
+  readonly lease: OperationLease;
   readonly now: DateTime.Utc;
+}
+
+export interface OperationCompletion {
   readonly phase: DeploymentPhase;
   readonly outcome: "succeeded" | "failed";
   readonly versions?: DeploymentReceipt["versions"];
   readonly cloudflare?: DeploymentReceipt["cloudflare"];
   readonly github?: DeploymentReceipt["github"];
   readonly autoUpgrade?: DeploymentReceipt["autoUpgrade"];
+}
+
+export interface ReceiptStoreOptions {
+  /**
+   * Wait before confirming an empty key listing and deleting the shared
+   * namespace. KV key listing is eventually consistent, so one empty list can
+   * be stale while another deployment's receipt is still propagating.
+   *
+   * @default 1 minute
+   */
+  readonly namespaceRemovalDelay?: Duration.Input;
 }
 
 export interface ReceiptStore {
@@ -101,13 +118,10 @@ export interface ReceiptStore {
     now: DateTime.Utc,
   ) => Effect.Effect<DeploymentReceipt, ReceiptStoreError>;
   readonly renewLease: (
-    name: string,
-    lease: OperationLease,
-    now: DateTime.Utc,
+    context: LeaseContext,
   ) => Effect.Effect<DeploymentReceipt, ReceiptStoreError>;
   readonly finishOperation: (
-    name: string,
-    lease: OperationLease,
+    context: LeaseContext,
     completion: OperationCompletion,
   ) => Effect.Effect<DeploymentReceipt, ReceiptStoreError>;
   readonly releaseExpiredLeaseForRepair: (
@@ -116,10 +130,8 @@ export interface ReceiptStore {
     now: DateTime.Utc,
   ) => Effect.Effect<DeploymentReceipt, ReceiptStoreError>;
   readonly deleteReceipt: (
-    name: string,
+    context: LeaseContext,
     deploymentId: string,
-    lease: OperationLease,
-    now: DateTime.Utc,
   ) => Effect.Effect<{ readonly namespaceRemoved: boolean }, ReceiptStoreError>;
 }
 
@@ -167,26 +179,29 @@ const finishLatestHistory = (
   );
 
 const requireLease = (
-  name: string,
-  expected: OperationLease,
+  context: LeaseContext,
   receipt: DeploymentReceipt,
-  now: DateTime.Utc,
 ): Effect.Effect<void, LeaseOwnershipError | LeaseExpiredError> => {
-  if (receipt.lease === null || !leaseMatches(expected, receipt.lease)) {
+  if (receipt.lease === null || !leaseMatches(context.lease, receipt.lease)) {
     return Effect.fail(
       new LeaseOwnershipError({
-        name,
-        expected,
+        name: context.name,
+        expected: context.lease,
         observed: receipt.lease,
       }),
     );
   }
-  return DateTime.toEpochMillis(receipt.lease.expiresAt) <= DateTime.toEpochMillis(now)
-    ? Effect.fail(new LeaseExpiredError({ name, lease: receipt.lease }))
+  return DateTime.toEpochMillis(receipt.lease.expiresAt) <= DateTime.toEpochMillis(context.now)
+    ? Effect.fail(new LeaseExpiredError({ name: context.name, lease: receipt.lease }))
     : Effect.void;
 };
 
-export function makeReceiptStore(backend: ReceiptBackend): ReceiptStore {
+export function makeReceiptStore(
+  backend: ReceiptBackend,
+  options?: ReceiptStoreOptions,
+): ReceiptStore {
+  const namespaceRemovalDelay = options?.namespaceRemovalDelay ?? Duration.minutes(1);
+
   const get: ReceiptStore["get"] = (name) =>
     backend
       .get(name)
@@ -290,33 +305,36 @@ export function makeReceiptStore(backend: ReceiptBackend): ReceiptStore {
         };
         return yield* putAndConfirmLease(next, lease);
       }),
-    renewLease: (name, lease, now) =>
+    renewLease: (context) =>
       Effect.gen(function* () {
-        const receipt = yield* getRequired(name);
-        yield* requireLease(name, lease, receipt, now);
+        const receipt = yield* getRequired(context.name);
+        yield* requireLease(context, receipt);
         const renewed = {
-          ...lease,
-          expiresAt: DateTime.addDuration(now, "15 minutes"),
+          ...context.lease,
+          expiresAt: DateTime.addDuration(context.now, "15 minutes"),
         };
-        return yield* putAndConfirmLease({ ...receipt, updatedAt: now, lease: renewed }, renewed);
+        return yield* putAndConfirmLease(
+          { ...receipt, updatedAt: context.now, lease: renewed },
+          renewed,
+        );
       }),
-    finishOperation: (name, lease, completion) =>
+    finishOperation: (context, completion) =>
       Effect.gen(function* () {
-        const receipt = yield* getRequired(name);
-        yield* requireLease(name, lease, receipt, completion.now);
+        const receipt = yield* getRequired(context.name);
+        yield* requireLease(context, receipt);
         const next: DeploymentReceipt = {
           ...receipt,
           ...(completion.versions === undefined ? {} : { versions: completion.versions }),
           ...(completion.cloudflare === undefined ? {} : { cloudflare: completion.cloudflare }),
           ...(completion.github === undefined ? {} : { github: completion.github }),
           ...(completion.autoUpgrade === undefined ? {} : { autoUpgrade: completion.autoUpgrade }),
-          updatedAt: completion.now,
+          updatedAt: context.now,
           phase: completion.phase,
           lease: null,
-          history: finishLatestHistory(receipt, lease, completion.now, completion.outcome),
+          history: finishLatestHistory(receipt, context.lease, context.now, completion.outcome),
         };
-        yield* backend.put(name, encodeReceipt(next));
-        return yield* getRequired(name);
+        yield* backend.put(context.name, encodeReceipt(next));
+        return yield* getRequired(context.name);
       }),
     releaseExpiredLeaseForRepair: (name, actor, now) =>
       Effect.gen(function* () {
@@ -351,20 +369,25 @@ export function makeReceiptStore(backend: ReceiptBackend): ReceiptStore {
         yield* backend.put(name, encodeReceipt(next));
         return yield* getRequired(name);
       }),
-    deleteReceipt: (name, deploymentId, lease, now) =>
+    deleteReceipt: (context, deploymentId) =>
       Effect.gen(function* () {
-        const receipt = yield* getRequired(name);
-        yield* requireLease(name, lease, receipt, now);
+        const receipt = yield* getRequired(context.name);
+        yield* requireLease(context, receipt);
         if (receipt.id !== deploymentId) {
           return yield* new DeploymentOwnershipError({
-            name,
+            name: context.name,
             expectedId: deploymentId,
             observedId: receipt.id,
           });
         }
-        yield* backend.remove(name);
+        yield* backend.remove(context.name);
         const remaining = yield* backend.listKeys();
         if (remaining.length > 0) return { namespaceRemoved: false };
+        // KV key listing is eventually consistent. Wait and list once more so a
+        // concurrently created receipt cannot be lost with the namespace.
+        yield* Effect.sleep(namespaceRemovalDelay);
+        const confirmed = yield* backend.listKeys();
+        if (confirmed.length > 0) return { namespaceRemoved: false };
         yield* backend.removeNamespace();
         return { namespaceRemoved: true };
       }),

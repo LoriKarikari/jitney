@@ -1,4 +1,4 @@
-import { DateTime, Effect, Option, Ref } from "effect";
+import { DateTime, Duration, Effect, Option, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   createDeploymentReceipt,
@@ -158,7 +158,7 @@ describe("deployment receipt store", () => {
       Effect.gen(function* () {
         yield* store.create({ ...fixtureReceipt(), phase: "active" });
         const acquired = yield* store.acquireLease("staging", "upgrade", "lori@mbp", acquiredAt);
-        return yield* store.renewLease("staging", acquired.lease!, renewedAt);
+        return yield* store.renewLease({ name: "staging", lease: acquired.lease!, now: renewedAt });
       }),
     );
 
@@ -181,11 +181,11 @@ describe("deployment receipt store", () => {
           "lori@mbp",
           DateTime.makeUnsafe("2026-07-20T13:00:00.000Z"),
         );
-        return yield* store.renewLease(
-          "staging",
-          acquired.lease!,
-          DateTime.makeUnsafe("2026-07-20T13:20:00.000Z"),
-        );
+        return yield* store.renewLease({
+          name: "staging",
+          lease: acquired.lease!,
+          now: DateTime.makeUnsafe("2026-07-20T13:20:00.000Z"),
+        });
       }).pipe(Effect.flip),
     );
 
@@ -206,12 +206,14 @@ describe("deployment receipt store", () => {
           "lori@mbp",
           DateTime.makeUnsafe("2026-07-20T13:00:00.000Z"),
         );
-        return yield* store.finishOperation("staging", acquired.lease!, {
-          now: finishedAt,
-          phase: "active",
-          outcome: "succeeded",
-          versions: { current: "0.4.0", previous: "0.3.0" },
-        });
+        return yield* store.finishOperation(
+          { name: "staging", lease: acquired.lease!, now: finishedAt },
+          {
+            phase: "active",
+            outcome: "succeeded",
+            versions: { current: "0.4.0", previous: "0.3.0" },
+          },
+        );
       }),
     );
 
@@ -239,11 +241,11 @@ describe("deployment receipt store", () => {
           "lori@mbp",
           DateTime.makeUnsafe("2026-07-20T13:00:00.000Z"),
         );
-        return yield* store.renewLease(
-          "staging",
-          { ...acquired.lease!, actor: "other@host" },
-          DateTime.makeUnsafe("2026-07-20T13:05:00.000Z"),
-        );
+        return yield* store.renewLease({
+          name: "staging",
+          lease: { ...acquired.lease!, actor: "other@host" },
+          now: DateTime.makeUnsafe("2026-07-20T13:05:00.000Z"),
+        });
       }).pipe(Effect.flip),
     );
 
@@ -287,7 +289,9 @@ describe("deployment receipt store", () => {
 
   it("deletes the shared namespace only after its final receipt", async () => {
     const backend = await makeMemoryBackend();
-    const store = makeReceiptStore(backend.service);
+    const store = makeReceiptStore(backend.service, {
+      namespaceRemovalDelay: Duration.zero,
+    });
     const other = {
       ...fixtureReceipt(),
       id: "01J00000000000000000000001",
@@ -303,16 +307,12 @@ describe("deployment receipt store", () => {
         const production = yield* store.acquireLease("production", "destroy", "lori@mbp", now);
         const deleteAt = DateTime.makeUnsafe("2026-07-20T13:01:00.000Z");
         const first = yield* store.deleteReceipt(
-          "staging",
+          { name: "staging", lease: staging.lease!, now: deleteAt },
           fixtureReceipt().id,
-          staging.lease!,
-          deleteAt,
         );
         const second = yield* store.deleteReceipt(
-          "production",
+          { name: "production", lease: production.lease!, now: deleteAt },
           other.id,
-          production.lease!,
-          deleteAt,
         );
         return { first, second };
       }),
@@ -321,6 +321,40 @@ describe("deployment receipt store", () => {
     expect(result.first.namespaceRemoved).toBe(false);
     expect(result.second.namespaceRemoved).toBe(true);
     expect(await backend.namespaceRemovals()).toBe(1);
+  });
+
+  it("keeps the namespace when another receipt appears before the confirmation list", async () => {
+    const backend = await makeMemoryBackend({
+      afterListKeys: (callCount, values) => {
+        if (callCount === 1) values.set("racing", "{}");
+      },
+    });
+    const store = makeReceiptStore(backend.service, {
+      namespaceRemovalDelay: Duration.zero,
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* store.create(fixtureReceipt());
+        const held = yield* store.acquireLease(
+          "staging",
+          "destroy",
+          "lori@mbp",
+          DateTime.makeUnsafe("2026-07-20T13:00:00.000Z"),
+        );
+        return yield* store.deleteReceipt(
+          {
+            name: "staging",
+            lease: held.lease!,
+            now: DateTime.makeUnsafe("2026-07-20T13:01:00.000Z"),
+          },
+          fixtureReceipt().id,
+        );
+      }),
+    );
+
+    expect(result.namespaceRemoved).toBe(false);
+    expect(await backend.namespaceRemovals()).toBe(0);
   });
 
   it("detects another writer winning the KV lease race", async () => {
@@ -383,9 +417,11 @@ function fixtureReceipt(): DeploymentReceipt {
 
 async function makeMemoryBackend(options?: {
   afterPut?: (name: string, value: string, values: Map<string, string>) => void;
+  afterListKeys?: (callCount: number, values: Map<string, string>) => void;
 }) {
   const data = await Effect.runPromise(Ref.make(new Map<string, string>()));
   const removals = await Effect.runPromise(Ref.make(0));
+  const listCalls = await Effect.runPromise(Ref.make(0));
   const service: ReceiptBackend = {
     get: (name) => Effect.map(Ref.get(data), (values) => values.get(name)),
     put: (name, value) =>
@@ -400,7 +436,13 @@ async function makeMemoryBackend(options?: {
         next.delete(name);
         return next;
       }),
-    listKeys: () => Effect.map(Ref.get(data), (values) => [...values.keys()]),
+    listKeys: () =>
+      Effect.gen(function* () {
+        const callCount = yield* Ref.updateAndGet(listCalls, (count) => count + 1);
+        const values = yield* Ref.get(data);
+        options?.afterListKeys?.(callCount, values);
+        return [...values.keys()];
+      }),
     removeNamespace: () => Ref.update(removals, (count) => count + 1),
   };
   return {

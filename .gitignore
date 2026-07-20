@@ -3,6 +3,7 @@ node_modules/
 dist/
 coverage/
 .wrangler/
+.alchemy/
 .dev.vars
 .dev.vars.*
 .env

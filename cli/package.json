@@ -41,8 +41,10 @@
     "check": "pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm test && pnpm build"
   },
   "dependencies": {
+    "@effect/platform-node": "4.0.0-beta.99",
     "@octokit/auth-app": "^8.2.0",
     "@octokit/request": "^10.0.11",
+    "alchemy": "2.0.0-beta.63",
     "effect": "4.0.0-beta.99",
     "open": "^11.0.0",
     "tar": "^7.5.20",

@@ -49,11 +49,6 @@ jobs:
 
 ## Setup
 
-Already running Jitney 0.2.x? Remove that deployment before reusing its name
-with this installer. The
-[reinstall guide](docs/operations/reinstall-pre-receipt-deployment.md) walks
-through the one-time cleanup.
-
 ```bash
 npx get-jitney deploy
 ```

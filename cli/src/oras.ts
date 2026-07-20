@@ -35,11 +35,6 @@ export function copyRunnerImage(options: {
   version: string;
 }): Effect.Effect<string, InstallerError> {
   return Effect.gen(function* () {
-    const oras = yield* tryPromise(
-      "oras_download",
-      "Could not prepare the ORAS client",
-      ensureOras,
-    );
     const credentials = yield* registryCredentials(options.configPath);
     if (credentials.account_id !== options.accountId) {
       return yield* Effect.fail(
@@ -58,24 +53,44 @@ export function copyRunnerImage(options: {
       );
     }
 
-    return yield* Effect.acquireUseRelease(
+    const destination = `${credentials.registry_host}/${options.accountId}/jitney:${options.version}`;
+    yield* copyImage({
+      source: `ghcr.io/lorikarikari/jitney:${options.version}`,
+      destination,
+      registryHost: credentials.registry_host,
+      username: credentials.username,
+      password: credentials.password,
+    });
+    return destination;
+  });
+}
+
+export function copyImage(options: {
+  source: string;
+  destination: string;
+  registryHost: string;
+  username: string;
+  password: string;
+}): Effect.Effect<void, InstallerError> {
+  return Effect.gen(function* () {
+    const oras = yield* tryPromise(
+      "oras_download",
+      "Could not prepare the ORAS client",
+      ensureOras,
+    );
+    yield* Effect.acquireUseRelease(
       tryPromise("filesystem", "Could not create a registry credential directory", () =>
         mkdtemp(join(tmpdir(), "jitney-registry-")),
       ),
       (directory) =>
         Effect.gen(function* () {
           const authPath = join(directory, "auth.json");
-          const auth = Buffer.from(`${credentials.username}:${credentials.password}`).toString(
-            "base64",
-          );
+          const auth = Buffer.from(`${options.username}:${options.password}`).toString("base64");
           yield* tryPromise("filesystem", "Could not write temporary registry credentials", () =>
-            writeFile(
-              authPath,
-              JSON.stringify({ auths: { [credentials.registry_host]: { auth } } }),
-              { mode: 0o600 },
-            ),
+            writeFile(authPath, JSON.stringify({ auths: { [options.registryHost]: { auth } } }), {
+              mode: 0o600,
+            }),
           );
-          const destination = `${credentials.registry_host}/${options.accountId}/jitney:${options.version}`;
           yield* run(
             oras,
             [
@@ -85,8 +100,8 @@ export function copyRunnerImage(options: {
               "--to-registry-config",
               authPath,
               "--no-tty",
-              `ghcr.io/lorikarikari/jitney:${options.version}`,
-              destination,
+              options.source,
+              options.destination,
             ],
             { echo: true },
           ).pipe(
@@ -99,7 +114,6 @@ export function copyRunnerImage(options: {
                 }),
             ),
           );
-          return destination;
         }),
       (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
     );

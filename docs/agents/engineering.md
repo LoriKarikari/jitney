@@ -302,7 +302,9 @@ interface only when the installed SDK has no suitable typed operation.
 This is an Effect-native project — CLI and Worker alike — built on Alchemy v2;
 use idiomatic Effect and Alchemy APIs everywhere. While both dependencies are
 pre-GA, pin exact versions and upgrade them together on a tested branch; never
-accept an independent automated beta bump.
+accept an independent automated beta bump. The current compatibility set is
+`alchemy@2.0.0-beta.63`, `effect@4.0.0-beta.99`, and
+`@effect/platform-node@4.0.0-beta.99`.
 
 - Avoid async/await and raw Promise workflows unless an external boundary
   makes them unavoidable; isolate such code in the owning adapter.

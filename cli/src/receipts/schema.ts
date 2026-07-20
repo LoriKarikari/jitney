@@ -51,7 +51,7 @@ const CloudflareResources = Schema.Struct({
   }),
 });
 
-const GitHubInstallation = Schema.Struct({
+export const GitHubInstallation = Schema.Struct({
   id: Schema.Number,
   accountLogin: Schema.String,
   accountType: Schema.Literals(["User", "Organization"]),
@@ -67,7 +67,7 @@ const GitHubInstallation = Schema.Struct({
 const GitHubResources = Schema.Struct({
   appId: Schema.NullOr(Schema.Number),
   appSlug: Schema.NullOr(Schema.String),
-  ownerLogin: Schema.String,
+  ownerLogin: Schema.NullOr(Schema.String),
   ownerType: Schema.Literals(["User", "Organization"]),
   installations: Schema.Array(GitHubInstallation),
 });
@@ -97,6 +97,7 @@ export type DeploymentOperation = typeof DeploymentOperation.Type;
 export type DeploymentPhase = typeof DeploymentPhase.Type;
 export type OperationLease = typeof OperationLease.Type;
 export type ReceiptHistoryEntry = typeof ReceiptHistoryEntry.Type;
+export type GitHubInstallation = typeof GitHubInstallation.Type;
 
 export type NewDeploymentReceipt = Pick<
   DeploymentReceipt,

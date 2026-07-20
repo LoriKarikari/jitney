@@ -10,43 +10,35 @@
   <a href="worker/package.json"><img alt="Node version" src="https://img.shields.io/badge/node-%E2%89%A524-brightgreen"></a>
 </p>
 
-Jitney is a self-hosted control plane you deploy on your own Cloudflare
-account. When a workflow job with `runs-on: jitney` is queued, it boots a
-fresh container, registers it as a just-in-time runner for exactly that job,
-and tears everything down when the job finishes. There is no standing fleet,
-no idle capacity, and no VM to patch.
+Jitney runs GitHub Actions jobs on containers in your own Cloudflare account.
+When a job with `runs-on: jitney` enters the queue, Jitney starts a fresh
+container and registers it for that job alone. The container disappears when
+the job is done, so there is no runner fleet sitting idle between builds.
 
 ```yaml
 jobs:
   build:
     runs-on: jitney
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: echo "running on a throwaway Cloudflare container"
 ```
 
 ## What you get
 
-- **One runner per job.** Every job runs on a fresh container with a
-  single-use JIT registration. Runners never see App credentials or webhook
-  secrets — only their own JIT config.
-- **Survives lost webhooks.** A cron pass discovers jobs that are still
-  queued on GitHub and provisions runners for them, so a dropped delivery
-  doesn't strand your workflow.
-- **Cleans up after itself.** Deadlines reclaim runners that never get
-  assigned work and kill jobs that run too long. After a job, GitHub's runner
-  inventory returns to zero.
-- **Proven workloads.** Node.js, Python, Go, and Java all work through their
-  official setup actions
-  ([evidence](docs/operations/workload-compatibility.md)).
+- Each job gets a fresh container and a single-use JIT registration. The runner
+  never sees the GitHub App credentials or webhook secret.
+- Jitney checks GitHub for queued jobs every five minutes. If a webhook goes
+  missing, the workflow still gets a runner.
+- Jitney removes runners that never receive work and stops jobs that run past
+  their deadline. Finished runners disappear from GitHub too.
 
 ## What you don't get (yet)
 
-- **Docker inside jobs.** The runner image ships the Docker client but no
+- Docker does not run inside jobs. The image has the Docker client but no
   daemon, so `docker build`, service containers, and container actions fail.
-- **Public repositories.** Only private repositories are admitted; public
-  repos are outside the execution trust boundary.
-- **A hosted service.** You deploy your own copy.
+- Jitney currently accepts jobs only from private repositories.
+- This is not a hosted service. Jitney runs in your Cloudflare account.
 
 ## Requirements
 
@@ -61,11 +53,15 @@ jobs:
 npx get-jitney deploy
 ```
 
-The installer signs you into Cloudflare if needed, copies the release-pinned
-runner image into your Cloudflare registry, and deploys the Worker. It then
-opens GitHub to create and install a preconfigured private GitHub App. Jitney
-stores the generated App ID, private key, and webhook secret as Cloudflare
-Worker secrets; they are never written to your project.
+The installer opens a browser for Cloudflare sign-in when needed. It writes a
+deployment receipt before touching your Cloudflare resources, then copies the
+runner image and creates the Worker, Container Application, Durable Objects,
+and bindings. You do not need Docker or another deployment tool.
+
+GitHub opens next so you can create and install the App. Its ID, private key,
+and webhook secret go straight into Cloudflare Worker secrets; nothing is
+saved in your project. If setup fails, Jitney removes what it created. Use
+`--keep-partial` to leave the failed deployment in place instead.
 
 To own the GitHub App through an organization instead of your personal account:
 
@@ -73,29 +69,28 @@ To own the GitHub App through an organization instead of your personal account:
 npx get-jitney deploy --organization YOUR_ORG
 ```
 
-Once setup finishes, point a workflow in an installed private repository at
-`runs-on: jitney` and push. Install only one Jitney GitHub App on each
-repository; two control planes will both try to provision the same queued job.
-The webhook arrives, a container boots, and the job picks up in a few seconds.
-If the webhook is lost, the five-minute reconciliation cron catches the queued
-job instead.
+Once setup finishes, add `runs-on: jitney` to a workflow in one of the private
+repositories you selected, then push. Jitney refuses to claim a repository
+that already belongs to another deployment. A webhook normally starts the
+runner within a few seconds; the five-minute GitHub check catches the job if
+that webhook never arrives.
 
-## Configuration
+## Deployment defaults
 
-| Setting | Where | Default | Meaning |
-| --- | --- | --- | --- |
-| `RUNTIME_TIMEOUT_MS` | `wrangler.jsonc` vars | `3600000` | Kill jobs that run longer than this |
-| `max_instances` | `wrangler.jsonc` containers | `5` | Concurrent runner containers |
-| `instance_type` | `wrangler.jsonc` containers | `standard-2` | Container size (1 vCPU, 6 GiB, 12 GB disk) |
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Job timeout | 1 hour | Kill jobs that run longer than this |
+| Maximum instances | 5 | Concurrent runner containers |
+| Instance type | `standard-2` | Container size (1 vCPU, 6 GiB, 12 GB disk) |
 
 ## How it works
 
 An ingress Worker verifies webhook signatures and hands events to a Durable
 Object Scheduler, which owns all lifecycle state in SQLite. The Scheduler
 mints a JIT runner config scoped to one repository, starts a container, and
-enforces two deadlines: one for GitHub to assign work to the runner, one for
-the job to finish. The design and vocabulary live in [CONTEXT.md](CONTEXT.md);
-live probe records live in [docs/operations/](docs/operations/).
+enforces two deadlines: one for GitHub to assign work to the runner, and one
+for the job to finish. See [CONTEXT.md](CONTEXT.md) for the design and
+[docs/operations/](docs/operations/) for records from live tests.
 
 ## Development
 

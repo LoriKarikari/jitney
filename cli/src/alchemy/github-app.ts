@@ -15,6 +15,8 @@ export interface GitHubAppAttributes {
   appId: string;
   slug: string;
   settingsUrl: string;
+  ownerLogin: string;
+  ownerType: "User" | "Organization";
 }
 
 export interface GitHubAppResource extends AlchemyResource<

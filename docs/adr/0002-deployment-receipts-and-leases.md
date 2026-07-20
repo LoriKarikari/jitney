@@ -40,6 +40,10 @@ stack is destroyed, outside the resource graph.
   fresh ids, and a predecessor's leftovers surface as drift.
 - KV gives no compare-and-swap, so the seconds-wide acquire race is
   accepted and detected by the read-back rather than prevented.
+- A lease renewal interrupted between its write and its read-back leaves the
+  stored `expiresAt` ahead of the command's copy. The next receipt write then
+  fails ownership matching and the deployment waits for `repair`. The window
+  is milliseconds wide and is accepted for the same no-CAS reason.
 - `repair` is the only recovery path for expired leases; it marks the
   interrupted operation in history.
 - Destroy deletes only what the receipt references; name-pattern deletion is

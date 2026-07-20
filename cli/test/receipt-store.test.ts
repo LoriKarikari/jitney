@@ -41,6 +41,30 @@ describe("deployment receipt store", () => {
     ]);
   });
 
+  it("creates an installing receipt with its lease in one write", async () => {
+    const backend = await makeMemoryBackend();
+    const store = makeReceiptStore(backend.service);
+    const now = DateTime.makeUnsafe("2026-07-20T13:00:00.000Z");
+
+    const created = await Effect.runPromise(
+      store.createWithInstallLease(fixtureReceipt(), "lori@mbp", now),
+    );
+
+    expect(created).toMatchObject({
+      phase: "installing",
+      lease: { operation: "install", actor: "lori@mbp" },
+      history: [
+        {
+          operation: "install",
+          actor: "lori@mbp",
+          completedAt: null,
+          outcome: null,
+        },
+      ],
+    });
+    expect(await backend.putCount()).toBe(1);
+  });
+
   it("does not persist fields outside the receipt schema", async () => {
     const backend = await makeMemoryBackend();
     const store = makeReceiptStore(backend.service);
@@ -166,6 +190,38 @@ describe("deployment receipt store", () => {
       DateTime.toEpochMillis(renewedAt) + 15 * 60 * 1_000,
     );
     expect(renewed.history).toHaveLength(1);
+  });
+
+  it("records resources while keeping the operation lease", async () => {
+    const backend = await makeMemoryBackend();
+    const store = makeReceiptStore(backend.service);
+    const updatedAt = DateTime.makeUnsafe("2026-07-20T13:01:00.000Z");
+
+    const updated = await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* store.create(fixtureReceipt());
+        const acquired = yield* store.acquireLease(
+          "staging",
+          "install",
+          "lori@mbp",
+          DateTime.makeUnsafe("2026-07-20T13:00:00.000Z"),
+        );
+        return yield* store.updateOperation(
+          { name: "staging", lease: acquired.lease!, now: updatedAt },
+          {
+            cloudflare: {
+              ...acquired.cloudflare,
+              applicationId: "application-id",
+            },
+          },
+        );
+      }),
+    );
+
+    expect(updated.cloudflare.applicationId).toBe("application-id");
+    expect(updated.lease).not.toBeNull();
+    expect(updated.updatedAt).toEqual(updatedAt);
+    expect(updated.history).toHaveLength(1);
   });
 
   it("does not revive a lease after its expiry", async () => {
@@ -421,15 +477,20 @@ async function makeMemoryBackend(options?: {
 }) {
   const data = await Effect.runPromise(Ref.make(new Map<string, string>()));
   const removals = await Effect.runPromise(Ref.make(0));
+  const puts = await Effect.runPromise(Ref.make(0));
   const listCalls = await Effect.runPromise(Ref.make(0));
   const service: ReceiptBackend = {
     get: (name) => Effect.map(Ref.get(data), (values) => values.get(name)),
     put: (name, value) =>
-      Ref.update(data, (values) => {
-        const next = new Map(values).set(name, value);
-        options?.afterPut?.(name, value, next);
-        return next;
-      }),
+      Ref.update(puts, (count) => count + 1).pipe(
+        Effect.andThen(
+          Ref.update(data, (values) => {
+            const next = new Map(values).set(name, value);
+            options?.afterPut?.(name, value, next);
+            return next;
+          }),
+        ),
+      ),
     remove: (name) =>
       Ref.update(data, (values) => {
         const next = new Map(values);
@@ -448,6 +509,7 @@ async function makeMemoryBackend(options?: {
   return {
     service,
     values: () => Effect.runPromise(Effect.map(Ref.get(data), (values) => [...values])),
+    putCount: () => Effect.runPromise(Ref.get(puts)),
     namespaceRemovals: () => Effect.runPromise(Ref.get(removals)),
   };
 }

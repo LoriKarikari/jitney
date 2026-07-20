@@ -11,6 +11,9 @@ class SchedulerRpcError extends Data.TaggedError("SchedulerRpcError")<{ cause: u
 
 const handleRequest = Effect.fn("IngressWorker.fetch")(function* (request: Request, env: Env) {
   const url = new URL(request.url);
+  if (request.method === "GET" && url.pathname === "/health") {
+    return Response.json({ status: "ok", version: env.JITNEY_VERSION });
+  }
   if (request.method !== "POST" || url.pathname !== "/webhooks/github") {
     return new Response(null, { status: 404 });
   }

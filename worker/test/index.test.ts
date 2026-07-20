@@ -42,6 +42,13 @@ async function fetch(url: string, init?: RequestInit): Promise<Response> {
 describe("worker entrypoint", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("reports the deployed Jitney version", async () => {
+    const response = await fetch("https://example.com/health");
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok", version: "dev" });
+  });
+
   it("answers unknown routes with 404", async () => {
     const response = await fetch("https://example.com/anything");
     expect(response.status).toBe(404);

@@ -2,11 +2,10 @@ import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { x as extractTar } from "tar";
-import { InstallerError, tryPromise, trySync } from "./errors.js";
+import { InstallerError, tryPromise } from "./errors.js";
 import { run } from "./process.js";
-import { wrangler } from "./wrangler.js";
 
 const ORAS_VERSION = "1.3.3";
 const ORAS_RELEASE = `https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}`;
@@ -21,132 +20,95 @@ const ORAS_CHECKSUMS: Record<string, string> = {
     "ac7156f93a21e903f7ad606c792f3560f17e0cd0e36365634701b1e7cc4e4eca",
 };
 
-const RegistryCredentials = Schema.Struct({
-  account_id: Schema.String,
-  registry_host: Schema.String,
-  username: Schema.String,
-  password: Schema.String,
-});
-type RegistryCredentials = typeof RegistryCredentials.Type;
-
-export function copyRunnerImage(options: {
-  accountId: string;
-  configPath: string;
-  version: string;
-}): Effect.Effect<string, InstallerError> {
-  return Effect.gen(function* () {
-    const credentials = yield* registryCredentials(options.configPath);
-    if (credentials.account_id !== options.accountId) {
-      return yield* Effect.fail(
-        new InstallerError({
-          step: "registry_copy",
-          message: "Cloudflare issued registry credentials for the wrong account",
-        }),
-      );
-    }
-    if (credentials.registry_host !== "registry.cloudflare.com") {
-      return yield* Effect.fail(
-        new InstallerError({
-          step: "registry_copy",
-          message: "Cloudflare issued credentials for an unexpected registry",
-        }),
-      );
-    }
-
-    const destination = `${credentials.registry_host}/${options.accountId}/jitney:${options.version}`;
-    yield* copyImage({
-      source: `ghcr.io/lorikarikari/jitney:${options.version}`,
-      destination,
-      registryHost: credentials.registry_host,
-      username: credentials.username,
-      password: credentials.password,
-    });
-    return destination;
-  });
+interface RegistryAuth {
+  readonly registryHost: string;
+  readonly username: string;
+  readonly password: string;
 }
 
-export function copyImage(options: {
-  source: string;
-  destination: string;
-  registryHost: string;
-  username: string;
-  password: string;
-}): Effect.Effect<void, InstallerError> {
-  return Effect.gen(function* () {
+const withRegistryAuth = <A>(
+  auth: RegistryAuth,
+  use: (oras: string, authPath: string) => Effect.Effect<A, InstallerError>,
+): Effect.Effect<A, InstallerError> =>
+  Effect.gen(function* () {
     const oras = yield* tryPromise(
       "oras_download",
       "Could not prepare the ORAS client",
       ensureOras,
     );
-    yield* Effect.acquireUseRelease(
+    return yield* Effect.acquireUseRelease(
       tryPromise("filesystem", "Could not create a registry credential directory", () =>
         mkdtemp(join(tmpdir(), "jitney-registry-")),
       ),
       (directory) =>
         Effect.gen(function* () {
           const authPath = join(directory, "auth.json");
-          const auth = Buffer.from(`${options.username}:${options.password}`).toString("base64");
+          const encoded = Buffer.from(`${auth.username}:${auth.password}`).toString("base64");
           yield* tryPromise("filesystem", "Could not write temporary registry credentials", () =>
-            writeFile(authPath, JSON.stringify({ auths: { [options.registryHost]: { auth } } }), {
-              mode: 0o600,
-            }),
-          );
-          yield* run(
-            oras,
-            [
-              "cp",
-              "--platform",
-              "linux/amd64",
-              "--to-registry-config",
+            writeFile(
               authPath,
-              "--no-tty",
-              options.source,
-              options.destination,
-            ],
-            { echo: true },
-          ).pipe(
-            Effect.mapError(
-              (cause) =>
-                new InstallerError({
-                  step: "registry_copy",
-                  message: "Could not copy the runner image into Cloudflare",
-                  cause,
-                }),
+              JSON.stringify({ auths: { [auth.registryHost]: { auth: encoded } } }),
+              { mode: 0o600 },
             ),
           );
+          return yield* use(oras, authPath);
         }),
       (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
     );
   });
+
+export function copyImage(
+  options: RegistryAuth & {
+    source: string;
+    destination: string;
+  },
+): Effect.Effect<void, InstallerError> {
+  return withRegistryAuth(options, (oras, authPath) =>
+    run(
+      oras,
+      [
+        "cp",
+        "--platform",
+        "linux/amd64",
+        "--to-registry-config",
+        authPath,
+        "--no-tty",
+        options.source,
+        options.destination,
+      ],
+      { echo: true },
+    ).pipe(
+      Effect.asVoid,
+      Effect.mapError(
+        (cause) =>
+          new InstallerError({
+            step: "registry_copy",
+            message: "Could not copy the runner image into Cloudflare",
+            cause,
+          }),
+      ),
+    ),
+  );
 }
 
-function registryCredentials(
-  configPath: string,
-): Effect.Effect<RegistryCredentials, InstallerError> {
-  return wrangler([
-    "containers",
-    "registries",
-    "credentials",
-    "registry.cloudflare.com",
-    "--push",
-    "--pull",
-    "--expiration-minutes=60",
-    "--json",
-    "--config",
-    configPath,
-  ]).pipe(
-    Effect.mapError(
-      (cause) =>
-        new InstallerError({
-          step: "registry_copy",
-          message: "Could not obtain Cloudflare registry credentials",
-          cause,
-        }),
-    ),
-    Effect.flatMap(({ stdout }) =>
-      trySync("registry_copy", "Wrangler returned invalid registry credentials", () => {
-        return Schema.decodeUnknownSync(RegistryCredentials)(JSON.parse(stdout));
-      }),
+export function deleteImage(
+  options: RegistryAuth & {
+    image: string;
+  },
+): Effect.Effect<void, InstallerError> {
+  return withRegistryAuth(options, (oras, authPath) =>
+    run(oras, ["manifest", "delete", "--force", "--registry-config", authPath, options.image], {
+      echo: true,
+    }).pipe(
+      Effect.asVoid,
+      Effect.mapError(
+        (cause) =>
+          new InstallerError({
+            step: "registry_cleanup",
+            message: `Could not remove runner image ${options.image}`,
+            cause,
+          }),
+      ),
     ),
   );
 }

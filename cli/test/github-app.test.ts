@@ -17,7 +17,7 @@ describe("githubAppManifest", () => {
       redirect_url: "http://127.0.0.1:1234/callback",
       public: false,
       default_events: ["workflow_job"],
-      default_permissions: { actions: "read", administration: "write" },
+      default_permissions: { actions: "read", administration: "write", variables: "write" },
     });
   });
 

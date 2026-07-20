@@ -323,6 +323,35 @@ accept an independent automated beta bump. The current compatibility set is
 
 Passing automated checks alone does not prove compliance.
 
+### Lifecycle engine
+
+- The CLI's lifecycle commands (install, upgrade, rollback, repair, destroy)
+  run on programmatic Alchemy v2 stacks. Alchemy is an internal
+  implementation detail: users never author IaC or install it themselves.
+- Deployment-level coordination (phase, lease, inventory, versions, history)
+  lives in the shared `jitney-receipts` KV namespace via `cli/src/receipts/`.
+  Per-resource crash recovery belongs to Alchemy's state store; never
+  duplicate resource status in a receipt.
+- A Deployment Receipt is a coordination record, not an Alchemy resource. It
+  is written before the stack deploys and deleted after the stack is
+  destroyed, outside the resource graph.
+- Receipt ownership always matches on the deployment ULID, never the name.
+  Receipts never contain secrets.
+- Operation leases are acquired read → refuse on any recorded lease → write →
+  read back to detect the KV race. Expired leases are released only by
+  `repair`.
+- CLI-side Cloudflare API access uses the generated
+  `@distilled.cloud/cloudflare` SDK directly — the same client Alchemy's own
+  providers use internally. Alchemy's KV value bindings are Worker-runtime
+  only. Never hand-roll REST calls.
+- Custom Alchemy providers follow the documented contract: a single
+  idempotent `reconcile` (observe → ensure → sync), `delete`, `list`, and an
+  ownership-aware `read` that returns `Unowned` for foreign resources so
+  repair and adoption flows can refuse takeovers by default.
+- For Alchemy stack tests, prefer the `alchemy/Test/Vitest` harness
+  (`Test.make` + `test.provider` scratch stacks) over hand-wired state and
+  platform services.
+
 ## Git hygiene
 
 - **Never push directly to `main`.** Every change goes through a PR.

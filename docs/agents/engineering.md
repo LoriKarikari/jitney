@@ -297,6 +297,29 @@ Cloudflare SDK already provides it. Prefer generated, typed methods such as
 `octokit.request()`, raw `fetch()`, or a hand-written wrapper. Use the generic
 interface only when the installed SDK has no suitable typed operation.
 
+### Effect-native code
+
+This is an Effect-native project — CLI and Worker alike; use idiomatic Effect
+APIs everywhere. (If Alchemy v2 is adopted after its GA revisit, use idiomatic
+Alchemy APIs the same way.)
+
+- Avoid async/await and raw Promise workflows unless an external boundary
+  makes them unavoidable; isolate such code in the owning adapter.
+- Check the Effect source and examples before departing from native patterns.
+- Before adding a utility, helper, parser, or collection operation, check
+  whether Effect already provides it (for example `Array`, `Record`,
+  `HashMap`, `HashSet`, `Predicate`, or `Schema`); use the existing Effect
+  primitive instead of hand-rolling `isRecord`/`isArray` checks or object,
+  `Map`, and parsing helpers.
+- Follow established Effect service/tag/layer and `Effect.fn` patterns.
+- Check each new abstraction for an existing owner and duplicate behavior;
+  reject pass-through or speculative seams.
+- Parse at outer boundaries and pass parsed domain values inward.
+- Make each interface, parameter, function, and combinator earn its place.
+- Prefer the simplest correct design and the least code.
+
+Passing automated checks alone does not prove compliance.
+
 ## Git hygiene
 
 - **Never push directly to `main`.** Every change goes through a PR.

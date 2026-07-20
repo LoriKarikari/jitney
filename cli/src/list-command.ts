@@ -47,20 +47,20 @@ const unreachable = (
   cause: unknown,
 ): ProbeUnreachableError => new ProbeUnreachableError({ plane, cause });
 
-const workerUrl = Effect.fn(function* (accountId: string, name: string) {
+const workerAddress = Effect.fn(function* (accountId: string, name: string) {
   const script = yield* Workers.getScriptSetting({ accountId, scriptName: name }).pipe(
     Effect.map(Option.fromUndefinedOr),
     Effect.catchTag("WorkerNotFound", () => Effect.succeed(Option.none())),
   );
-  if (Option.isNone(script)) return Option.none<string>();
+  if (Option.isNone(script)) return { exists: false, url: null } as const;
   const [{ subdomain }, scriptSubdomain] = yield* Effect.all([
     Workers.getSubdomain({ accountId }),
     Workers.getScriptSubdomain({ accountId, scriptName: name }),
   ]);
-  if (!scriptSubdomain.enabled) {
-    return yield* Effect.fail(new Error(`Worker ${name} has no workers.dev route`));
-  }
-  return Option.some(`https://${name}.${subdomain}.workers.dev`);
+  return {
+    exists: true,
+    url: scriptSubdomain.enabled ? `https://${name}.${subdomain}.workers.dev` : null,
+  } as const;
 });
 
 const imageTag = (image: string): string | null => {
@@ -80,19 +80,23 @@ const makeListPlatform = Effect.fn(function* () {
     );
 
   return ListPlatform.of({
-    workerVersion: (accountId, name) =>
-      provideCloudflare(workerUrl(accountId, name)).pipe(
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.succeed(Option.none<string>()),
-            onSome: (url) =>
-              client.get(`${url}/health`).pipe(
-                Effect.flatMap((response) => response.json),
-                Effect.map((body) => Schema.decodeUnknownSync(HealthResponse)(body)),
-                Effect.map((health) => Option.some(health.version)),
-              ),
-          }),
-        ),
+    worker: (accountId, name) =>
+      provideCloudflare(workerAddress(accountId, name)).pipe(
+        Effect.flatMap((worker) => {
+          if (!worker.exists) return Effect.succeed({ exists: false, version: null });
+          if (worker.url === null) return Effect.succeed({ exists: true, version: null });
+          return client.get(`${worker.url}/health`).pipe(
+            Effect.flatMap((response) => response.json),
+            Effect.flatMap((body) =>
+              Effect.try({
+                try: () => Schema.decodeUnknownSync(HealthResponse)(body),
+                catch: (cause) => cause,
+              }),
+            ),
+            Effect.map((health) => ({ exists: true, version: health.version })),
+            Effect.catch(() => Effect.succeed({ exists: true, version: null })),
+          );
+        }),
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),
     workerNames: (accountId) =>
@@ -159,17 +163,23 @@ const makeListPlatform = Effect.fn(function* () {
         if (appPage.status === 404) {
           return { appExists: false, installations: [], ownership: [] } satisfies GitHubProbe;
         }
-        const url = yield* provideCloudflare(
-          workerUrl(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
+        const worker = yield* provideCloudflare(
+          workerAddress(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
         );
-        if (Option.isNone(url)) return yield* Effect.fail(new Error("Worker is unavailable"));
-        const response = yield* client.get(`${url.value}/lifecycle/status`, {
+        if (!worker.exists || worker.url === null) {
+          return yield* Effect.fail(new Error("Worker is unavailable"));
+        }
+        const response = yield* client.get(`${worker.url}/lifecycle/status`, {
           headers: { "X-Jitney-Deployment": receipt.id },
         });
         if (response.status !== 200) {
           return yield* Effect.fail(new Error(`Lifecycle probe returned ${response.status}`));
         }
-        const status = Schema.decodeUnknownSync(LifecycleResponse)(yield* response.json);
+        const body = yield* response.json;
+        const status = yield* Effect.try({
+          try: () => Schema.decodeUnknownSync(LifecycleResponse)(body),
+          catch: (cause) => cause,
+        });
         if (status.app === "unknown" || status.installations === "unknown") {
           return yield* Effect.fail(new Error("GitHub lifecycle probe was inconclusive"));
         }
@@ -197,7 +207,12 @@ const makeListPlatform = Effect.fn(function* () {
           }),
         catch: (cause) => unreachable("release", cause),
       }).pipe(
-        Effect.map((response) => Schema.decodeUnknownSync(LatestRelease)(response.data)),
+        Effect.flatMap((response) =>
+          Effect.try({
+            try: () => Schema.decodeUnknownSync(LatestRelease)(response.data),
+            catch: (cause) => unreachable("release", cause),
+          }),
+        ),
         Effect.map(({ tag_name }) => Option.some(tag_name.replace(/^v/, ""))),
         Effect.catch((error) =>
           Predicate.hasProperty(error.cause, "status") && error.cause.status === 404

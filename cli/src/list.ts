@@ -16,6 +16,11 @@ export interface Finding {
   }[];
 }
 
+export interface WorkerProbe {
+  readonly exists: boolean;
+  readonly version: string | null;
+}
+
 export interface LiveApplication {
   readonly id: string;
   readonly name: string;
@@ -47,10 +52,10 @@ export class ListReceipts extends Context.Service<
 export class ListPlatform extends Context.Service<
   ListPlatform,
   {
-    readonly workerVersion: (
+    readonly worker: (
       accountId: string,
       name: string,
-    ) => Effect.Effect<Option.Option<string>, ProbeUnreachableError>;
+    ) => Effect.Effect<WorkerProbe, ProbeUnreachableError>;
     readonly workerNames: (
       accountId: string,
     ) => Effect.Effect<readonly string[], ProbeUnreachableError>;
@@ -94,7 +99,7 @@ export interface ListReport {
 const unknownFinding = (resource: string, plane: ProbeUnreachableError["plane"]): Finding => ({
   class: "unknown",
   resource,
-  message: `${resource} could not be checked because the ${plane} API was unreachable`,
+  message: `${resource} could not be checked because the ${plane} probe was inconclusive`,
   commands: [{ label: "inspect", command: "npx get-jitney list --json" }],
 });
 
@@ -136,18 +141,21 @@ const checkWorker = Effect.fn(function* (
   platform: ListPlatformService,
 ) {
   const observed = yield* Effect.result(
-    platform.workerVersion(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
+    platform.worker(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
   );
   if (Result.isFailure(observed)) return [unknownFinding("worker", observed.failure.plane)];
-  if (Option.isNone(observed.success)) {
+  if (!observed.success.exists) {
     return [missingFinding("worker", `Worker ${receipt.cloudflare.workerName} is missing`)];
   }
-  if (observed.success.value !== receipt.versions.current) {
+  if (observed.success.version === null) {
+    return [unknownFinding("worker.version", "cloudflare")];
+  }
+  if (observed.success.version !== receipt.versions.current) {
     return [
       driftFinding(
         "worker.version",
-        `Worker reports ${observed.success.value}; receipt records ${receipt.versions.current ?? "none"}`,
-        observed.success.value,
+        `Worker reports ${observed.success.version}; receipt records ${receipt.versions.current ?? "none"}`,
+        observed.success.version,
         receipt.versions.current ?? "none",
       ),
     ];

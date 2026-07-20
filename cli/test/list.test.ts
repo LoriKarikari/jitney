@@ -72,10 +72,13 @@ const healthyGitHub: GitHubProbe = {
 };
 
 function fakePlatform(overrides?: {
-  workerVersion?: (
+  worker?: (
     accountId: string,
     name: string,
-  ) => Effect.Effect<Option.Option<string>, ProbeUnreachableError>;
+  ) => Effect.Effect<
+    { readonly exists: boolean; readonly version: string | null },
+    ProbeUnreachableError
+  >;
   workerNames?: () => Effect.Effect<readonly string[], ProbeUnreachableError>;
   containerApplications?: () => Effect.Effect<readonly LiveApplication[], ProbeUnreachableError>;
   registryTags?: () => Effect.Effect<readonly string[], ProbeUnreachableError>;
@@ -83,7 +86,7 @@ function fakePlatform(overrides?: {
   latestVersion?: () => Effect.Effect<Option.Option<string>, ProbeUnreachableError>;
 }) {
   return ListPlatform.of({
-    workerVersion: overrides?.workerVersion ?? (() => Effect.succeed(Option.some("0.3.0"))),
+    worker: overrides?.worker ?? (() => Effect.succeed({ exists: true, version: "0.3.0" })),
     workerNames: overrides?.workerNames ?? (() => Effect.succeed(["jitney"])),
     containerApplications:
       overrides?.containerApplications ?? (() => Effect.succeed(healthyApplications)),
@@ -142,12 +145,27 @@ describe("list drift classification", () => {
   it("classifies an absent Worker as missing", async () => {
     const report = await runList(
       [fixtureReceipt()],
-      fakePlatform({ workerVersion: () => Effect.succeed(Option.none()) }),
+      fakePlatform({ worker: () => Effect.succeed({ exists: false, version: null }) }),
     );
 
     expect(report.deployments[0]!.health).toBe("missing");
     expect(report.deployments[0]!.findings).toContainEqual(
       expect.objectContaining({ class: "missing", resource: "worker" }),
+    );
+  });
+
+  it("keeps an existing Worker distinct from an unreachable version endpoint", async () => {
+    const report = await runList(
+      [fixtureReceipt()],
+      fakePlatform({ worker: () => Effect.succeed({ exists: true, version: null }) }),
+    );
+
+    expect(report.deployments[0]!.health).toBe("unknown");
+    expect(report.deployments[0]!.findings).toContainEqual(
+      expect.objectContaining({ class: "unknown", resource: "worker.version" }),
+    );
+    expect(report.deployments[0]!.findings).not.toContainEqual(
+      expect.objectContaining({ resource: "worker" }),
     );
   });
 
@@ -211,7 +229,7 @@ describe("list drift classification", () => {
     const report = await runList(
       [fixtureReceipt()],
       fakePlatform({
-        workerVersion: unreachable,
+        worker: unreachable,
         containerApplications: unreachable,
         registryTags: unreachable,
       }),
@@ -281,7 +299,7 @@ describe("list drift classification", () => {
     const report = await runList(
       [fixtureReceipt({ version: "0.5.0" })],
       fakePlatform({
-        workerVersion: () => Effect.succeed(Option.some("0.5.0")),
+        worker: () => Effect.succeed({ exists: true, version: "0.5.0" }),
         containerApplications: () =>
           Effect.succeed([
             { id: "jitney-application-id", name: "jitney-runner", imageTag: "0.5.0" },
@@ -301,8 +319,11 @@ describe("list drift classification", () => {
         fixtureReceipt({ name: "staging", id: "01JVQ8B95TQZD1P6DE00DE0002", version: "0.2.0" }),
       ],
       fakePlatform({
-        workerVersion: (_accountId, name) =>
-          Effect.succeed(Option.some(name === "staging" ? "0.1.0" : "0.3.0")),
+        worker: (_accountId, name) =>
+          Effect.succeed({
+            exists: true,
+            version: name === "staging" ? "0.1.0" : "0.3.0",
+          }),
         containerApplications: () =>
           Effect.succeed([
             ...healthyApplications,

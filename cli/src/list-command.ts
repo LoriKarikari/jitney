@@ -2,9 +2,10 @@ import * as Containers from "@distilled.cloud/cloudflare/containers";
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Workers from "@distilled.cloud/cloudflare/workers";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Array as Arr, Effect, Option, Predicate, Schema, Stream } from "effect";
+import { Effect, HashMap, Option, Predicate, Ref, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { request } from "@octokit/request";
+import { observeAccount, type AccountSnapshot } from "./cloudflare-inventory.js";
 import { cloudflareRuntime } from "./cloudflare-runtime.js";
 import { InstallerError } from "./errors.js";
 import {
@@ -63,11 +64,6 @@ const workerAddress = Effect.fn(function* (accountId: string, name: string) {
   } as const;
 });
 
-const imageTag = (image: string): string | null => {
-  const separator = image.lastIndexOf(":");
-  return separator < image.lastIndexOf("/") ? null : image.slice(separator + 1);
-};
-
 const makeListPlatform = Effect.fn(function* () {
   const credentials = yield* Credentials;
   const client = yield* HttpClient.HttpClient;
@@ -77,6 +73,23 @@ const makeListPlatform = Effect.fn(function* () {
     effect.pipe(
       Effect.provideService(Credentials, credentials),
       Effect.provideService(HttpClient.HttpClient, client),
+    );
+
+  // list probes the same account twice (workers, applications); observe once.
+  const snapshots = yield* Ref.make(HashMap.empty<string, AccountSnapshot>());
+  const snapshotFor = (accountId: string) =>
+    Ref.get(snapshots).pipe(
+      Effect.flatMap((cache) =>
+        Option.match(HashMap.get(cache, accountId), {
+          onSome: Effect.succeed,
+          onNone: () =>
+            provideCloudflare(observeAccount(accountId)).pipe(
+              Effect.tap((snapshot) =>
+                Ref.update(snapshots, (current) => HashMap.set(current, accountId, snapshot)),
+              ),
+            ),
+        }),
+      ),
     );
 
   return ListPlatform.of({
@@ -100,27 +113,15 @@ const makeListPlatform = Effect.fn(function* () {
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),
     workerNames: (accountId) =>
-      provideCloudflare(Stream.runCollect(Workers.listScripts.items({ accountId }))).pipe(
-        Effect.map((scripts) =>
-          Arr.flatMap(scripts, (script) =>
-            script.id !== null &&
-            script.id !== undefined &&
-            Arr.contains(script.tags ?? [], "jitney")
-              ? [script.id]
-              : [],
-          ),
+      snapshotFor(accountId).pipe(
+        Effect.map((snapshot) =>
+          snapshot.workers.flatMap((worker) => (worker.jitneyTagged ? [worker.name] : [])),
         ),
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),
     containerApplications: (accountId) =>
-      provideCloudflare(Containers.listContainerApplications({ accountId })).pipe(
-        Effect.map((applications): readonly LiveApplication[] =>
-          applications.map((application) => ({
-            id: application.id,
-            name: application.name,
-            imageTag: imageTag(application.configuration.image),
-          })),
-        ),
+      snapshotFor(accountId).pipe(
+        Effect.map((snapshot): readonly LiveApplication[] => snapshot.applications),
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),
     registryTags: (accountId, repository) =>

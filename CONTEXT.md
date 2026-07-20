@@ -119,6 +119,12 @@ command, released together with the phase transition in the same receipt
 write. An expired lease blocks every command until `repair` releases it.
 _Avoid_: mutex, lock file
 
+**Resource Classification**:
+The result of comparing one recorded resource with the live control plane:
+`ok | missing | drifted | orphan | unknown`. `unknown` means the probe was
+inconclusive; Jitney never infers live state from a failed request.
+_Avoid_: assumed healthy, probably missing
+
 ## Relationships
 
 - A **Delivery** carries one **Workflow Event**.
@@ -134,6 +140,7 @@ _Avoid_: mutex, lock file
 - A **Deployment** has exactly one **Deployment Receipt**, keyed by its name.
 - A **Deployment Receipt** holds at most one **Operation Lease** at a time.
 - Deployment ownership always matches on the ULID, never the name.
+- `list` assigns a **Resource Classification** without changing either control plane.
 
 ## Architecture
 

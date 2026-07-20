@@ -34,6 +34,12 @@ Receipts are a plain Effect service (`cli/src/receipts/`), not an Alchemy
 resource: they are written before the stack deploys and deleted after the
 stack is destroyed, outside the resource graph.
 
+The Worker reads its own receipt for GitHub drift checks because App credentials
+cannot be read back from Cloudflare secrets. Its lifecycle endpoint accepts the
+deployment ULID held by the CLI and repository ownership variable, then returns
+only classifications and receipt-relative indexes. It never returns repository
+names, credentials, or receipt contents.
+
 ## Consequences
 
 - Ownership always matches on the ULID, never the name. Recycled names get

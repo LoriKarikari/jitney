@@ -49,6 +49,33 @@ describe("worker entrypoint", () => {
     expect(await response.json()).toEqual({ status: "ok", version: "dev" });
   });
 
+  it("does not expose lifecycle status without the deployment identity", async () => {
+    const response = await fetch("https://example.com/lifecycle/status");
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns an inconclusive lifecycle status when the receipt identity differs", async () => {
+    await env.JITNEY_RECEIPTS.put(
+      env.JITNEY_RECEIPT_NAME,
+      JSON.stringify({ id: "different", github: { installations: [] } }),
+    );
+    try {
+      const response = await fetch("https://example.com/lifecycle/status", {
+        headers: { "X-Jitney-Deployment": env.JITNEY_DEPLOYMENT },
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        app: "unknown",
+        installations: "unknown",
+        ownership: [],
+      });
+    } finally {
+      await env.JITNEY_RECEIPTS.delete(env.JITNEY_RECEIPT_NAME);
+    }
+  });
+
   it("answers unknown routes with 404", async () => {
     const response = await fetch("https://example.com/anything");
     expect(response.status).toBe(404);

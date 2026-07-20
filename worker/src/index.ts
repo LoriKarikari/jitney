@@ -2,6 +2,7 @@ import { Data, Effect } from "effect";
 import { classifyDelivery } from "./delivery-classification";
 import { discoverQueuedJobs } from "./github";
 import { reconcile } from "./reconciliation";
+import { LifecycleGitHub, lifecycleStatus, makeLifecycleGitHub } from "./lifecycle-status";
 import { emit } from "./log";
 
 export { RunnerContainer } from "./runner-container";
@@ -13,6 +14,16 @@ const handleRequest = Effect.fn("IngressWorker.fetch")(function* (request: Reque
   const url = new URL(request.url);
   if (request.method === "GET" && url.pathname === "/health") {
     return Response.json({ status: "ok", version: env.JITNEY_VERSION });
+  }
+  if (request.method === "GET" && url.pathname === "/lifecycle/status") {
+    if (request.headers.get("X-Jitney-Deployment") !== env.JITNEY_DEPLOYMENT) {
+      return new Response(null, { status: 404 });
+    }
+    return yield* lifecycleStatus(env).pipe(
+      Effect.provideService(LifecycleGitHub, makeLifecycleGitHub(env)),
+      Effect.map((status) => Response.json(status, { headers: { "Cache-Control": "no-store" } })),
+      Effect.catch(() => Effect.succeed(Response.json({ status: "unknown" }, { status: 503 }))),
+    );
   }
   if (request.method !== "POST" || url.pathname !== "/webhooks/github") {
     return new Response(null, { status: 404 });

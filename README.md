@@ -75,6 +75,18 @@ that already belongs to another deployment. A webhook normally starts the
 runner within a few seconds; the five-minute GitHub check catches the job if
 that webhook never arrives.
 
+## Check a deployment
+
+Run `list` whenever you want to compare the receipt with what is live in
+Cloudflare and GitHub:
+
+```bash
+npx get-jitney list
+```
+
+It reports missing resources, changed settings, and leftovers that no receipt
+owns. Use `npx get-jitney list --json` to get the same report as JSON.
+
 ## Deployment defaults
 
 | Setting | Default | Meaning |

@@ -1,17 +1,13 @@
 # get-jitney
 
-Deploy [Jitney](https://github.com/LoriKarikari/jitney) to your Cloudflare account and configure its GitHub App.
+Install [Jitney](https://github.com/LoriKarikari/jitney) in your Cloudflare account and connect it to GitHub.
 
 ```bash
 npx get-jitney deploy
 ```
 
-The installer deploys through Cloudflare's APIs using its embedded lifecycle
-engine. Users do not need Docker or any separate deployment tooling.
+The installer handles the Cloudflare and GitHub setup. You do not need Docker or another deployment tool.
 
-Use `--organization YOUR_ORG` to register the GitHub App under an organization.
-If setup fails, Jitney rolls back every recorded resource. Pass
-`--keep-partial` to leave the installing receipt and resources for repair.
+Use `--organization YOUR_ORG` to create the GitHub App under an organization. If setup fails, Jitney removes the resources it recorded. Pass `--keep-partial` to leave the failed deployment in place instead.
 
-Deployments created by 0.2.x must be removed before their names can be reused.
-See the [reinstall steps](https://github.com/LoriKarikari/jitney/blob/main/docs/operations/reinstall-pre-receipt-deployment.md).
+Jitney cannot adopt deployments created by version 0.2.x. Remove the old deployment before reusing its name; the [reinstall guide](https://github.com/LoriKarikari/jitney/blob/main/docs/operations/reinstall-pre-receipt-deployment.md) has the cleanup steps.

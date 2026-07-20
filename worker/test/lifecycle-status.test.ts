@@ -4,6 +4,7 @@ import {
   LifecycleGitHub,
   LifecycleGitHubError,
   lifecycleStatus,
+  rewriteLifecycleOwnership,
   type LifecycleInstallation,
 } from "../src/lifecycle-status";
 
@@ -33,6 +34,88 @@ function testEnv(value: unknown = receipt): Env {
   } as unknown as Env;
 }
 
+const noRewrites = () =>
+  Effect.fail(
+    new LifecycleGitHubError({
+      operation: "ownership",
+      cause: new Error("unexpected ownership rewrite"),
+    }),
+  );
+
+describe("lifecycle ownership rewrite", () => {
+  it("writes the deployment ULID to receipt-listed repositories", async () => {
+    const written: string[] = [];
+    const done = await Effect.runPromise(
+      rewriteLifecycleOwnership(testEnv(), [
+        { installationId: 42, fullName: "LoriKarikari/api" },
+      ]).pipe(
+        Effect.provideService(
+          LifecycleGitHub,
+          LifecycleGitHub.of({
+            inventory: () => Effect.succeed(inventory),
+            ownership: () => Effect.succeed(Option.some(deploymentId)),
+            rewriteOwnership: (_installationId, fullName, value) =>
+              Effect.sync(() => {
+                written.push(`${fullName}=${value}`);
+              }),
+          }),
+        ),
+      ),
+    );
+
+    expect(done).toBe(true);
+    expect(written).toEqual([`LoriKarikari/api=${deploymentId}`]);
+  });
+
+  it("refuses repositories the receipt does not list", async () => {
+    let called = false;
+    const done = await Effect.runPromise(
+      rewriteLifecycleOwnership(testEnv(), [
+        { installationId: 42, fullName: "LoriKarikari/other" },
+      ]).pipe(
+        Effect.provideService(
+          LifecycleGitHub,
+          LifecycleGitHub.of({
+            inventory: () => Effect.succeed(inventory),
+            ownership: () => Effect.succeed(Option.some(deploymentId)),
+            rewriteOwnership: () =>
+              Effect.sync(() => {
+                called = true;
+              }),
+          }),
+        ),
+      ),
+    );
+
+    expect(done).toBe(false);
+    expect(called).toBe(false);
+  });
+
+  it("refuses everything when the receipt belongs to another deployment", async () => {
+    let called = false;
+    const done = await Effect.runPromise(
+      rewriteLifecycleOwnership(testEnv({ ...receipt, id: "different" }), [
+        { installationId: 42, fullName: "LoriKarikari/api" },
+      ]).pipe(
+        Effect.provideService(
+          LifecycleGitHub,
+          LifecycleGitHub.of({
+            inventory: () => Effect.succeed(inventory),
+            ownership: () => Effect.succeed(Option.some(deploymentId)),
+            rewriteOwnership: () =>
+              Effect.sync(() => {
+                called = true;
+              }),
+          }),
+        ),
+      ),
+    );
+
+    expect(done).toBe(false);
+    expect(called).toBe(false);
+  });
+});
+
 describe("lifecycle status", () => {
   it("reports matching installations and ownership without exposing inventory", async () => {
     const status = await Effect.runPromise(
@@ -42,6 +125,7 @@ describe("lifecycle status", () => {
           LifecycleGitHub.of({
             inventory: () => Effect.succeed(inventory),
             ownership: () => Effect.succeed(Option.some(deploymentId)),
+            rewriteOwnership: noRewrites,
           }),
         ),
       ),
@@ -80,6 +164,7 @@ describe("lifecycle status", () => {
                       cause: new Error("timeout"),
                     }),
                   ),
+            rewriteOwnership: noRewrites,
           }),
         ),
       ),
@@ -108,6 +193,7 @@ describe("lifecycle status", () => {
                 return inventory;
               }),
             ownership: () => Effect.succeed(Option.some(deploymentId)),
+            rewriteOwnership: noRewrites,
           }),
         ),
       ),

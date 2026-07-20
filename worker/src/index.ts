@@ -1,8 +1,14 @@
-import { Data, Effect } from "effect";
+import { Data, Effect, Schema } from "effect";
 import { classifyDelivery } from "./delivery-classification";
 import { discoverQueuedJobs } from "./github";
 import { reconcile } from "./reconciliation";
-import { LifecycleGitHub, lifecycleStatus, makeLifecycleGitHub } from "./lifecycle-status";
+import {
+  LifecycleGitHub,
+  OwnershipRewriteRequest,
+  lifecycleStatus,
+  makeLifecycleGitHub,
+  rewriteLifecycleOwnership,
+} from "./lifecycle-status";
 import { emit } from "./log";
 
 export { RunnerContainer } from "./runner-container";
@@ -23,6 +29,29 @@ const handleRequest = Effect.fn("IngressWorker.fetch")(function* (request: Reque
       Effect.provideService(LifecycleGitHub, makeLifecycleGitHub(env)),
       Effect.map((status) => Response.json(status, { headers: { "Cache-Control": "no-store" } })),
       Effect.catch(() => Effect.succeed(Response.json({ status: "unknown" }, { status: 503 }))),
+    );
+  }
+  if (request.method === "POST" && url.pathname === "/lifecycle/ownership") {
+    if (request.headers.get("X-Jitney-Deployment") !== env.JITNEY_DEPLOYMENT) {
+      return new Response(null, { status: 404 });
+    }
+    return yield* Effect.tryPromise({
+      try: () => request.json(),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.flatMap((body) =>
+        Effect.try({
+          try: () => Schema.decodeUnknownSync(OwnershipRewriteRequest)(body),
+          catch: (cause) => cause,
+        }),
+      ),
+      Effect.flatMap((rewrite) =>
+        rewriteLifecycleOwnership(env, rewrite.repositories).pipe(
+          Effect.provideService(LifecycleGitHub, makeLifecycleGitHub(env)),
+        ),
+      ),
+      Effect.map((done) => new Response(null, { status: done ? 204 : 409 })),
+      Effect.catch(() => Effect.succeed(new Response(null, { status: 503 }))),
     );
   }
   if (request.method !== "POST" || url.pathname !== "/webhooks/github") {

@@ -50,6 +50,11 @@ export class LifecycleGitHub extends Context.Service<
       installationId: number,
       fullName: string,
     ) => Effect.Effect<Option.Option<string>, LifecycleGitHubError>;
+    readonly rewriteOwnership: (
+      installationId: number,
+      fullName: string,
+      value: string,
+    ) => Effect.Effect<void, LifecycleGitHubError>;
   }
 >()("Jitney.LifecycleGitHub") {}
 
@@ -148,20 +153,86 @@ export const makeLifecycleGitHub = (env: Env): LifecycleGitHub["Service"] => {
         Effect.catchTag("VariableMissing", () => Effect.succeed(Option.none())),
       );
     },
+    rewriteOwnership: (installationId, fullName, value) => {
+      const [owner, repo] = fullName.split("/", 2);
+      if (owner === undefined || repo === undefined) {
+        return Effect.fail(
+          new LifecycleGitHubError({
+            operation: "ownership",
+            cause: new Error(`Invalid repository name: ${fullName}`),
+          }),
+        );
+      }
+      const installation = new Octokit({
+        authStrategy: createAppAuth,
+        auth: {
+          appId: env.GITHUB_APP_ID,
+          privateKey: env.GITHUB_APP_PRIVATE_KEY,
+          installationId,
+        },
+      });
+      return Effect.tryPromise({
+        try: () =>
+          installation.rest.actions.createRepoVariable({
+            owner,
+            repo,
+            name: "JITNEY_DEPLOYMENT",
+            value,
+          }),
+        catch: (cause) => new LifecycleGitHubError({ operation: "ownership", cause }),
+      }).pipe(Effect.asVoid);
+    },
   });
 };
 
+export const OwnershipRewriteRequest = Schema.Struct({
+  repositories: Schema.Array(
+    Schema.Struct({
+      installationId: Schema.Number,
+      fullName: Schema.String,
+    }),
+  ),
+});
+
+const readOwnReceipt = (env: Env) =>
+  Effect.gen(function* () {
+    const value = yield* Effect.tryPromise({
+      try: () => env.JITNEY_RECEIPTS.get(env.JITNEY_RECEIPT_NAME, "json"),
+      catch: (cause) => cause,
+    });
+    const receipt = yield* Effect.try({
+      try: () => Schema.decodeUnknownSync(Receipt)(value),
+      catch: (cause) => cause,
+    });
+    return { receipt, matches: receipt.id === env.JITNEY_DEPLOYMENT };
+  });
+
+export const rewriteLifecycleOwnership = Effect.fn("GitHub.rewriteLifecycleOwnership")(function* (
+  env: Env,
+  repositories: readonly { installationId: number; fullName: string }[],
+) {
+  const github = yield* LifecycleGitHub;
+  const { receipt, matches } = yield* readOwnReceipt(env);
+  if (!matches) return false;
+  const allowed = new Set(
+    Arr.flatMap(receipt.github.installations, (installation) =>
+      Arr.map(
+        installation.repositories,
+        (repository) => `${installation.id}:${repository.fullName}`,
+      ),
+    ),
+  );
+  for (const repository of repositories) {
+    if (!allowed.has(`${repository.installationId}:${repository.fullName}`)) return false;
+    yield* github.rewriteOwnership(repository.installationId, repository.fullName, receipt.id);
+  }
+  return true;
+});
+
 export const lifecycleStatus = Effect.fn("GitHub.lifecycleStatus")(function* (env: Env) {
   const github = yield* LifecycleGitHub;
-  const value = yield* Effect.tryPromise({
-    try: () => env.JITNEY_RECEIPTS.get(env.JITNEY_RECEIPT_NAME, "json"),
-    catch: (cause) => cause,
-  });
-  const receipt = yield* Effect.try({
-    try: () => Schema.decodeUnknownSync(Receipt)(value),
-    catch: (cause) => cause,
-  });
-  if (receipt.id !== env.JITNEY_DEPLOYMENT) return unknownStatus(receipt);
+  const { receipt, matches } = yield* readOwnReceipt(env);
+  if (!matches) return unknownStatus(receipt);
 
   const liveInventory = yield* Effect.result(github.inventory());
   if (Result.isFailure(liveInventory)) return unknownStatus(receipt);

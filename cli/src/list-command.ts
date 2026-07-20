@@ -1,11 +1,11 @@
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
-import * as Workers from "@distilled.cloud/cloudflare/workers";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { Effect, HashMap, Option, Predicate, Ref, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { request } from "@octokit/request";
 import { observeAccount, type AccountSnapshot } from "./cloudflare-inventory.js";
 import { cloudflareRuntime } from "./cloudflare-runtime.js";
+import { fetchLifecycleStatus, workerAddress } from "./lifecycle-status-client.js";
 import { InstallerError } from "./errors.js";
 import {
   ListPlatform,
@@ -28,40 +28,12 @@ const HealthResponse = Schema.Struct({
   version: Schema.String,
 });
 
-const LifecycleResponse = Schema.Struct({
-  app: Schema.Literals(["ok", "unknown"]),
-  installations: Schema.Literals(["ok", "drifted", "unknown"]),
-  ownership: Schema.Array(
-    Schema.Struct({
-      installationId: Schema.Number,
-      repositoryId: Schema.Number,
-      status: Schema.Literals(["ok", "missing", "drifted", "unknown"]),
-    }),
-  ),
-});
-
 const LatestRelease = Schema.Struct({ tag_name: Schema.String });
 
 const unreachable = (
   plane: ProbeUnreachableError["plane"],
   cause: unknown,
 ): ProbeUnreachableError => new ProbeUnreachableError({ plane, cause });
-
-const workerAddress = Effect.fn(function* (accountId: string, name: string) {
-  const script = yield* Workers.getScriptSetting({ accountId, scriptName: name }).pipe(
-    Effect.map(Option.fromUndefinedOr),
-    Effect.catchTag("WorkerNotFound", () => Effect.succeed(Option.none())),
-  );
-  if (Option.isNone(script)) return { exists: false, url: null } as const;
-  const [{ subdomain }, scriptSubdomain] = yield* Effect.all([
-    Workers.getSubdomain({ accountId }),
-    Workers.getScriptSubdomain({ accountId, scriptName: name }),
-  ]);
-  return {
-    exists: true,
-    url: scriptSubdomain.enabled ? `https://${name}.${subdomain}.workers.dev` : null,
-  } as const;
-});
 
 const makeListPlatform = Effect.fn(function* () {
   const credentials = yield* Credentials;
@@ -143,23 +115,7 @@ const makeListPlatform = Effect.fn(function* () {
         if (appPage.status === 404) {
           return { appExists: false, installations: [], ownership: [] } satisfies GitHubProbe;
         }
-        const worker = yield* provideCloudflare(
-          workerAddress(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
-        );
-        if (!worker.exists || worker.url === null) {
-          return yield* Effect.fail(new Error("Worker is unavailable"));
-        }
-        const response = yield* client.get(`${worker.url}/lifecycle/status`, {
-          headers: { "X-Jitney-Deployment": receipt.id },
-        });
-        if (response.status !== 200) {
-          return yield* Effect.fail(new Error(`Lifecycle probe returned ${response.status}`));
-        }
-        const body = yield* response.json;
-        const status = yield* Effect.try({
-          try: () => Schema.decodeUnknownSync(LifecycleResponse)(body),
-          catch: (cause) => cause,
-        });
+        const status = yield* provideCloudflare(fetchLifecycleStatus(receipt));
         if (status.app === "unknown" || status.installations === "unknown") {
           return yield* Effect.fail(new Error("GitHub lifecycle probe was inconclusive"));
         }

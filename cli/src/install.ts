@@ -1,6 +1,7 @@
 import { Context, DateTime, Effect } from "effect";
 import { InstallRollbackError, type InstallerError, type InstallFailure } from "./errors.js";
 import type { GitHubAppCredentials } from "./github-app.js";
+import { runnerApplicationName } from "./cloudflare-inventory.js";
 import { beginInstallOperation } from "./receipts/leased-operation.js";
 import {
   createDeploymentReceipt,
@@ -94,9 +95,9 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
       accountId: input.accountId,
       workerName: input.name,
       applicationId: null,
-      applicationName: `${input.name}-runner`,
+      applicationName: runnerApplicationName(input.name),
       durableObjectClasses: ["Scheduler", "RunnerContainer"],
-      registryRepo: `${input.name}-runner`,
+      registryRepo: runnerApplicationName(input.name),
       tags: { current: input.version, previous: null },
     },
     github: {

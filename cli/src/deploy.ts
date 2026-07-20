@@ -1,6 +1,5 @@
 import * as Containers from "@distilled.cloud/cloudflare/containers";
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
-import * as Workers from "@distilled.cloud/cloudflare/workers";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { deploy as alchemyDeploy } from "alchemy/Deploy";
@@ -18,10 +17,10 @@ import {
   type GitHubAppAttributes,
 } from "./alchemy/github-app.js";
 import { alchemyCli, cloudflareRuntime } from "./cloudflare-runtime.js";
+import { ensureDeploymentAbsent, waitForDeploymentRemoval } from "./cloudflare-inventory.js";
 import { workerBundlePath, validateWorkerName } from "./config.js";
 import {
   ExistingDeploymentError,
-  ExistingWorkerError,
   InstallerError,
   isInstallFailure,
   tryPromise,
@@ -118,7 +117,7 @@ export function deploy(options: {
     if (Option.isSome(existingStore)) {
       yield* assertDeploymentAbsent(name, existingStore.value);
     }
-    yield* assertCloudflareResourcesAbsent(accountId, name);
+    yield* ensureDeploymentAbsent(accountId, name);
 
     const receipts = yield* Option.match(existingStore, {
       onNone: () =>
@@ -204,71 +203,6 @@ const assertDeploymentAbsent = Effect.fn(function* (name: string, receipts: Rece
     });
   }
 });
-
-const assertCloudflareResourcesAbsent = Effect.fn(function* (accountId: string, name: string) {
-  const worker = yield* Workers.getScriptSetting({ accountId, scriptName: name }).pipe(
-    Effect.map(Option.fromUndefinedOr),
-    Effect.catchTag("WorkerNotFound", () => Effect.succeed(Option.none())),
-    Effect.mapError(
-      (cause) =>
-        new InstallerError({
-          step: "existing_worker_check",
-          message: "Could not check whether the Worker already exists",
-          cause,
-        }),
-    ),
-  );
-  if (Option.isSome(worker)) return yield* new ExistingWorkerError({ workerName: name });
-
-  const applications = yield* Containers.listContainerApplications({ accountId }).pipe(
-    Effect.mapError(
-      (cause) =>
-        new InstallerError({
-          step: "existing_worker_check",
-          message: "Could not check whether the container application already exists",
-          cause,
-        }),
-    ),
-  );
-  if (applications.some((application) => application.name === `${name}-runner`)) {
-    return yield* new InstallerError({
-      step: "existing_worker_check",
-      message: `Container application ${name}-runner already exists. Refusing to overwrite it.`,
-    });
-  }
-});
-
-const verifyCloudflareResourcesRemoved = (accountId: string, name: string) => {
-  const pending = new InstallerError({
-    step: "rollback",
-    message: `Cloudflare is still reporting resources for ${name}`,
-  });
-  return Effect.gen(function* () {
-    const workerExists = yield* Workers.getScriptSetting({ accountId, scriptName: name }).pipe(
-      Effect.map((setting) => setting !== undefined),
-      Effect.catchTag("WorkerNotFound", () => Effect.succeed(false)),
-    );
-    const applications = yield* Containers.listContainerApplications({ accountId });
-    if (workerExists || applications.some((application) => application.name === `${name}-runner`)) {
-      return yield* Effect.fail(pending);
-    }
-  }).pipe(
-    Effect.retry({
-      while: (error) => error === pending,
-      schedule: Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(29)]),
-    }),
-    Effect.asVoid,
-    Effect.mapError((cause) =>
-      cause instanceof InstallerError
-        ? cause
-        : new InstallerError({
-            step: "rollback",
-            message: "Could not verify removal of the partial Cloudflare deployment",
-            cause,
-          }),
-    ),
-  );
-};
 
 const githubAppAttributes = (credentials: GitHubAppCredentials): GitHubAppAttributes => ({
   appId: credentials.appId,
@@ -500,7 +434,7 @@ const makeInstallPlatform = Effect.fn(function* (
           );
         }
         yield* destroyStack(input, credentials);
-        yield* provideCloudflareApi(verifyCloudflareResourcesRemoved(input.accountId, input.name));
+        yield* provideCloudflareApi(waitForDeploymentRemoval(input.accountId, input.name));
         const registryTag = input.receipt.cloudflare.tags.current;
         if (input.receipt.cloudflare.applicationId !== null && registryTag !== null) {
           const registry = yield* provideCloudflareApi(

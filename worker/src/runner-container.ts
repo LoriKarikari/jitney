@@ -23,7 +23,7 @@ export class RunnerContainer extends Container<Env> {
   startAttempt(request: StartAttempt): Promise<void> {
     const { jitConfig, ...correlation } = request;
     return Effect.runPromise(
-      Effect.gen(this, function* () {
+      Effect.gen({ self: this }, function* () {
         yield* Effect.tryPromise({
           try: () => this.ctx.storage.put("correlation", correlation satisfies RunnerCorrelation),
           catch: (cause) => new RunnerContainerError({ operation: "correlation_write", cause }),

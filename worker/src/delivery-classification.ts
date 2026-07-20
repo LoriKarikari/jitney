@@ -1,5 +1,5 @@
 import { verify } from "@octokit/webhooks-methods";
-import { Data, Effect, Either, Schema } from "effect";
+import { Data, Effect, Result, Schema } from "effect";
 import { isAdmissible, type WorkflowEvent } from "./domain";
 
 const payloadLimit = 1_048_576;
@@ -38,11 +38,11 @@ class SignatureVerificationError extends Data.TaggedError("SignatureVerification
 }> {}
 
 const Action = Schema.Struct({
-  action: Schema.Literal("queued", "in_progress", "completed"),
+  action: Schema.Literals(["queued", "in_progress", "completed"]),
 });
 
 const Payload = Schema.Struct({
-  action: Schema.Literal("queued", "in_progress", "completed"),
+  action: Schema.Literals(["queued", "in_progress", "completed"]),
   installation: Schema.Struct({ id: Schema.Number }),
   repository: Schema.Struct({
     id: Schema.Number,
@@ -53,14 +53,14 @@ const Payload = Schema.Struct({
   workflow_job: Schema.Struct({
     id: Schema.Number,
     labels: Schema.Array(Schema.String),
-    runner_name: Schema.NullishOr(Schema.String),
-    conclusion: Schema.NullishOr(Schema.String),
+    runner_name: Schema.optionalKey(Schema.NullishOr(Schema.String)),
+    conclusion: Schema.optionalKey(Schema.NullishOr(Schema.String)),
   }),
 });
 
-const decodeJson = Schema.decodeUnknownEither(Schema.parseJson(Schema.Unknown));
-const decodeAction = Schema.decodeUnknownEither(Action);
-const decodePayload = Schema.decodeUnknownEither(Payload);
+const decodeJson = Schema.decodeUnknownResult(Schema.UnknownFromJsonString);
+const decodeAction = Schema.decodeUnknownResult(Action);
+const decodePayload = Schema.decodeUnknownResult(Payload);
 
 export const classifyDelivery: (
   request: Request,
@@ -70,14 +70,14 @@ export const classifyDelivery: (
   webhookSecret: string,
 ) {
   const deliveryId = request.headers.get("X-GitHub-Delivery");
-  const read = yield* readBoundedBody(request).pipe(Effect.either);
-  if (Either.isLeft(read)) return { status: 400, outcome: "malformed", deliveryId } as const;
-  if (read.right === undefined) {
+  const read = yield* readBoundedBody(request).pipe(Effect.result);
+  if (Result.isFailure(read)) return { status: 400, outcome: "malformed", deliveryId } as const;
+  if (read.success === undefined) {
     return { status: 413, outcome: "payload_too_large", deliveryId } as const;
   }
 
   const signature = request.headers.get("X-Hub-Signature-256");
-  const bodyText = new TextDecoder().decode(read.right);
+  const bodyText = new TextDecoder().decode(read.success);
   const valid =
     signature === null ? false : yield* verifySignature(webhookSecret, bodyText, signature);
   if (!valid) return { status: 401, outcome: "invalid_signature", deliveryId } as const;
@@ -140,7 +140,7 @@ function verifySignature(secret: string, body: string, signature: string): Effec
   return Effect.tryPromise({
     try: () => verify(secret, body, signature),
     catch: (cause) => new SignatureVerificationError({ cause }),
-  }).pipe(Effect.catchAll(() => Effect.succeed(false)));
+  }).pipe(Effect.catch(() => Effect.succeed(false)));
 }
 
 function decodeWorkflowEvent(
@@ -148,12 +148,12 @@ function decodeWorkflowEvent(
   body: string,
 ): WorkflowEvent | "ignored" | "malformed" {
   const json = decodeJson(body);
-  if (Either.isLeft(json)) return "malformed";
-  if (Either.isLeft(decodeAction(json.right))) return "ignored";
+  if (Result.isFailure(json)) return "malformed";
+  if (Result.isFailure(decodeAction(json.success))) return "ignored";
 
-  const decoded = decodePayload(json.right);
-  if (Either.isLeft(decoded)) return "malformed";
-  const payload = decoded.right;
+  const decoded = decodePayload(json.success);
+  if (Result.isFailure(decoded)) return "malformed";
+  const payload = decoded.success;
   if (!isAdmissible(payload.repository.private, payload.workflow_job.labels)) return "ignored";
 
   const event: WorkflowEvent = {

@@ -314,7 +314,7 @@ describe("Scheduler admission", () => {
         const provisioningStarted = new Promise<void>((resolve) => {
           markProvisioningStarted = resolve;
         });
-        const sweep = yield* Effect.fork(
+        const sweep = yield* Effect.forkChild(
           lifecycle.sweep(
             operations(() =>
               Effect.promise(

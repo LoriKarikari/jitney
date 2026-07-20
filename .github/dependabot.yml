@@ -13,6 +13,9 @@ updates:
     directory: /worker
     schedule:
       interval: weekly
+    ignore:
+      # Alchemy v2 and Effect 4 are pre-GA and must be upgraded together.
+      - dependency-name: effect
     groups:
       npm-minor-and-patch:
         update-types:

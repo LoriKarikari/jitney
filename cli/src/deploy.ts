@@ -59,9 +59,9 @@ export function deploy(options: {
           version,
           workerName,
         }).pipe(
-          Effect.catchAll((error) =>
+          Effect.catch((error) =>
             reportPartialSetup(state, workerName, options.organization).pipe(
-              Effect.zipRight(Effect.fail(error)),
+              Effect.andThen(Effect.fail(error)),
             ),
           ),
         ),
@@ -265,10 +265,8 @@ function waitForInstallation(
     Effect.flatMap((count) => (count > 0 ? Effect.void : Effect.fail(pending))),
   );
   return Effect.sync(() => process.stdout.write("Waiting for the GitHub App installation")).pipe(
-    Effect.zipRight(
-      check.pipe(
-        Effect.retry(Schedule.spaced("5 seconds").pipe(Schedule.intersect(Schedule.recurs(119)))),
-      ),
+    Effect.andThen(
+      check.pipe(Effect.retry(Schedule.max([Schedule.spaced("5 seconds"), Schedule.recurs(119)]))),
     ),
     Effect.tap(() => Effect.sync(() => process.stdout.write(" done\n"))),
   );

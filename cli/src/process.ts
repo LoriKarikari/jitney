@@ -15,7 +15,7 @@ export function run(
   args: readonly string[],
   options: { cwd?: string; env?: NodeJS.ProcessEnv; echo?: boolean } = {},
 ): Effect.Effect<CommandResult, CommandError> {
-  return Effect.async<CommandResult, CommandError>((resume) => {
+  return Effect.callback<CommandResult, CommandError>((resume) => {
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,

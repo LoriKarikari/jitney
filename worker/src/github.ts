@@ -1,6 +1,6 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
-import { Data, Effect, Either } from "effect";
+import { Data, Effect, Result } from "effect";
 import type { QueuedJobCandidate } from "./domain";
 
 export type DiscoveryFailureStep =
@@ -43,7 +43,7 @@ export const discoverQueuedJobs: (input: {
         authStrategy: createAppAuth,
         auth: { appId, privateKey, installationId },
       });
-      const repositories = yield* Effect.either(
+      const repositories = yield* Effect.result(
         Effect.tryPromise({
           try: () =>
             installation.paginate(installation.rest.apps.listReposAccessibleToInstallation, {
@@ -52,17 +52,17 @@ export const discoverQueuedJobs: (input: {
           catch: (cause) => new DiscoveryError({ step: "repository_listing", cause }),
         }),
       );
-      if (Either.isLeft(repositories)) {
-        result.failures.push({ installationId, step: repositories.left.step });
+      if (Result.isFailure(repositories)) {
+        result.failures.push({ installationId, step: repositories.failure.step });
         continue;
       }
 
-      for (const repository of repositories.right) {
+      for (const repository of repositories.success) {
         if (!repository.private) continue;
         const { id: repositoryId, name: repositoryName, private: repositoryPrivate } = repository;
         const repositoryOwner = repository.owner.login;
         const correlation = { installationId, repositoryId };
-        const runs = yield* Effect.either(
+        const runs = yield* Effect.result(
           Effect.tryPromise({
             try: () =>
               installation.paginate(installation.rest.actions.listWorkflowRunsForRepo, {
@@ -74,13 +74,13 @@ export const discoverQueuedJobs: (input: {
             catch: (cause) => new DiscoveryError({ step: "run_listing", cause }),
           }),
         );
-        if (Either.isLeft(runs)) {
-          result.failures.push({ ...correlation, step: runs.left.step });
+        if (Result.isFailure(runs)) {
+          result.failures.push({ ...correlation, step: runs.failure.step });
           continue;
         }
 
-        for (const run of runs.right) {
-          const jobs = yield* Effect.either(
+        for (const run of runs.success) {
+          const jobs = yield* Effect.result(
             Effect.tryPromise({
               try: () =>
                 installation.paginate(installation.rest.actions.listJobsForWorkflowRun, {
@@ -92,12 +92,12 @@ export const discoverQueuedJobs: (input: {
               catch: (cause) => new DiscoveryError({ step: "job_listing", cause }),
             }),
           );
-          if (Either.isLeft(jobs)) {
-            result.failures.push({ ...correlation, step: jobs.left.step });
+          if (Result.isFailure(jobs)) {
+            result.failures.push({ ...correlation, step: jobs.failure.step });
             continue;
           }
 
-          for (const job of jobs.right) {
+          for (const job of jobs.success) {
             if (job.status !== "queued") continue;
             result.candidates.push({
               ...correlation,

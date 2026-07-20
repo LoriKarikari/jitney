@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Cause, Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -173,9 +173,12 @@ function expectFailure(
   step: RunnerAttemptFailure["step"],
 ): void {
   expect(result._tag).toBe("Failure");
-  if (result._tag === "Failure" && result.cause._tag === "Fail") {
-    const error = result.cause.error;
-    expect(error).toBeInstanceOf(RunnerAttemptFailure);
-    if (error instanceof RunnerAttemptFailure) expect(error.step).toBe(step);
+  if (result._tag === "Failure") {
+    const failure = Cause.findErrorOption(result.cause);
+    expect(Option.isSome(failure)).toBe(true);
+    if (Option.isSome(failure)) {
+      expect(failure.value).toBeInstanceOf(RunnerAttemptFailure);
+      if (failure.value instanceof RunnerAttemptFailure) expect(failure.value.step).toBe(step);
+    }
   }
 }

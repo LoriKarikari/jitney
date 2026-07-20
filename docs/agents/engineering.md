@@ -299,8 +299,9 @@ interface only when the installed SDK has no suitable typed operation.
 
 ### Effect-native code
 
-The CLI is Effect-native; use idiomatic Effect APIs. (If Alchemy v2 is adopted
-after its GA revisit, use idiomatic Alchemy APIs the same way.)
+This is an Effect-native project — CLI and Worker alike; use idiomatic Effect
+APIs everywhere. (If Alchemy v2 is adopted after its GA revisit, use idiomatic
+Alchemy APIs the same way.)
 
 - Avoid async/await and raw Promise workflows unless an external boundary
   makes them unavoidable; isolate such code in the owning adapter.

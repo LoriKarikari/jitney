@@ -1,9 +1,13 @@
 import { and, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
-import { Data, Either, Effect } from "effect";
+import { Data, Effect, Result } from "effect";
 import { assignments, attempts, deliveries, jobs, pending } from "./schema";
 import { isAdmissible, type QueuedJobCandidate, type WorkflowEvent } from "./domain";
-import type { RunnerAttemptOperations, RunnerAttemptRequest } from "./runner-attempt-operations";
+import type {
+  RunnerAttemptFailure,
+  RunnerAttemptOperations,
+  RunnerAttemptRequest,
+} from "./runner-attempt-operations";
 import { emit } from "./log";
 
 const maxPendingJobs = 10;
@@ -73,7 +77,7 @@ export class SchedulerLifecycle {
   }
 
   accept(event: WorkflowEvent): Effect.Effect<AcceptResult, SchedulerStorageError> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const now = Date.now();
       const result = yield* this.#transaction(() => {
         if (!this.#recordDelivery(event, now)) return { outcome: "duplicate" } as const;
@@ -102,7 +106,7 @@ export class SchedulerLifecycle {
   }
 
   reconcile(candidate: QueuedJobCandidate): Effect.Effect<AcceptResult, SchedulerStorageError> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const now = Date.now();
       const result = yield* this.#transaction(() => {
         if (!isAdmissible(candidate.repositoryPrivate, candidate.labels)) {
@@ -431,7 +435,7 @@ export class SchedulerLifecycle {
     operations: RunnerAttemptOperations,
     now = Date.now(),
   ): Effect.Effect<void, SchedulerStorageError> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const morePending = yield* this.#drainPending(operations);
       yield* this.#expireUnassignedAttempts(operations, now);
       yield* this.#expireRunningAttempts(operations, now);
@@ -462,7 +466,7 @@ export class SchedulerLifecycle {
     operations: RunnerAttemptOperations,
     now: number,
   ): Effect.Effect<void, SchedulerStorageError> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const expired = this.#expiredAttempts(
         and(
           inArray(attempts.state, viableAttemptStates),
@@ -499,7 +503,7 @@ export class SchedulerLifecycle {
     operations: RunnerAttemptOperations,
     now: number,
   ): Effect.Effect<void, SchedulerStorageError> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const expired = this.#expiredAttempts(
         and(eq(attempts.state, "running"), sql`${attempts.runtimeDeadline} <= ${now}`),
       );
@@ -549,7 +553,7 @@ export class SchedulerLifecycle {
     row: ExpiredAttempt,
     stopReason: string,
   ): Effect.Effect<void> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const { workflowJobId, attempt, installationId, runnerName, containerName, repositoryId } =
         row;
       const correlation = {
@@ -575,10 +579,10 @@ export class SchedulerLifecycle {
           runnerName,
           containerName,
         })
-        .pipe(Effect.either);
-      if (Either.isLeft(result)) {
+        .pipe(Effect.result);
+      if (Result.isFailure(result)) {
         yield* Effect.sync(() =>
-          emit({ event: "runner_reclaim_failed", ...correlation, step: result.left.step }),
+          emit({ event: "runner_reclaim_failed", ...correlation, step: result.failure.step }),
         );
       }
     });
@@ -587,7 +591,7 @@ export class SchedulerLifecycle {
   #drainPending(
     operations: RunnerAttemptOperations,
   ): Effect.Effect<boolean, SchedulerStorageError> {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const row = this.#db
         .select({
           ...getTableColumns(pending),
@@ -661,17 +665,17 @@ export class SchedulerLifecycle {
           runnerName,
           containerName,
         })
-        .pipe(Effect.either);
+        .pipe(Effect.result);
 
       yield* this.#transaction(() => {
-        if (Either.isRight(result)) {
+        if (Result.isSuccess(result)) {
           this.#finishProvisioning(pendingRow);
         } else {
-          this.#failProvisioning(pendingRow, result.left);
+          this.#failProvisioning(pendingRow, result.failure);
         }
         this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
       });
-      if (Either.isRight(result)) {
+      if (Result.isSuccess(result)) {
         yield* Effect.sync(() => emit({ event: "runner_provisioning_succeeded", ...correlation }));
       }
       const remaining = this.#db
@@ -723,10 +727,7 @@ export class SchedulerLifecycle {
     });
   }
 
-  #failProvisioning(
-    pendingRow: PendingRow,
-    error: Effect.Effect.Error<ReturnType<RunnerAttemptOperations["provision"]>>,
-  ): void {
+  #failProvisioning(pendingRow: PendingRow, error: RunnerAttemptFailure): void {
     const { deliveryId, installationId, repositoryId, workflowJobId, runnerName, containerName } =
       pendingRow;
     this.#db

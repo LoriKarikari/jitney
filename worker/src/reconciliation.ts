@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import type { QueuedJobCandidate } from "./domain";
 import type { DiscoveryError, DiscoveryResult } from "./github";
 import type { AcceptResult } from "./lifecycle";
@@ -19,15 +19,15 @@ export const reconcile: <Error>(
 ) {
   yield* Effect.sync(() => emit({ event: "reconciliation_started", deploymentId }));
 
-  const discovered = yield* discover.pipe(Effect.either);
-  if (Either.isLeft(discovered)) {
+  const discovered = yield* discover.pipe(Effect.result);
+  if (Result.isFailure(discovered)) {
     yield* Effect.sync(() =>
-      emit({ event: "reconciliation_failed", deploymentId, step: discovered.left.step }),
+      emit({ event: "reconciliation_failed", deploymentId, step: discovered.failure.step }),
     );
     return;
   }
 
-  const { candidates, failures } = discovered.right;
+  const { candidates, failures } = discovered.success;
   for (const failure of failures) {
     yield* Effect.sync(() =>
       emit({ event: "reconciliation_discovery_failed", deploymentId, ...failure }),

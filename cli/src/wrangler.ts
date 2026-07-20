@@ -34,7 +34,7 @@ export function cloudflareAccounts(): Effect.Effect<
   );
   return whoami.pipe(
     Effect.catchTag("CommandError", () =>
-      wrangler(["login"], { echo: true }).pipe(Effect.zipRight(whoami)),
+      wrangler(["login"], { echo: true }).pipe(Effect.andThen(whoami)),
     ),
   );
 }

@@ -51,7 +51,7 @@ const exit = await Effect.runPromiseExit(program);
 Exit.match(exit, {
   onSuccess: () => undefined,
   onFailure: (cause) => {
-    const failure = Cause.failureOption(cause);
+    const failure = Cause.findErrorOption(cause);
     console.error(
       Option.isSome(failure) && isInstallFailure(failure.value)
         ? renderFailure(failure.value)

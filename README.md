@@ -66,11 +66,18 @@ before reusing the old deployment name.
 npx get-jitney deploy
 ```
 
-The installer signs you into Cloudflare if needed, copies the release-pinned
-runner image into your Cloudflare registry, and deploys the Worker. It then
-opens GitHub to create and install a preconfigured private GitHub App. Jitney
-stores the generated App ID, private key, and webhook secret as Cloudflare
-Worker secrets; they are never written to your project.
+The installer signs you into Cloudflare if needed, records the deployment
+before creating resources, and uses its embedded lifecycle engine to call the
+Cloudflare APIs directly. It copies the release-pinned runner image into your
+Cloudflare registry, creates the Container Application, and deploys the Worker
+with its Durable Objects and bindings. You do not need Wrangler, Docker, or a
+separate Alchemy installation.
+
+The installer then opens GitHub to create and install a preconfigured private
+GitHub App. Jitney stores the generated App ID, private key, and webhook secret
+as Cloudflare Worker secrets; they are never written to your project. If setup
+fails, it removes the resources it created unless you pass `--keep-partial` for
+a later repair.
 
 To own the GitHub App through an organization instead of your personal account:
 
@@ -85,13 +92,16 @@ The webhook arrives, a container boots, and the job picks up in a few seconds.
 If the webhook is lost, the five-minute reconciliation cron catches the queued
 job instead.
 
-## Configuration
+## Deployment defaults
 
-| Setting | Where | Default | Meaning |
-| --- | --- | --- | --- |
-| `RUNTIME_TIMEOUT_MS` | `wrangler.jsonc` vars | `3600000` | Kill jobs that run longer than this |
-| `max_instances` | `wrangler.jsonc` containers | `5` | Concurrent runner containers |
-| `instance_type` | `wrangler.jsonc` containers | `standard-2` | Container size (1 vCPU, 6 GiB, 12 GB disk) |
+These values are currently managed by the installer rather than a local
+`wrangler.jsonc` file.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Job timeout | 1 hour | Kill jobs that run longer than this |
+| Maximum instances | 5 | Concurrent runner containers |
+| Instance type | `standard-2` | Container size (1 vCPU, 6 GiB, 12 GB disk) |
 
 ## How it works
 

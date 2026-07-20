@@ -2,13 +2,15 @@ import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { x as extractTar } from "tar";
 import { InstallerError, tryPromise } from "./errors.js";
 import { run } from "./process.js";
 
 const ORAS_VERSION = "1.3.3";
 const ORAS_RELEASE = `https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}`;
+const OrasTags = Schema.Struct({ tags: Schema.Array(Schema.String) });
+
 const ORAS_CHECKSUMS: Record<string, string> = {
   "oras_1.3.3_darwin_amd64.tar.gz":
     "aeb684d8c24c18dce28fd1f7326636e4782b573108e244a93d4b1c4a5ec50f48",
@@ -86,6 +88,41 @@ export function copyImage(
             message: "Could not copy the runner image into Cloudflare",
             cause,
           }),
+      ),
+    ),
+  );
+}
+
+export function listImageTags(
+  options: RegistryAuth & {
+    repository: string;
+  },
+): Effect.Effect<readonly string[], InstallerError> {
+  return withRegistryAuth(options, (oras, authPath) =>
+    run(
+      oras,
+      ["repo", "tags", "--registry-config", authPath, "--format", "json", options.repository],
+      { echo: false },
+    ).pipe(
+      Effect.flatMap((result) =>
+        Effect.try({
+          try: () => Schema.decodeUnknownSync(OrasTags)(JSON.parse(result.stdout)).tags,
+          catch: (cause) =>
+            new InstallerError({
+              step: "registry_inspection",
+              message: `Could not parse tags for ${options.repository}`,
+              cause,
+            }),
+        }),
+      ),
+      Effect.mapError((cause) =>
+        cause instanceof InstallerError
+          ? cause
+          : new InstallerError({
+              step: "registry_inspection",
+              message: `Could not list tags for ${options.repository}`,
+              cause,
+            }),
       ),
     ),
   );

@@ -77,6 +77,7 @@ export function jitneyStack(
           RUNNER_CONTAINERS: runnerContainers,
           JITNEY_RECEIPTS: receipts,
           JITNEY_DEPLOYMENT: input.deploymentId,
+          JITNEY_RECEIPT_NAME: input.workerName,
           JITNEY_VERSION: input.version,
           CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
           RUNTIME_TIMEOUT_MS: "3600000",

@@ -4,6 +4,7 @@ import { parseArgs } from "node:util";
 import { Cause, Effect, Exit, Option } from "effect";
 import { deploy } from "./deploy.js";
 import { InstallerError, isInstallFailure, renderFailure, trySync } from "./errors.js";
+import { listCommand } from "./list-command.js";
 
 const program = Effect.gen(function* () {
   const { positionals, values } = yield* trySync(
@@ -16,6 +17,7 @@ const program = Effect.gen(function* () {
           name: { type: "string", default: "jitney" },
           organization: { type: "string" },
           "keep-partial": { type: "boolean" },
+          json: { type: "boolean" },
           help: { type: "boolean", short: "h" },
         },
       }),
@@ -23,15 +25,24 @@ const program = Effect.gen(function* () {
 
   if (values.help || positionals.length === 0) {
     yield* Effect.sync(() =>
-      console.log(`Usage: jitney deploy [options]
+      console.log(`Usage: jitney <command> [options]
+
+Commands:
+  deploy                       Install a Jitney deployment
+  list                         Inspect deployments and report drift
 
 Options:
   --name <name>                Cloudflare Worker name (default: jitney)
   --organization <login>       Register the GitHub App under an organization
   --keep-partial               Keep an installing receipt instead of rolling back
+  --json                       Print list output as JSON
   -h, --help                   Show this help`),
     );
     return;
+  }
+
+  if (positionals.length === 1 && positionals[0] === "list") {
+    return yield* listCommand(values.json === undefined ? {} : { json: values.json });
   }
 
   if (positionals.length !== 1 || positionals[0] !== "deploy") {

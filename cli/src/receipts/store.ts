@@ -113,6 +113,7 @@ export interface ReceiptStoreOptions {
 
 export interface ReceiptStore {
   readonly get: (name: string) => Effect.Effect<Option.Option<DeploymentReceipt>, ReceiptReadError>;
+  readonly list: () => Effect.Effect<readonly DeploymentReceipt[], ReceiptReadError>;
   readonly create: (receipt: DeploymentReceipt) => Effect.Effect<void, ReceiptStoreError>;
   readonly createWithInstallLease: (
     receipt: DeploymentReceipt,
@@ -262,6 +263,12 @@ export function makeReceiptStore(
 
   return {
     get,
+    list: () =>
+      backend.listKeys().pipe(
+        Effect.map((keys) => [...keys].sort()),
+        Effect.flatMap((keys) => Effect.forEach(keys, get)),
+        Effect.map((receipts) => Arr.flatMap(receipts, Option.toArray)),
+      ),
     create: (receipt) =>
       Effect.gen(function* () {
         const existing = yield* get(receipt.name);

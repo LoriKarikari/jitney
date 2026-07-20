@@ -2,16 +2,13 @@ import * as Containers from "@distilled.cloud/cloudflare/containers";
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Workers from "@distilled.cloud/cloudflare/workers";
 import * as Alchemy from "alchemy";
-import { AuthProviders } from "alchemy/Auth";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { deploy as alchemyDeploy } from "alchemy/Deploy";
 import { destroy as alchemyDestroy } from "alchemy/Destroy";
-import { PlatformServices } from "alchemy/Util/PlatformServices";
 import { mkdir, readFile } from "node:fs/promises";
 import { homedir, hostname, userInfo } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer, Option, Redacted, Ref, Schedule, Schema } from "effect";
-import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { jitneyProviders } from "./alchemy/providers.js";
 import { jitneyStack, type JitneyProviderLayer } from "./alchemy/jitney-stack.js";
@@ -20,6 +17,7 @@ import {
   GitHubAppOperations,
   type GitHubAppAttributes,
 } from "./alchemy/github-app.js";
+import { alchemyCli, cloudflareRuntime } from "./cloudflare-runtime.js";
 import { workerBundlePath, validateWorkerName } from "./config.js";
 import {
   ExistingDeploymentError,
@@ -63,20 +61,6 @@ const HealthResponse = Schema.Struct({
 });
 
 const PackageMetadata = Schema.Struct({ version: Schema.String });
-
-const alchemyCli = Alchemy.Cli.of({
-  approvePlan: () => Effect.succeed(true),
-  displayPlan: () => Effect.void,
-  startApplySession: () =>
-    Effect.succeed({
-      emit: () => Effect.void,
-      done: () => Effect.void,
-    }),
-});
-
-const platformRuntime = Layer.merge(PlatformServices, FetchHttpClient.layer);
-const commandRuntime = Layer.merge(platformRuntime, Layer.succeed(AuthProviders, {}));
-const cloudflareRuntime = Cloudflare.CloudflareApiLive().pipe(Layer.provideMerge(commandRuntime));
 
 const withAlchemyWorkspace = <A, E, R>(
   effect: Effect.Effect<A, E, R>,

@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@distilled.cloud/cloudflare':
+        specifier: 0.29.1
+        version: 0.29.1(effect@4.0.0-beta.99)
       '@effect/platform-node':
         specifier: 4.0.0-beta.99
         version: 4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)
@@ -29,6 +32,9 @@ importers:
       tar:
         specifier: ^7.5.20
         version: 7.5.20
+      ulid:
+        specifier: 3.0.1
+        version: 3.0.1
       wrangler:
         specifier: ^4.111.0
         version: 4.111.0
@@ -2844,6 +2850,10 @@ packages:
   ufo@1.6.4:
     resolution: {integrity: sha512-JFNbkD1Svwe0KvGi8GOeLcP4kAWQ609twvCdcHxq1oSL8svv39ZuSvajcD8B+5D0eL4+s1Is2D/O6KN3qcTeRA==}
 
+  ulid@3.0.1:
+    resolution: {integrity: sha512-dPJyqPzx8preQhqq24bBG1YNkvigm87K8kVEHCD+ruZg24t6IFEFv00xMWfxcC4djmFtiTLdFuADn4+DOz6R7Q==}
+    hasBin: true
+
   undici-types@8.3.0:
     resolution: {integrity: sha512-j375ScV60dom+YkPFIfTLcOiPxkN/buHz5GobjLhixFuANaNs3C9l4GmrWqejgXWJ7BbJcFYpTEUkS1Ge8bpZQ==}
 
@@ -5487,6 +5497,8 @@ snapshots:
       '@typescript/typescript-win32-x64': 7.0.2
 
   ufo@1.6.4: {}
+
+  ulid@3.0.1: {}
 
   undici-types@8.3.0: {}
 

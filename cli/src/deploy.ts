@@ -1,4 +1,3 @@
-import * as Containers from "@distilled.cloud/cloudflare/containers";
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -51,7 +50,7 @@ import {
   findCloudflareReceiptNamespace,
   makeCloudflareReceiptBackend,
 } from "./receipts/cloudflare.js";
-import { deleteImage } from "./oras.js";
+import { deleteRunnerImageTag } from "./runner-image-registry.js";
 import { makeReceiptStore, type ReceiptStore } from "./receipts/store.js";
 
 const HealthResponse = Schema.Struct({
@@ -437,36 +436,13 @@ const makeInstallPlatform = Effect.fn(function* (
         yield* provideCloudflareApi(waitForDeploymentRemoval(input.accountId, input.name));
         const registryTag = input.receipt.cloudflare.tags.current;
         if (input.receipt.cloudflare.applicationId !== null && registryTag !== null) {
-          const registry = yield* provideCloudflareApi(
-            Containers.createContainerRegistryCredentials({
-              accountId: input.accountId,
-              registryId: "registry.cloudflare.com",
-              permissions: ["pull", "push"],
-              expirationMinutes: 60,
-            }),
-          ).pipe(
-            Effect.mapError(
-              (cause) =>
-                new InstallerError({
-                  step: "registry_cleanup",
-                  message: "Could not obtain credentials to remove the partial runner image",
-                  cause,
-                }),
+          yield* provideCloudflareApi(
+            deleteRunnerImageTag(
+              input.accountId,
+              input.receipt.cloudflare.registryRepo,
+              registryTag,
             ),
           );
-          const username = registry.username ?? registry.user;
-          if (username === null || username === undefined) {
-            return yield* new InstallerError({
-              step: "registry_cleanup",
-              message: "Cloudflare registry credentials did not include a username",
-            });
-          }
-          yield* deleteImage({
-            image: `registry.cloudflare.com/${input.accountId}/${input.receipt.cloudflare.registryRepo}:${registryTag}`,
-            registryHost: "registry.cloudflare.com",
-            username,
-            password: registry.password,
-          });
         }
         if (credentials !== undefined) {
           yield* Effect.sync(() =>

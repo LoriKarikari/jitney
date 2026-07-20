@@ -1,4 +1,3 @@
-import * as Containers from "@distilled.cloud/cloudflare/containers";
 import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Workers from "@distilled.cloud/cloudflare/workers";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -17,7 +16,7 @@ import {
   type GitHubProbe,
   type LiveApplication,
 } from "./list.js";
-import { listImageTags } from "./oras.js";
+import { listRunnerImageTags } from "./runner-image-registry.js";
 import {
   findCloudflareReceiptNamespace,
   makeCloudflareReceiptBackend,
@@ -125,25 +124,7 @@ const makeListPlatform = Effect.fn(function* () {
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),
     registryTags: (accountId, repository) =>
-      provideCloudflare(
-        Containers.createContainerRegistryCredentials({
-          accountId,
-          registryId: "registry.cloudflare.com",
-          permissions: ["pull"],
-          expirationMinutes: 15,
-        }),
-      ).pipe(
-        Effect.flatMap((registry) => {
-          const username = registry.username ?? registry.user;
-          return username === null || username === undefined
-            ? Effect.fail(new Error("Cloudflare registry credentials have no username"))
-            : listImageTags({
-                repository: `registry.cloudflare.com/${accountId}/${repository}`,
-                registryHost: "registry.cloudflare.com",
-                username,
-                password: registry.password,
-              });
-        }),
+      provideCloudflare(listRunnerImageTags(accountId, repository)).pipe(
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),
     githubApp: (receipt) =>

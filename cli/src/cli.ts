@@ -3,7 +3,7 @@
 import { parseArgs } from "node:util";
 import { Cause, Effect, Exit, Option } from "effect";
 import { deploy } from "./deploy.js";
-import { InstallerError, renderFailure, trySync, type InstallFailure } from "./errors.js";
+import { InstallerError, isInstallFailure, renderFailure, trySync } from "./errors.js";
 
 const program = Effect.gen(function* () {
   const { positionals, values } = yield* trySync(
@@ -63,15 +63,3 @@ Exit.match(exit, {
     process.exitCode = 1;
   },
 });
-
-function isInstallFailure(error: unknown): error is InstallFailure {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    (error._tag === "InstallerError" ||
-      error._tag === "ExistingWorkerError" ||
-      error._tag === "ExistingDeploymentError" ||
-      error._tag === "InstallRollbackError")
-  );
-}

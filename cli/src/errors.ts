@@ -46,6 +46,15 @@ export type InstallFailure =
   | ExistingDeploymentError
   | InstallRollbackError;
 
+export function isInstallFailure(cause: unknown): cause is InstallFailure {
+  return (
+    cause instanceof InstallerError ||
+    cause instanceof ExistingWorkerError ||
+    cause instanceof ExistingDeploymentError ||
+    cause instanceof InstallRollbackError
+  );
+}
+
 export function tryPromise<A>(
   step: InstallerStep,
   message: string,

@@ -3,6 +3,7 @@ import { request } from "@octokit/request";
 import { randomBytes, createPrivateKey } from "node:crypto";
 import { createServer } from "node:http";
 import { Effect, Schedule, Schema } from "effect";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 import open from "open";
 import { InstallerError, tryPromise, trySync } from "./errors.js";
 
@@ -102,16 +103,25 @@ export function openGitHubAppDeletion(
 
 export function waitForGitHubAppDeletion(
   credentials: GitHubAppCredentials,
-): Effect.Effect<void, InstallerError> {
+): Effect.Effect<void, InstallerError, HttpClient.HttpClient> {
   const pending = new InstallerError({
     step: "rollback",
     message: `GitHub App ${credentials.slug} still exists`,
   });
-  const check = tryPromise("rollback", "Could not verify GitHub App deletion", () =>
-    fetch(`https://github.com/apps/${credentials.slug}`, { redirect: "manual" }),
-  ).pipe(
-    Effect.flatMap((response) => (response.status === 404 ? Effect.void : Effect.fail(pending))),
-  );
+  const check = Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    const response = yield* client.get(`https://github.com/apps/${credentials.slug}`).pipe(
+      Effect.mapError(
+        (cause) =>
+          new InstallerError({
+            step: "rollback",
+            message: "Could not verify GitHub App deletion",
+            cause,
+          }),
+      ),
+    );
+    if (response.status !== 404) return yield* Effect.fail(pending);
+  });
   return check.pipe(
     Effect.retry(Schedule.max([Schedule.spaced("5 seconds"), Schedule.recurs(119)])),
   );

@@ -25,7 +25,7 @@ import {
   ExistingDeploymentError,
   ExistingWorkerError,
   InstallerError,
-  InstallRollbackError,
+  isInstallFailure,
   tryPromise,
   trySync,
   type InstallFailure,
@@ -557,20 +557,13 @@ const makeInstallPlatform = Effect.fn(function* (
             ),
           );
           yield* openGitHubAppDeletion(credentials);
-          yield* waitForGitHubAppDeletion(credentials);
+          yield* waitForGitHubAppDeletion(credentials).pipe(
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+          );
         }
       }),
   });
 });
-
-function isInstallFailure(cause: unknown): cause is InstallFailure {
-  return (
-    cause instanceof InstallerError ||
-    cause instanceof ExistingWorkerError ||
-    cause instanceof ExistingDeploymentError ||
-    cause instanceof InstallRollbackError
-  );
-}
 
 function packageVersion(): Effect.Effect<string, InstallerError> {
   return tryPromise("filesystem", "Could not read the Jitney package version", () =>

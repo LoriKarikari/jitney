@@ -102,15 +102,13 @@ const makeListPlatform = Effect.fn(function* () {
     workerNames: (accountId) =>
       provideCloudflare(Stream.runCollect(Workers.listScripts.items({ accountId }))).pipe(
         Effect.map((scripts) =>
-          scripts.flatMap((script) => {
-            if (script.id === null || script.id === undefined) return [];
-            const names = (script.namedHandlers ?? []).flatMap(({ name }) =>
-              name === null || name === undefined ? [] : [name],
-            );
-            return Arr.contains(names, "Scheduler") && Arr.contains(names, "RunnerContainer")
+          Arr.flatMap(scripts, (script) =>
+            script.id !== null &&
+            script.id !== undefined &&
+            Arr.contains(script.tags ?? [], "jitney")
               ? [script.id]
-              : [];
-          }),
+              : [],
+          ),
         ),
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),

@@ -72,6 +72,7 @@ export function jitneyStack(
           enabled: true,
           headSamplingRate: 1,
         },
+        tags: ["jitney", `jitney-deployment:${input.deploymentId}`],
         env: {
           SCHEDULER: scheduler,
           RUNNER_CONTAINERS: runnerContainers,

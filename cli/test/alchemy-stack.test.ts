@@ -69,6 +69,9 @@ describe("Jitney Alchemy stack", () => {
     });
     expect(result.events).toContain("container:reconcile:0.3.0");
     expect(result.events).toContain("container:reconcile:0.3.1");
+    expect(result.events).toContain(
+      "worker:reconcile:jitney-test:jitney,jitney-deployment:01JITNEYDEPLOYMENT",
+    );
     expect(result.events.slice(-2)).toEqual([
       "container:delete:jitney-test-runner",
       "worker:delete:jitney-test",
@@ -146,7 +149,7 @@ function makeProviders(events: Ref.Ref<string[]>) {
   const worker: Provider.ProviderService<Cloudflare.Workers.Worker> = {
     list: () => Effect.succeed([]),
     reconcile: ({ id, news, output }) =>
-      record(`worker:reconcile:${news.name ?? id}`).pipe(
+      record(`worker:reconcile:${news.name ?? id}:${news.tags?.join(",") ?? ""}`).pipe(
         Effect.as({
           workerId: output?.workerId ?? `worker-${id}`,
           workerName: news.name ?? id,

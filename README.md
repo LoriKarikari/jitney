@@ -36,9 +36,6 @@ jobs:
 - **Cleans up after itself.** Deadlines reclaim runners that never get
   assigned work and kill jobs that run too long. After a job, GitHub's runner
   inventory returns to zero.
-- **Proven workloads.** Node.js, Python, Go, and Java all work through their
-  official setup actions
-  ([evidence](docs/operations/workload-compatibility.md)).
 
 ## What you don't get (yet)
 

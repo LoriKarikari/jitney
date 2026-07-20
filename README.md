@@ -20,7 +20,7 @@ jobs:
   build:
     runs-on: jitney
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - run: echo "running on a throwaway Cloudflare container"
 ```
 

@@ -10,7 +10,7 @@
   <a href="worker/package.json"><img alt="Node version" src="https://img.shields.io/badge/node-%E2%89%A524-brightgreen"></a>
 </p>
 
-Jitney runs ephemeral GitHub Actions runners in your own Cloudflare account.
+Jitney runs GitHub Actions jobs on containers in your own Cloudflare account.
 When a job with `runs-on: jitney` enters the queue, Jitney starts a fresh
 container and registers it for that job alone. The container disappears when
 the job is done, so there is no runner fleet sitting idle between builds.
@@ -30,8 +30,8 @@ jobs:
   never sees the GitHub App credentials or webhook secret.
 - Jitney checks GitHub for queued jobs every five minutes. If a webhook goes
   missing, the workflow still gets a runner.
-- Unclaimed runners are removed, and jobs are stopped when they run past their
-  deadline. Finished runners disappear from GitHub too.
+- Jitney removes runners that never receive work and stops jobs that run past
+  their deadline. Finished runners disappear from GitHub too.
 
 ## What you don't get (yet)
 

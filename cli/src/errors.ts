@@ -5,6 +5,7 @@ export type InstallerStep =
   | "cloudflare_authentication"
   | "cloudflare_account_selection"
   | "deployment_inspection"
+  | "destroy"
   | "existing_worker_check"
   | "filesystem"
   | "health_check"

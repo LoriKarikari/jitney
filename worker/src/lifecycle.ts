@@ -206,19 +206,23 @@ export class SchedulerLifecycle {
     return { outcome: "accepted", runnerName };
   }
 
+  activeAttemptCount(): number {
+    return (
+      this.#db
+        .select({ count: sql<number>`count(*)` })
+        .from(attempts)
+        .where(inArray(attempts.state, activeAttemptStates))
+        .all()[0]?.count ?? 0
+    );
+  }
+
   #hasCapacity(): boolean {
     const pendingCount =
       this.#db
         .select({ count: sql<number>`count(*)` })
         .from(pending)
         .all()[0]?.count ?? 0;
-    const activeCount =
-      this.#db
-        .select({ count: sql<number>`count(*)` })
-        .from(attempts)
-        .where(inArray(attempts.state, activeAttemptStates))
-        .all()[0]?.count ?? 0;
-    return pendingCount < maxPendingJobs && activeCount < maxActiveAttempts;
+    return pendingCount < maxPendingJobs && this.activeAttemptCount() < maxActiveAttempts;
   }
 
   #recordCapacityLimit(event: QueuedJobCandidate, now: number): void {

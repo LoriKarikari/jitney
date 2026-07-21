@@ -21,6 +21,7 @@ export interface JitneyStackInput {
   version: string;
   organization?: string;
   manageGitHubApp?: boolean;
+  uninstallSecret: Redacted.Redacted<string>;
   githubCredentials?: {
     appId: Redacted.Redacted<string>;
     privateKey: Redacted.Redacted<string>;
@@ -88,6 +89,7 @@ export function jitneyStack(
           CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
           RUNTIME_TIMEOUT_MS: "3600000",
           SCHEDULER_TICK_MS: "1000",
+          JITNEY_UNINSTALL_SECRET: input.uninstallSecret,
           ...(input.githubCredentials === undefined
             ? {}
             : {

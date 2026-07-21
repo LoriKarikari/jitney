@@ -49,6 +49,23 @@ describe("worker entrypoint", () => {
     expect(await response.json()).toEqual({ status: "ok", version: "dev" });
   });
 
+  it("hides uninstall from callers without the deployment identity", async () => {
+    const response = await fetch("https://example.com/lifecycle/uninstall", {
+      method: "POST",
+    });
+
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects uninstall without the freshly installed operation secret", async () => {
+    const response = await fetch("https://example.com/lifecycle/uninstall", {
+      method: "POST",
+      headers: { "X-Jitney-Deployment": env.JITNEY_DEPLOYMENT },
+    });
+
+    expect(response.status).toBe(401);
+  });
+
   it("does not expose lifecycle status without the deployment identity", async () => {
     const response = await fetch("https://example.com/lifecycle/status");
 
@@ -164,6 +181,30 @@ describe("worker entrypoint", () => {
       body,
     });
     expect(response.status).toBe(204);
+  });
+
+  it("ignores new queued jobs after uninstall suspends intake", async () => {
+    const scheduler = env.SCHEDULER.getByName("global-v3");
+    await scheduler.suspendIntake();
+    try {
+      const body = queuedPayload({
+        workflow_job: { id: 790, labels: ["jitney"], runner_name: null, conclusion: null },
+      });
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: {
+          "X-Hub-Signature-256": await signature(body),
+          "X-GitHub-Event": "workflow_job",
+          "X-GitHub-Delivery": "delivery-suspended",
+        },
+        body,
+      });
+
+      expect(response.status).toBe(202);
+      expect(await scheduler.getJob(790)).toBeUndefined();
+    } finally {
+      await scheduler.resumeIntake();
+    }
   });
 
   it("durably accepts a signed private queued job before returning 202", async () => {

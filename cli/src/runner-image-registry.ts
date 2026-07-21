@@ -1,7 +1,7 @@
 import * as Containers from "@distilled.cloud/cloudflare/containers";
 import type { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import { Effect } from "effect";
-import type * as HttpClient from "effect/unstable/http/HttpClient";
+import * as HttpClient from "effect/unstable/http/HttpClient";
 import { InstallerError, type InstallerStep } from "./errors.js";
 import { deleteImage, listImageTags } from "./oras.js";
 
@@ -57,6 +57,37 @@ export const listRunnerImageTags = (
         registryHost: REGISTRY_HOST,
         ...auth,
       }),
+    ),
+  );
+
+export const garbageCollectRunnerLayers = (
+  accountId: string,
+): Effect.Effect<void, InstallerError, CloudflareApi> =>
+  Effect.gen(function* () {
+    const client = yield* HttpClient.HttpClient;
+    const auth = yield* scratchCredentials(accountId, ["pull", "push"], "registry_cleanup");
+    const authorization = Buffer.from(`${auth.username}:${auth.password}`).toString("base64");
+    const response = yield* client.put(`https://${REGISTRY_HOST}/v2/gc/layers`, {
+      headers: {
+        Authorization: `Basic ${authorization}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (response.status < 200 || response.status >= 300) {
+      return yield* new InstallerError({
+        step: "registry_cleanup",
+        message: `Cloudflare layer garbage collection returned ${response.status}`,
+      });
+    }
+  }).pipe(
+    Effect.mapError((cause) =>
+      cause instanceof InstallerError
+        ? cause
+        : new InstallerError({
+            step: "registry_cleanup",
+            message: "Could not garbage-collect unreferenced runner layers",
+            cause,
+          }),
     ),
   );
 

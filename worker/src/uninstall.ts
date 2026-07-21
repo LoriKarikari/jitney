@@ -11,7 +11,7 @@ export const UninstallAction = Schema.Literals([
 export type UninstallAction = typeof UninstallAction.Type;
 export const UninstallRequest = Schema.Struct({ action: UninstallAction });
 
-const Receipt = Schema.Struct({
+export const UninstallReceipt = Schema.Struct({
   id: Schema.String,
   github: Schema.Struct({
     installations: Schema.Array(
@@ -22,8 +22,7 @@ const Receipt = Schema.Struct({
     ),
   }),
 });
-export type UninstallReceipt = typeof Receipt.Type;
-export const UninstallReceipt = Receipt;
+export type UninstallReceipt = typeof UninstallReceipt.Type;
 
 class UninstallOperationError extends Data.TaggedError("UninstallOperationError")<{
   operation:

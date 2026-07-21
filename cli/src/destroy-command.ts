@@ -8,6 +8,7 @@ import {
   DestroyResidueError,
   destroyDeployment,
   renderDestroyPlan,
+  renderDestroyResidue,
 } from "./destroy.js";
 import { InstallerError, trySync } from "./errors.js";
 import { DeploymentReceipts } from "./install.js";
@@ -59,7 +60,7 @@ export function destroyCommand(options: {
       Effect.mapError((cause) =>
         cause instanceof DestroyResidueError
           ? destroyError(
-              `${cause.name} still has ${cause.residue.length} residual resource${cause.residue.length === 1 ? "" : "s"}. Run destroy again after resolving the reported residue.`,
+              `${cause.name} still has ${cause.residue.length} residual resource${cause.residue.length === 1 ? "" : "s"}:\n${renderDestroyResidue(cause.residue)}\nResolve the residue, then run: npx get-jitney destroy ${cause.name}`,
               cause,
             )
           : cause,

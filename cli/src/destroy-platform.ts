@@ -8,7 +8,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { destroyDeploymentStack } from "./alchemy/destroy-deployment.js";
 import { observeAccount } from "./cloudflare-inventory.js";
-import { DestroyPlatform, renderDestroyPlan, type DestroyResidue } from "./destroy.js";
+import { DestroyPlatform, renderDestroyPlan } from "./destroy.js";
 import { InstallerError, tryPromise } from "./errors.js";
 import {
   openGitHubAppDeletionFor,
@@ -16,7 +16,7 @@ import {
   type GitHubAppIdentity,
 } from "./github-app.js";
 import { workerAddress } from "./lifecycle-status-client.js";
-import type { DeploymentReceipt } from "./receipts/schema.js";
+import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
 import { DeploymentReceiptSchema } from "./receipts/schema.js";
 import {
   deleteRunnerImageTag,
@@ -25,6 +25,7 @@ import {
 } from "./runner-image-registry.js";
 
 const DrainResponse = Schema.Struct({ activeAttempts: Schema.Number });
+type UninstallAction = "suspend" | "drain" | "delete_ownership" | "delete_installations";
 const operationSecret = (): string =>
   `${Date.now() + 15 * 60_000}.${randomBytes(32).toString("base64url")}`;
 
@@ -56,7 +57,24 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
   const addResidue = (residue: readonly DestroyResidue[]) =>
     Ref.update(accumulatedResidue, (current) => [...current, ...residue]);
 
-  const callUninstall = (receipt: DeploymentReceipt, action: string) =>
+  const writeExport = (
+    path: string,
+    receipt: DeploymentReceipt,
+    finalVerification: { completedAt: string; residue: readonly DestroyResidue[] } | null,
+  ) =>
+    tryPromise("destroy", `Could not write the receipt export to ${path}`, () =>
+      writeFile(
+        path,
+        `${JSON.stringify(
+          { receipt: Schema.encodeSync(DeploymentReceiptSchema)(receipt), finalVerification },
+          null,
+          2,
+        )}\n`,
+        { mode: 0o600 },
+      ),
+    );
+
+  const callUninstall = (receipt: DeploymentReceipt, action: UninstallAction) =>
     Effect.gen(function* () {
       const worker = yield* provideCloudflare(
         workerAddress(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
@@ -113,20 +131,9 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
 
   return DestroyPlatform.of({
     exportReceipt: (receipt, path) =>
-      tryPromise("destroy", `Could not export the receipt to ${path}`, async () => {
-        await writeFile(
-          path,
-          `${JSON.stringify(
-            {
-              receipt: Schema.encodeSync(DeploymentReceiptSchema)(receipt),
-              finalVerification: null,
-            },
-            null,
-            2,
-          )}\n`,
-          { mode: 0o600 },
-        );
-      }).pipe(Effect.andThen(Ref.set(exportedPath, Option.some(path)))),
+      writeExport(path, receipt, null).pipe(
+        Effect.andThen(Ref.set(exportedPath, Option.some(path))),
+      ),
     confirm: (plan) => {
       if (assumeYes) return Effect.succeed(true);
       return Effect.sync(() => console.log(`${renderDestroyPlan(plan)}\n`)).pipe(
@@ -272,20 +279,10 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         }
         const exportPath = yield* Ref.get(exportedPath);
         if (Option.isSome(exportPath)) {
-          yield* tryPromise("destroy", "Could not update the receipt export", () =>
-            writeFile(
-              exportPath.value,
-              `${JSON.stringify(
-                {
-                  receipt: Schema.encodeSync(DeploymentReceiptSchema)(receipt),
-                  finalVerification: { completedAt: new Date().toISOString(), residue },
-                },
-                null,
-                2,
-              )}\n`,
-              { mode: 0o600 },
-            ),
-          );
+          yield* writeExport(exportPath.value, receipt, {
+            completedAt: new Date().toISOString(),
+            residue,
+          });
         }
         return residue;
       }).pipe(Effect.mapError(asDestroyError("Could not verify teardown"))),

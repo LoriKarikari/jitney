@@ -2,12 +2,7 @@ import { Context, Data, Effect, Option } from "effect";
 import { InstallerError } from "./errors.js";
 import { DeploymentReceipts } from "./install.js";
 import { beginLeasedOperation } from "./receipts/leased-operation.js";
-import type {
-  DeploymentReceipt,
-  DestroyResidue as ReceiptDestroyResidue,
-} from "./receipts/schema.js";
-
-export type DestroyResidue = ReceiptDestroyResidue;
+import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
 
 export interface DestroyPlan {
   readonly name: string;
@@ -98,6 +93,12 @@ const protectedImageTags = (
       .filter((tag): tag is string => tag !== null),
   );
 
+export function renderDestroyResidue(residue: readonly DestroyResidue[]): string {
+  return residue
+    .map((item) => `  ${item.plane} ${item.resource} ${item.id}: ${item.reason}`)
+    .join("\n");
+}
+
 export function renderDestroyPlan(plan: DestroyPlan): string {
   return [
     `${plan.name} (${plan.deploymentId}) will be destroyed:`,
@@ -110,7 +111,9 @@ export function renderDestroyPlan(plan: DestroyPlan): string {
   ].join("\n");
 }
 
-export const destroyDeployment = Effect.fn(function* (input: DestroyInput) {
+export const destroyDeployment = Effect.fn("Jitney.destroyDeployment")(function* (
+  input: DestroyInput,
+) {
   const receipts = yield* DeploymentReceipts;
   const platform = yield* DestroyPlatform;
   const receipt = yield* receipts.get(input.name).pipe(
@@ -164,8 +167,11 @@ export const destroyDeployment = Effect.fn(function* (input: DestroyInput) {
   });
 
   yield* teardown.pipe(
-    Effect.tapError(() =>
-      held.finish({ phase: "destroying", outcome: "failed" }).pipe(Effect.ignore),
+    Effect.tapError((error) =>
+      // The residue branch already settled the receipt before failing.
+      error instanceof DestroyResidueError
+        ? Effect.void
+        : held.finish({ phase: "destroying", outcome: "failed" }).pipe(Effect.ignore),
     ),
   );
   return { status: "destroyed", plan } satisfies DestroyResult;

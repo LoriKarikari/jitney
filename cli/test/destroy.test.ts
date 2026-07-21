@@ -5,10 +5,13 @@ import {
   DestroyResidueError,
   destroyDeployment,
   type DestroyPlan,
-  type DestroyResidue,
 } from "../src/destroy.js";
 import { DeploymentReceipts } from "../src/install.js";
-import { createDeploymentReceipt, type DeploymentReceipt } from "../src/receipts/schema.js";
+import {
+  createDeploymentReceipt,
+  type DeploymentReceipt,
+  type DestroyResidue,
+} from "../src/receipts/schema.js";
 import { makeReceiptStore, type ReceiptBackend } from "../src/receipts/store.js";
 
 const deploymentId = "01JVQ8B95TQZD1P6DE00DE0001";
@@ -221,6 +224,38 @@ describe("destroy", () => {
     expect(await Ref.get(exported).pipe(Effect.runPromise)).toEqual([
       expect.objectContaining({ lease: null }),
     ]);
+  });
+
+  it("resumes an interrupted destroy left in phase destroying", async () => {
+    const interrupted: DeploymentReceipt = {
+      ...fixtureReceipt(),
+      phase: "destroying",
+      residue: [
+        {
+          plane: "registry",
+          resource: "image_tag",
+          id: "staging-runner:0.3.0",
+          reason: "The registry still reports the tag",
+        },
+      ],
+      history: [
+        {
+          operation: "destroy",
+          actor: "lori@mbp",
+          startedAt: DateTime.makeUnsafe("2026-07-20T11:00:00.000Z"),
+          completedAt: DateTime.makeUnsafe("2026-07-20T11:10:00.000Z"),
+          outcome: "failed",
+        },
+      ],
+    };
+    const calls = await Effect.runPromise(Ref.make<string[]>([]));
+    const { backend, effect } = await runDestroy([interrupted], platform({ calls }));
+
+    const result = await Effect.runPromise(effect);
+
+    expect(result.status).toBe("destroyed");
+    expect(await Ref.get(calls).pipe(Effect.runPromise)).toContain("verify");
+    expect(await backend.receipt("staging")).toBeUndefined();
   });
 
   it("retains a destroying receipt and exits with the final residue", async () => {

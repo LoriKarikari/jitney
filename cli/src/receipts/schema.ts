@@ -25,6 +25,13 @@ export const OperationLease = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
 });
 
+export const DestroyResidue = Schema.Struct({
+  plane: Schema.Literals(["cloudflare", "github", "registry"]),
+  resource: Schema.String,
+  id: Schema.String,
+  reason: Schema.String,
+});
+
 export const ReceiptHistoryEntry = Schema.Struct({
   operation: DeploymentOperation,
   actor: Schema.String,
@@ -90,6 +97,7 @@ export const DeploymentReceiptSchema = Schema.Struct({
   github: GitHubResources,
   autoUpgrade: AutoUpgrade,
   history: Schema.Array(ReceiptHistoryEntry).check(Schema.isMaxLength(20)),
+  residue: Schema.Array(DestroyResidue).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 });
 
 export type DeploymentReceipt = typeof DeploymentReceiptSchema.Type;
@@ -98,6 +106,7 @@ export type DeploymentPhase = typeof DeploymentPhase.Type;
 export type OperationLease = typeof OperationLease.Type;
 export type ReceiptHistoryEntry = typeof ReceiptHistoryEntry.Type;
 export type GitHubInstallation = typeof GitHubInstallation.Type;
+export type DestroyResidue = typeof DestroyResidue.Type;
 
 export type NewDeploymentReceipt = Pick<
   DeploymentReceipt,
@@ -118,6 +127,7 @@ export function createDeploymentReceipt(input: NewDeploymentReceipt): Deployment
     lease: null,
     versions: { current: version, previous: null },
     history: [],
+    residue: [],
   };
 }
 

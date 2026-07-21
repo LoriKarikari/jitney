@@ -89,32 +89,46 @@ export function openInstallation(
   );
 }
 
-export function openGitHubAppDeletion(
-  credentials: GitHubAppCredentials,
+export interface GitHubAppIdentity {
+  readonly slug: string;
+  readonly ownerLogin: string;
+  readonly ownerType: "User" | "Organization";
+}
+
+export function openGitHubAppDeletionFor(
+  app: GitHubAppIdentity,
+  step: "rollback" | "destroy",
 ): Effect.Effect<void, InstallerError> {
   const settingsUrl =
-    credentials.ownerType === "Organization"
-      ? `https://github.com/organizations/${credentials.ownerLogin}/settings/apps/${credentials.slug}/advanced`
-      : `https://github.com/settings/apps/${credentials.slug}/advanced`;
-  return tryPromise("rollback", "Could not open GitHub App deletion settings", () =>
+    app.ownerType === "Organization"
+      ? `https://github.com/organizations/${app.ownerLogin}/settings/apps/${app.slug}/advanced`
+      : `https://github.com/settings/apps/${app.slug}/advanced`;
+  return tryPromise(step, "Could not open GitHub App deletion settings", () =>
     open(settingsUrl),
   ).pipe(Effect.asVoid);
 }
 
-export function waitForGitHubAppDeletion(
+export function openGitHubAppDeletion(
   credentials: GitHubAppCredentials,
+): Effect.Effect<void, InstallerError> {
+  return openGitHubAppDeletionFor(credentials, "rollback");
+}
+
+export function waitForGitHubAppDeletionFor(
+  app: GitHubAppIdentity,
+  step: "rollback" | "destroy",
 ): Effect.Effect<void, InstallerError, HttpClient.HttpClient> {
   const pending = new InstallerError({
     step: "rollback",
-    message: `GitHub App ${credentials.slug} still exists`,
+    message: `GitHub App ${app.slug} still exists`,
   });
   const check = Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
-    const response = yield* client.get(`https://github.com/apps/${credentials.slug}`).pipe(
+    const response = yield* client.get(`https://github.com/apps/${app.slug}`).pipe(
       Effect.mapError(
         (cause) =>
           new InstallerError({
-            step: "rollback",
+            step,
             message: "Could not verify GitHub App deletion",
             cause,
           }),
@@ -125,6 +139,12 @@ export function waitForGitHubAppDeletion(
   return check.pipe(
     Effect.retry(Schedule.max([Schedule.spaced("5 seconds"), Schedule.recurs(119)])),
   );
+}
+
+export function waitForGitHubAppDeletion(
+  credentials: GitHubAppCredentials,
+): Effect.Effect<void, InstallerError, HttpClient.HttpClient> {
+  return waitForGitHubAppDeletionFor(credentials, "rollback");
 }
 
 export function installationCount(

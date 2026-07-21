@@ -65,6 +65,17 @@ describe("deployment receipt store", () => {
     expect(await backend.putCount()).toBe(1);
   });
 
+  it("decodes pre-destroy schema-v1 receipts with an empty residue report", async () => {
+    const backend = await makeMemoryBackend();
+    const store = makeReceiptStore(backend.service);
+    const { residue: _, ...legacy } = fixtureReceipt();
+    await Effect.runPromise(backend.service.put("staging", JSON.stringify(legacy)));
+
+    const result = await Effect.runPromise(store.get("staging"));
+
+    expect(Option.getOrThrow(result).residue).toEqual([]);
+  });
+
   it("does not persist fields outside the receipt schema", async () => {
     const backend = await makeMemoryBackend();
     const store = makeReceiptStore(backend.service);

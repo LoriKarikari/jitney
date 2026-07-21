@@ -10,6 +10,14 @@ import {
   rewriteLifecycleOwnership,
 } from "./lifecycle-status";
 import { emit } from "./log";
+import {
+  UninstallPlatform,
+  UninstallRequest,
+  authorizeUninstall,
+  executeUninstall,
+  makeUninstallPlatform,
+  readUninstallReceipt,
+} from "./uninstall";
 
 export { RunnerContainer } from "./runner-container";
 export { Scheduler } from "./scheduler";
@@ -29,6 +37,40 @@ const handleRequest = Effect.fn("IngressWorker.fetch")(function* (request: Reque
       Effect.provideService(LifecycleGitHub, makeLifecycleGitHub(env)),
       Effect.map((status) => Response.json(status, { headers: { "Cache-Control": "no-store" } })),
       Effect.catch(() => Effect.succeed(Response.json({ status: "unknown" }, { status: 503 }))),
+    );
+  }
+  if (request.method === "POST" && url.pathname === "/lifecycle/uninstall") {
+    if (request.headers.get("X-Jitney-Deployment") !== env.JITNEY_DEPLOYMENT) {
+      return new Response(null, { status: 404 });
+    }
+    if (!authorizeUninstall(request, env.JITNEY_UNINSTALL_SECRET)) {
+      return new Response(null, { status: 401 });
+    }
+    return yield* Effect.tryPromise({
+      try: () => request.json(),
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.flatMap((body) =>
+        Effect.try({
+          try: () => Schema.decodeUnknownSync(UninstallRequest)(body),
+          catch: (cause) => cause,
+        }),
+      ),
+      Effect.bindTo("request"),
+      Effect.bind("receipt", () => readUninstallReceipt(env)),
+      Effect.flatMap(({ request: uninstall, receipt }) =>
+        executeUninstall(receipt, env.JITNEY_DEPLOYMENT, uninstall.action).pipe(
+          Effect.provideService(UninstallPlatform, makeUninstallPlatform(env)),
+        ),
+      ),
+      Effect.map((result) =>
+        result.accepted === false
+          ? new Response(null, { status: 409 })
+          : "activeAttempts" in result
+            ? Response.json({ activeAttempts: result.activeAttempts })
+            : new Response(null, { status: 204 }),
+      ),
+      Effect.catch(() => Effect.succeed(new Response(null, { status: 503 }))),
     );
   }
   if (request.method === "POST" && url.pathname === "/lifecycle/ownership") {

@@ -1,8 +1,6 @@
 import { Array as Arr, Context, Data, Effect, HashMap, HashSet, Option, Result } from "effect";
 import type { AccountSnapshot, LiveApplication } from "./cloudflare-inventory.js";
 import type { DeploymentReceipt, GitHubInstallation } from "./receipts/schema.js";
-
-export type { LiveApplication } from "./cloudflare-inventory.js";
 import type { ReceiptReadError } from "./receipts/store.js";
 
 export type ResourceClass = "ok" | "missing" | "drifted" | "orphan" | "unknown";
@@ -341,8 +339,6 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
           });
         }
       }
-    }
-    if (Option.isSome(snapshot) && Result.isSuccess(snapshot.value)) {
       for (const worker of snapshot.value.success.workers) {
         if (worker.jitneyTagged && !HashSet.has(referencedWorkers, `${accountId}:${worker.name}`)) {
           orphans.push({

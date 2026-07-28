@@ -1,6 +1,6 @@
 import { DateTime, Effect, Option, Ref } from "effect";
 import { describe, expect, it } from "vitest";
-import type { AccountSnapshot } from "../src/cloudflare-inventory.js";
+import type { AccountSnapshot, LiveApplication } from "../src/cloudflare-inventory.js";
 import {
   ListPlatform,
   ListReceipts,
@@ -9,7 +9,6 @@ import {
   renderListReport,
   type GitHubProbe,
   type ListReport,
-  type LiveApplication,
 } from "../src/list.js";
 import {
   createDeploymentReceipt,

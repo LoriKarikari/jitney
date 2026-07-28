@@ -17,6 +17,3 @@ export const isLiveSecret = (secret: string, nowEpochMs: number): boolean => {
   const expiry = Number(secret.slice(0, separator));
   return Number.isSafeInteger(expiry) && expiry > nowEpochMs;
 };
-
-/** A 404 means the Worker does not recognize this deployment identity. */
-export const UNINSTALL_IDENTITY_MISMATCH = 404;

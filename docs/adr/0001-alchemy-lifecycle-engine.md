@@ -41,8 +41,11 @@ programmatically from the CLI. Specifically:
   merging PR #92.
 - Alchemy and Effect are pre-GA; both are pinned exactly and Dependabot must
   not bump them independently.
-- Alchemy state handles per-resource crash recovery. It has no cross-process
-  deployment lease and no cross-plane deployment inventory, which is why ADR
-  0002 exists.
+- Alchemy state handles per-resource crash recovery. Its Cloudflare state
+  store is account-shared backend infrastructure, not a Jitney deployment
+  resource. Destroy retains it because Alchemy's teardown can erase state for
+  unrelated projects; only an account owner may remove it after proving the
+  store is unused. It has no cross-process deployment lease and no cross-plane
+  deployment inventory, which is why ADR 0002 exists.
 - Custom providers follow Alchemy's documented contract, including an
   ownership-aware `read` returning `Unowned` for foreign resources.

@@ -24,6 +24,20 @@ export const cloudflareRuntime = Cloudflare.CloudflareApiLive().pipe(
   Layer.provideMerge(commandRuntime),
 );
 
+/**
+ * Bootstrap and upgrade the Cloudflare state store without asking. Alchemy
+ * is an internal implementation detail, so its confirmations must never
+ * reach the user; without this, a fresh account pauses on a Clank prompt
+ * and CI dies on an out-of-date store.
+ */
+export const nonInteractiveAlchemyContext = Layer.provide(
+  Layer.effect(
+    Alchemy.AlchemyContext,
+    Alchemy.AlchemyContext.pipe(Effect.map((context) => ({ ...context, updateStateStore: true }))),
+  ),
+  Alchemy.AlchemyContextLive,
+);
+
 export interface CloudflareServices {
   readonly client: HttpClient.HttpClient;
   readonly provide: <A, E>(

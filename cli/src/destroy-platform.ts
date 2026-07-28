@@ -121,6 +121,14 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
           schedule: Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(29)]),
         }),
       );
+      if (response.status === 404) {
+        return yield* Effect.fail(
+          new InstallerError({
+            step: "destroy",
+            message: `The Worker for ${receipt.cloudflare.workerName} does not recognize deployment ${receipt.id}. Run repair first.`,
+          }),
+        );
+      }
       if (response.status !== 204 && response.status !== 200) {
         return yield* Effect.fail(
           new InstallerError({

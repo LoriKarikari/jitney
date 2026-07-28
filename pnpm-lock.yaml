@@ -75,9 +75,6 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 26.1.2
-      oxfmt:
-        specifier: 'catalog:'
-        version: 0.58.0
       oxlint:
         specifier: 'catalog:'
         version: 1.76.0(oxlint-tsgolint@0.24.0)
@@ -135,9 +132,6 @@ importers:
       knip:
         specifier: ^6.26.0
         version: 6.29.0
-      oxfmt:
-        specifier: 'catalog:'
-        version: 0.58.0
       oxlint:
         specifier: 'catalog:'
         version: 1.76.0(oxlint-tsgolint@0.24.0)

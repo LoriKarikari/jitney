@@ -8,14 +8,12 @@
     "typecheck": "tsc --noEmit",
     "lint": "oxlint --type-aware --deny-warnings .",
     "lint:fix": "oxlint --type-aware --fix .",
-    "fmt": "oxfmt --write .",
     "test": "vitest run",
     "test:watch": "vitest",
     "knip": "knip",
     "types": "wrangler types",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "fmt:check": "oxfmt --check .",
     "check": "pnpm types && pnpm typecheck && pnpm lint && pnpm knip && pnpm test"
   },
   "dependencies": {
@@ -32,7 +30,6 @@
     "@types/node": "catalog:",
     "drizzle-kit": "^0.31.10",
     "knip": "^6.26.0",
-    "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
     "typescript": "catalog:",

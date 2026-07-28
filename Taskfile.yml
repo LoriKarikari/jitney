@@ -90,11 +90,6 @@ tasks:
       - pnpm fmt:check
       - pnpm --filter jitney-worker check
 
-  cli:install:
-    desc: Install TypeScript dependencies from the workspace lockfile
-    cmds:
-      - pnpm install --frozen-lockfile
-
   cli:check:
     desc: Typecheck, lint, test, and package the deployment CLI
     cmds:

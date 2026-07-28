@@ -1,5 +1,6 @@
 import { DateTime, Duration, Effect, Option, Ref } from "effect";
 import { describe, expect, it } from "vitest";
+import { receiptValueText } from "../src/receipts/cloudflare.js";
 import {
   createDeploymentReceipt,
   generateDeploymentId,
@@ -15,6 +16,14 @@ import {
   makeReceiptStore,
   type ReceiptBackend,
 } from "../src/receipts/store.js";
+
+describe("Cloudflare receipt values", () => {
+  it("preserves JSON auto-decoded by the Cloudflare client", () => {
+    expect(receiptValueText({ schemaVersion: 1, name: "staging" })).toBe(
+      '{"schemaVersion":1,"name":"staging"}',
+    );
+  });
+});
 
 describe("deployment receipt store", () => {
   it("mints a ULID deployment identity", async () => {

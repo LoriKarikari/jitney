@@ -1,5 +1,5 @@
 import { Context, Data, Effect, Option } from "effect";
-import { InstallerError } from "./errors.js";
+import { stepError, type InstallerError } from "./errors.js";
 import { DeploymentReceipts } from "./install.js";
 import { beginLeasedOperation } from "./receipts/leased-operation.js";
 import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
@@ -41,31 +41,16 @@ export class DestroyPlatform extends Context.Service<
       path: string,
     ) => Effect.Effect<void, InstallerError>;
     readonly confirm: (plan: DestroyPlan) => Effect.Effect<boolean, InstallerError>;
-    readonly suspend: (receipt: DeploymentReceipt) => Effect.Effect<void, InstallerError>;
-    readonly drain: (receipt: DeploymentReceipt) => Effect.Effect<void, InstallerError>;
-    readonly deleteOwnership: (receipt: DeploymentReceipt) => Effect.Effect<void, InstallerError>;
-    readonly deleteInstallations: (
-      receipt: DeploymentReceipt,
-    ) => Effect.Effect<void, InstallerError>;
-    /** Destroy the receipt-owned Cloudflare stack through Alchemy. */
-    readonly destroyCloudflare: (receipt: DeploymentReceipt) => Effect.Effect<void, InstallerError>;
-    readonly pruneImages: (
-      receipt: DeploymentReceipt,
-      protectedTags: ReadonlySet<string>,
-    ) => Effect.Effect<void, InstallerError>;
-    readonly deleteApp: (receipt: DeploymentReceipt) => Effect.Effect<void, InstallerError>;
-    readonly verify: (
-      receipt: DeploymentReceipt,
-    ) => Effect.Effect<readonly DestroyResidue[], InstallerError>;
+    /** Run the ordered, idempotent two-plane teardown and return its final residue. */
+    readonly teardown: (input: {
+      readonly receipt: DeploymentReceipt;
+      readonly now: boolean;
+      readonly protectedTags: ReadonlySet<string>;
+    }) => Effect.Effect<readonly DestroyResidue[], InstallerError>;
   }
 >()("Jitney.DestroyPlatform") {}
 
-const destroyError = (message: string, cause?: unknown) =>
-  new InstallerError({
-    step: "destroy",
-    message,
-    ...(cause === undefined ? {} : { cause }),
-  });
+const destroyError = stepError("destroy");
 
 export const planDestroy = (receipt: DeploymentReceipt): DestroyPlan => ({
   name: receipt.name,
@@ -147,14 +132,11 @@ export const destroyDeployment = Effect.fn("Jitney.destroyDeployment")(function*
 
   const teardown = Effect.gen(function* () {
     const current = yield* held.receipt();
-    yield* held.guard(platform.suspend(current));
-    if (input.now !== true) yield* held.guard(platform.drain(current));
-    yield* held.guard(platform.deleteOwnership(current));
-    yield* held.guard(platform.deleteInstallations(current));
-    yield* held.guard(platform.destroyCloudflare(current));
-    yield* held.guard(platform.pruneImages(current, protectedTags));
-    yield* held.guard(platform.deleteApp(current));
-    const residue = yield* held.guard(platform.verify(current));
+    const residue = yield* platform.teardown({
+      receipt: current,
+      now: input.now === true,
+      protectedTags,
+    });
     if (residue.length > 0) {
       yield* held.finish({
         phase: "destroying",
@@ -166,12 +148,14 @@ export const destroyDeployment = Effect.fn("Jitney.destroyDeployment")(function*
     yield* held.deleteReceipt(receipt.id);
   });
 
-  yield* teardown.pipe(
-    Effect.tapError((error) =>
-      // The residue branch already settled the receipt before failing.
-      error instanceof DestroyResidueError
-        ? Effect.void
-        : held.finish({ phase: "destroying", outcome: "failed" }).pipe(Effect.ignore),
+  yield* held.hold(
+    teardown.pipe(
+      Effect.tapError((error) =>
+        // The residue branch already settled the receipt before failing.
+        error instanceof DestroyResidueError
+          ? Effect.void
+          : held.finish({ phase: "destroying", outcome: "failed" }).pipe(Effect.ignore),
+      ),
     ),
   );
   return { status: "destroyed", plan } satisfies DestroyResult;

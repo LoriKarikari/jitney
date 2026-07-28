@@ -1,5 +1,6 @@
 import { DateTime, Effect, Option, Ref } from "effect";
 import { describe, expect, it } from "vitest";
+import type { AccountSnapshot, LiveApplication } from "../src/cloudflare-inventory.js";
 import {
   ListPlatform,
   ListReceipts,
@@ -8,7 +9,6 @@ import {
   renderListReport,
   type GitHubProbe,
   type ListReport,
-  type LiveApplication,
 } from "../src/list.js";
 import {
   createDeploymentReceipt,
@@ -79,17 +79,20 @@ function fakePlatform(overrides?: {
     { readonly exists: boolean; readonly version: string | null },
     ProbeUnreachableError
   >;
-  workerNames?: () => Effect.Effect<readonly string[], ProbeUnreachableError>;
-  containerApplications?: () => Effect.Effect<readonly LiveApplication[], ProbeUnreachableError>;
+  snapshot?: () => Effect.Effect<AccountSnapshot, ProbeUnreachableError>;
   registryTags?: () => Effect.Effect<readonly string[], ProbeUnreachableError>;
   githubApp?: (receipt: DeploymentReceipt) => Effect.Effect<GitHubProbe, ProbeUnreachableError>;
   latestVersion?: () => Effect.Effect<Option.Option<string>, ProbeUnreachableError>;
 }) {
   return ListPlatform.of({
     worker: overrides?.worker ?? (() => Effect.succeed({ exists: true, version: "0.3.0" })),
-    workerNames: overrides?.workerNames ?? (() => Effect.succeed(["jitney"])),
-    containerApplications:
-      overrides?.containerApplications ?? (() => Effect.succeed(healthyApplications)),
+    snapshot:
+      overrides?.snapshot ??
+      (() =>
+        Effect.succeed({
+          workers: [{ name: "jitney", jitneyTagged: true, deploymentId: null }],
+          applications: healthyApplications,
+        })),
     registryTags: overrides?.registryTags ?? (() => Effect.succeed(["0.3.0"])),
     githubApp:
       overrides?.githubApp ??
@@ -173,10 +176,13 @@ describe("list drift classification", () => {
     const report = await runList(
       [fixtureReceipt()],
       fakePlatform({
-        containerApplications: () =>
-          Effect.succeed([
-            { id: "jitney-application-id", name: "jitney-runner", imageTag: "0.1.0" },
-          ]),
+        snapshot: () =>
+          Effect.succeed({
+            workers: [{ name: "jitney", jitneyTagged: true, deploymentId: null }],
+            applications: [
+              { id: "jitney-application-id", name: "jitney-runner", imageTag: "0.1.0" },
+            ],
+          }),
       }),
     );
 
@@ -195,12 +201,18 @@ describe("list drift classification", () => {
     const report = await runList(
       [fixtureReceipt()],
       fakePlatform({
-        workerNames: () => Effect.succeed(["jitney", "staging"]),
-        containerApplications: () =>
-          Effect.succeed([
-            ...healthyApplications,
-            { id: "a034dae7", name: "staging-runner-old", imageTag: "0.1.0" },
-          ]),
+        snapshot: () =>
+          Effect.succeed({
+            workers: ["jitney", "staging"].map((name) => ({
+              name,
+              jitneyTagged: true,
+              deploymentId: null,
+            })),
+            applications: [
+              ...healthyApplications,
+              { id: "a034dae7", name: "staging-runner-old", imageTag: "0.1.0" },
+            ],
+          }),
         registryTags: () => Effect.succeed(["0.3.0", "old"]),
       }),
     );
@@ -230,7 +242,7 @@ describe("list drift classification", () => {
       [fixtureReceipt()],
       fakePlatform({
         worker: unreachable,
-        containerApplications: unreachable,
+        snapshot: unreachable,
         registryTags: unreachable,
       }),
     );
@@ -300,10 +312,13 @@ describe("list drift classification", () => {
       [fixtureReceipt({ version: "0.5.0" })],
       fakePlatform({
         worker: () => Effect.succeed({ exists: true, version: "0.5.0" }),
-        containerApplications: () =>
-          Effect.succeed([
-            { id: "jitney-application-id", name: "jitney-runner", imageTag: "0.5.0" },
-          ]),
+        snapshot: () =>
+          Effect.succeed({
+            workers: [{ name: "jitney", jitneyTagged: true, deploymentId: null }],
+            applications: [
+              { id: "jitney-application-id", name: "jitney-runner", imageTag: "0.5.0" },
+            ],
+          }),
         registryTags: () => Effect.succeed(["0.5.0"]),
         latestVersion: () => Effect.succeed(Option.some("0.4.0")),
       }),
@@ -324,12 +339,19 @@ describe("list drift classification", () => {
             exists: true,
             version: name === "staging" ? "0.1.0" : "0.3.0",
           }),
-        containerApplications: () =>
-          Effect.succeed([
-            ...healthyApplications,
-            { id: "staging-application-id", name: "staging-runner", imageTag: "0.2.0" },
-            { id: "a034dae7", name: "staging-runner-old", imageTag: "0.1.0" },
-          ]),
+        snapshot: () =>
+          Effect.succeed({
+            workers: ["jitney", "staging"].map((name) => ({
+              name,
+              jitneyTagged: true,
+              deploymentId: null,
+            })),
+            applications: [
+              ...healthyApplications,
+              { id: "staging-application-id", name: "staging-runner", imageTag: "0.2.0" },
+              { id: "a034dae7", name: "staging-runner-old", imageTag: "0.1.0" },
+            ],
+          }),
         registryTags: () => Effect.succeed(["0.3.0", "0.2.0"]),
         githubApp: (receipt) =>
           Effect.succeed({

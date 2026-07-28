@@ -21,13 +21,14 @@ const HEARTBEAT_INTERVAL = "5 minutes";
 /**
  * One lifecycle command's exclusive session with a Deployment Receipt.
  *
- * Every effect passed through `guard` runs while a background heartbeat keeps
+ * The effect passed through `hold` runs while a background heartbeat keeps
  * the lease alive. `record` updates inventory mid-operation without releasing
  * the lease. Exactly one of `finish` or `deleteReceipt` settles the receipt;
  * a command that does neither leaves the deployment for `repair`.
  */
 export interface HeldOperation {
-  readonly guard: <A, E, R>(
+  /** Fence one complete lifecycle operation with an immediate renewal and heartbeat. */
+  readonly hold: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | InstallerError, R>;
   readonly record: (
@@ -85,7 +86,7 @@ const makeHeldOperation = (
       yield* Ref.set(held, renewed);
     });
 
-    const guard = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    const hold = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       renew.pipe(
         Effect.andThen(
           Effect.raceFirst(
@@ -127,7 +128,7 @@ const makeHeldOperation = (
           .pipe(receiptError(`Could not remove the receipt for ${name}`));
       });
 
-    return { guard, record, finish, deleteReceipt, receipt: () => Ref.get(held) };
+    return { hold, record, finish, deleteReceipt, receipt: () => Ref.get(held) };
   });
 
 /**

@@ -34,8 +34,8 @@
     "prepack": "pnpm build",
     "build:worker": "wrangler deploy --dry-run --config wrangler.bundle.json --outdir assets/worker",
     "typecheck": "tsc --noEmit",
-    "fmt": "oxfmt --write .",
-    "fmt:check": "oxfmt --check .",
+    "fmt": "oxfmt --write . && (cd .. && cli/node_modules/.bin/oxfmt --write shared)",
+    "fmt:check": "oxfmt --check . && (cd .. && cli/node_modules/.bin/oxfmt --check shared)",
     "lint": "oxlint --type-aware --deny-warnings .",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm test && pnpm build"

@@ -1,4 +1,5 @@
 import { Array as Arr, Context, Data, Effect, HashMap, HashSet, Option, Result } from "effect";
+import type { AccountSnapshot, LiveApplication } from "./cloudflare-inventory.js";
 import type { DeploymentReceipt, GitHubInstallation } from "./receipts/schema.js";
 import type { ReceiptReadError } from "./receipts/store.js";
 
@@ -19,12 +20,6 @@ export interface Finding {
 export interface WorkerProbe {
   readonly exists: boolean;
   readonly version: string | null;
-}
-
-export interface LiveApplication {
-  readonly id: string;
-  readonly name: string;
-  readonly imageTag: string | null;
 }
 
 export interface GitHubProbe {
@@ -56,12 +51,7 @@ export class ListPlatform extends Context.Service<
       accountId: string,
       name: string,
     ) => Effect.Effect<WorkerProbe, ProbeUnreachableError>;
-    readonly workerNames: (
-      accountId: string,
-    ) => Effect.Effect<readonly string[], ProbeUnreachableError>;
-    readonly containerApplications: (
-      accountId: string,
-    ) => Effect.Effect<readonly LiveApplication[], ProbeUnreachableError>;
+    readonly snapshot: (accountId: string) => Effect.Effect<AccountSnapshot, ProbeUnreachableError>;
     readonly registryTags: (
       accountId: string,
       repository: string,
@@ -298,24 +288,12 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
     ...accountIds,
     ...deployments.map((receipt) => receipt.cloudflare.accountId),
   ]);
-  let applicationsByAccount = HashMap.empty<
-    string,
-    Result.Result<readonly LiveApplication[], ProbeUnreachableError>
-  >();
-  let workersByAccount = HashMap.empty<
-    string,
-    Result.Result<readonly string[], ProbeUnreachableError>
-  >();
+  let snapshots = HashMap.empty<string, Result.Result<AccountSnapshot, ProbeUnreachableError>>();
   for (const accountId of scannedAccounts) {
-    applicationsByAccount = HashMap.set(
-      applicationsByAccount,
+    snapshots = HashMap.set(
+      snapshots,
       accountId,
-      yield* Effect.result(platform.containerApplications(accountId)),
-    );
-    workersByAccount = HashMap.set(
-      workersByAccount,
-      accountId,
-      yield* Effect.result(platform.workerNames(accountId)),
+      yield* Effect.result(platform.snapshot(accountId)),
     );
   }
 
@@ -332,9 +310,9 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
   const orphans: Finding[] = [];
   const accountFindings: Finding[] = [];
   for (const accountId of scannedAccounts) {
-    const applications = HashMap.get(applicationsByAccount, accountId);
-    if (Option.isSome(applications) && Result.isSuccess(applications.value)) {
-      for (const application of applications.value.success) {
+    const snapshot = HashMap.get(snapshots, accountId);
+    if (Option.isSome(snapshot) && Result.isSuccess(snapshot.value)) {
+      for (const application of snapshot.value.success.applications) {
         if (
           !HashSet.has(referencedApplications, application.id) &&
           application.name.includes("-runner")
@@ -361,38 +339,36 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
           });
         }
       }
-    } else if (!deployments.some((receipt) => receipt.cloudflare.accountId === accountId)) {
-      accountFindings.push(unknownFinding("containerApplications", "cloudflare"));
-    }
-    const workers = HashMap.get(workersByAccount, accountId);
-    if (Option.isSome(workers) && Result.isSuccess(workers.value)) {
-      for (const name of workers.value.success) {
-        if (!HashSet.has(referencedWorkers, `${accountId}:${name}`)) {
+      for (const worker of snapshot.value.success.workers) {
+        if (worker.jitneyTagged && !HashSet.has(referencedWorkers, `${accountId}:${worker.name}`)) {
           orphans.push({
             class: "orphan",
             resource: "worker",
-            live: name,
-            message: `Worker ${name} has no deployment receipt`,
+            live: worker.name,
+            message: `Worker ${worker.name} has no deployment receipt`,
             commands: [{ label: "inspect", command: "npx get-jitney list --json" }],
           });
         }
       }
     } else if (!deployments.some((receipt) => receipt.cloudflare.accountId === accountId)) {
-      accountFindings.push(unknownFinding("workers", "cloudflare"));
+      accountFindings.push(unknownFinding("accountSnapshot", "cloudflare"));
     }
   }
 
   const statuses: DeploymentStatus[] = [];
   for (const receipt of deployments) {
-    const applicationResult = HashMap.get(applicationsByAccount, receipt.cloudflare.accountId);
+    const snapshotResult = HashMap.get(snapshots, receipt.cloudflare.accountId);
     const registryResult = yield* Effect.result(
       platform.registryTags(receipt.cloudflare.accountId, receipt.cloudflare.registryRepo),
     );
     const findings = [
       ...(yield* checkWorker(receipt, platform)),
-      ...(Option.isNone(applicationResult)
+      ...(Option.isNone(snapshotResult)
         ? [unknownFinding("containerApplication", "cloudflare")]
-        : checkApplication(receipt, applicationResult.value)),
+        : checkApplication(
+            receipt,
+            Result.map(snapshotResult.value, (snapshot) => snapshot.applications),
+          )),
       ...checkRegistry(receipt, registryResult),
       ...(yield* checkGitHub(receipt, platform)),
       ...(Result.isFailure(latestResult) ? [unknownFinding("release.latest", "release")] : []),

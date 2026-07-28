@@ -1,6 +1,6 @@
 import { Context, DateTime, Effect, Option } from "effect";
 import { runnerApplicationName, type AccountSnapshot } from "./cloudflare-inventory.js";
-import { InstallerError } from "./errors.js";
+import { stepError, type InstallerError } from "./errors.js";
 import { DeploymentReceipts } from "./install.js";
 import { beginLeasedOperation } from "./receipts/leased-operation.js";
 import type { DeploymentReceipt } from "./receipts/schema.js";
@@ -57,12 +57,7 @@ export class RepairPlatform extends Context.Service<
   }
 >()("Jitney.RepairPlatform") {}
 
-const repairError = (message: string, cause?: unknown) =>
-  new InstallerError({
-    step: "repair",
-    message,
-    ...(cause === undefined ? {} : { cause }),
-  });
+const repairError = stepError("repair");
 
 const parseAdoptions = (
   adopt: readonly string[],
@@ -235,17 +230,19 @@ export const repairDeployment = Effect.fn(function* (input: RepairInput) {
     }
     if (ownershipActions.length > 0) {
       const current = yield* held.receipt();
-      yield* held.guard(
-        platform.rewriteOwnership(
-          current,
-          ownershipActions.map((action) => action.fullName),
-        ),
+      yield* platform.rewriteOwnership(
+        current,
+        ownershipActions.map((action) => action.fullName),
       );
     }
     yield* held.finish({ phase: "active", outcome: "succeeded" });
   });
-  yield* settle.pipe(
-    Effect.tapError(() => held.finish({ phase: "active", outcome: "failed" }).pipe(Effect.ignore)),
+  yield* held.hold(
+    settle.pipe(
+      Effect.tapError(() =>
+        held.finish({ phase: "active", outcome: "failed" }).pipe(Effect.ignore),
+      ),
+    ),
   );
   return plan;
 });

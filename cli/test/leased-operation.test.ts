@@ -78,7 +78,7 @@ async function makeMemoryBackend(): Promise<{
 }
 
 describe("leased operation", () => {
-  it("renews the lease on a schedule while a guarded step runs", async () => {
+  it("renews the lease while the lifecycle operation runs", async () => {
     const backend = await makeMemoryBackend();
     const store = makeReceiptStore(backend.service, { namespaceRemovalDelay: Duration.zero });
 
@@ -90,7 +90,7 @@ describe("leased operation", () => {
           "lori@mbp",
           yield* DateTime.now,
         );
-        const fiber = yield* held.guard(Effect.sleep("21 minutes")).pipe(Effect.forkChild);
+        const fiber = yield* held.hold(Effect.sleep("21 minutes")).pipe(Effect.forkChild);
         yield* TestClock.adjust("21 minutes");
         yield* Fiber.join(fiber);
         return (yield* held.receipt()).lease.expiresAt;
@@ -99,7 +99,7 @@ describe("leased operation", () => {
 
     // The TestClock starts at the epoch. Renewals ran at entry and at the
     // 5/10/15/20-minute heartbeats; the lease now expires 15 minutes after the
-    // last heartbeat, well past the guarded step's 21-minute end.
+    // last heartbeat, well past the operation's 21-minute end.
     expect(DateTime.formatIso(expiry)).toBe("1970-01-01T00:35:00.000Z");
     expect(await backend.currentLeaseExpiry()).toBe("1970-01-01T00:35:00.000Z");
   });

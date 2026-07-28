@@ -99,15 +99,10 @@ function platform(input?: {
             Effect.andThen(call("export")),
           ),
     confirm: () => call("confirm").pipe(Effect.as(input?.confirm ?? true)),
-    suspend: () => call("suspend"),
-    drain: () => call("drain"),
-    deleteOwnership: () => call("delete_ownership"),
-    deleteInstallations: () => call("delete_installations"),
-    destroyCloudflare: () => call("destroy_cloudflare"),
-    pruneImages: (_receipt, protectedTags) =>
-      call(`prune_images:${[...protectedTags].sort().join(",")}`),
-    deleteApp: () => call("delete_app"),
-    verify: () => call("verify").pipe(Effect.as(input?.residue ?? [])),
+    teardown: ({ now, protectedTags }) =>
+      call(`teardown:${now ? "now" : "drain"}:${[...protectedTags].sort().join(",")}`).pipe(
+        Effect.as(input?.residue ?? []),
+      ),
   });
 }
 
@@ -168,7 +163,7 @@ describe("destroy", () => {
     expect(await backend.receipt("staging")).toMatchObject({ phase: "active", lease: null });
   });
 
-  it("deletes in dependency order and removes the final receipt", async () => {
+  it("passes shared image references to teardown and removes the final receipt", async () => {
     const calls = await Effect.runPromise(Ref.make<string[]>([]));
     const other = {
       ...fixtureReceipt("production"),
@@ -185,14 +180,7 @@ describe("destroy", () => {
     expect(result).toEqual({ status: "destroyed", plan: expectedPlan });
     expect(await Ref.get(calls).pipe(Effect.runPromise)).toEqual([
       "confirm",
-      "suspend",
-      "drain",
-      "delete_ownership",
-      "delete_installations",
-      "destroy_cloudflare",
-      "prune_images:0.3.0,0.4.0",
-      "delete_app",
-      "verify",
+      "teardown:drain:0.3.0,0.4.0",
     ]);
     expect(await backend.receipt("staging")).toBeUndefined();
     expect(backend.namespaceRemoved()).toBe(false);
@@ -206,7 +194,7 @@ describe("destroy", () => {
 
     await Effect.runPromise(effect);
 
-    expect(await Ref.get(calls).pipe(Effect.runPromise)).not.toContain("drain");
+    expect(await Ref.get(calls).pipe(Effect.runPromise)).toContain("teardown:now:");
   });
 
   it("exports the redacted receipt before confirmation", async () => {
@@ -254,7 +242,7 @@ describe("destroy", () => {
     const result = await Effect.runPromise(effect);
 
     expect(result.status).toBe("destroyed");
-    expect(await Ref.get(calls).pipe(Effect.runPromise)).toContain("verify");
+    expect(await Ref.get(calls).pipe(Effect.runPromise)).toContain("teardown:drain:");
     expect(await backend.receipt("staging")).toBeUndefined();
   });
 

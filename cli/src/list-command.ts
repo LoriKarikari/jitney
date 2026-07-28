@@ -1,10 +1,8 @@
-import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Cloudflare from "alchemy/Cloudflare";
-import { Effect, HashMap, Option, Predicate, Ref, Schema } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import { Effect, Option, Predicate, Schema } from "effect";
 import { request } from "@octokit/request";
-import { observeAccount, type AccountSnapshot } from "./cloudflare-inventory.js";
-import { cloudflareRuntime } from "./cloudflare-runtime.js";
+import { observeAccount } from "./cloudflare-inventory.js";
+import { captureCloudflareServices, cloudflareRuntime } from "./cloudflare-runtime.js";
 import { fetchLifecycleStatus, workerAddress } from "./lifecycle-status-client.js";
 import { InstallerError } from "./errors.js";
 import {
@@ -14,7 +12,6 @@ import {
   listDeployments,
   renderListReport,
   type GitHubProbe,
-  type LiveApplication,
 } from "./list.js";
 import { listRunnerImageTags } from "./runner-image-registry.js";
 import {
@@ -36,32 +33,7 @@ const unreachable = (
 ): ProbeUnreachableError => new ProbeUnreachableError({ plane, cause });
 
 const makeListPlatform = Effect.fn(function* () {
-  const credentials = yield* Credentials;
-  const client = yield* HttpClient.HttpClient;
-  const provideCloudflare = <A, E>(
-    effect: Effect.Effect<A, E, Credentials | HttpClient.HttpClient>,
-  ) =>
-    effect.pipe(
-      Effect.provideService(Credentials, credentials),
-      Effect.provideService(HttpClient.HttpClient, client),
-    );
-
-  // list probes the same account twice (workers, applications); observe once.
-  const snapshots = yield* Ref.make(HashMap.empty<string, AccountSnapshot>());
-  const snapshotFor = (accountId: string) =>
-    Ref.get(snapshots).pipe(
-      Effect.flatMap((cache) =>
-        Option.match(HashMap.get(cache, accountId), {
-          onSome: Effect.succeed,
-          onNone: () =>
-            provideCloudflare(observeAccount(accountId)).pipe(
-              Effect.tap((snapshot) =>
-                Ref.update(snapshots, (current) => HashMap.set(current, accountId, snapshot)),
-              ),
-            ),
-        }),
-      ),
-    );
+  const { client, provide: provideCloudflare } = yield* captureCloudflareServices;
 
   return ListPlatform.of({
     worker: (accountId, name) =>
@@ -83,16 +55,8 @@ const makeListPlatform = Effect.fn(function* () {
         }),
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),
-    workerNames: (accountId) =>
-      snapshotFor(accountId).pipe(
-        Effect.map((snapshot) =>
-          snapshot.workers.flatMap((worker) => (worker.jitneyTagged ? [worker.name] : [])),
-        ),
-        Effect.mapError((cause) => unreachable("cloudflare", cause)),
-      ),
-    containerApplications: (accountId) =>
-      snapshotFor(accountId).pipe(
-        Effect.map((snapshot): readonly LiveApplication[] => snapshot.applications),
+    snapshot: (accountId) =>
+      provideCloudflare(observeAccount(accountId)).pipe(
         Effect.mapError((cause) => unreachable("cloudflare", cause)),
       ),
     registryTags: (accountId, repository) =>

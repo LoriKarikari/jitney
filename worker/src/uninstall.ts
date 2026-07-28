@@ -1,13 +1,9 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
 import { Context, Data, Effect, Predicate, Schema } from "effect";
+import { isLiveSecret, UNINSTALL_ACTIONS } from "../../shared/uninstall-protocol.js";
 
-export const UninstallAction = Schema.Literals([
-  "suspend",
-  "drain",
-  "delete_ownership",
-  "delete_installations",
-]);
+export const UninstallAction = Schema.Literals([...UNINSTALL_ACTIONS]);
 export type UninstallAction = typeof UninstallAction.Type;
 export const UninstallRequest = Schema.Struct({ action: UninstallAction });
 
@@ -150,9 +146,7 @@ export const readUninstallReceipt = (env: Env) =>
 export const authorizeUninstall = (request: Request, secret: string): boolean => {
   const authorization = request.headers.get("Authorization");
   if (authorization === null || !authorization.startsWith("Bearer ")) return false;
-  const [expiresAt] = secret.split(".", 1);
-  if (expiresAt === undefined || !Number.isSafeInteger(Number(expiresAt))) return false;
-  if (Number(expiresAt) <= Date.now()) return false;
+  if (!isLiveSecret(secret, Date.now())) return false;
   const supplied = new TextEncoder().encode(authorization.slice("Bearer ".length));
   const expected = new TextEncoder().encode(secret);
   return (

@@ -1,5 +1,6 @@
 import { Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
+import { mintOperationSecret } from "../../shared/uninstall-protocol";
 import {
   UninstallPlatform,
   authorizeUninstall,
@@ -45,8 +46,7 @@ async function fakePlatform(activeAttempts = 0) {
 
 describe("uninstall", () => {
   it("never authorizes the inert secret installed at deploy time", () => {
-    // deploy writes `0.<random>`; destroy mints `<future-epoch>.<random>`.
-    const installed = "0.qL3nR7xKfP2wVtYbN8sJdA5mZcH1gE4u";
+    const installed = mintOperationSecret(0, "qL3nR7xKfP2wVtYbN8sJdA5mZcH1gE4u");
 
     expect(
       authorizeUninstall(
@@ -59,8 +59,8 @@ describe("uninstall", () => {
   });
 
   it("accepts only the matching unexpired operation secret", () => {
-    const future = `${Date.now() + 60_000}.secret`;
-    const expired = `${Date.now() - 1}.secret`;
+    const future = mintOperationSecret(Date.now() + 60_000, "secret");
+    const expired = mintOperationSecret(Date.now() - 1, "secret");
 
     expect(
       authorizeUninstall(

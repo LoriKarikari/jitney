@@ -113,7 +113,7 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
   let credentials: GitHubAppCredentials | undefined;
 
   const operation = Effect.gen(function* () {
-    const bootstrap = yield* held.guard(platform.deployBootstrap({ ...input, deploymentId }));
+    const bootstrap = yield* platform.deployBootstrap({ ...input, deploymentId });
 
     yield* held.record((current) => ({
       cloudflare: {
@@ -123,12 +123,10 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
       },
     }));
 
-    const githubApp = yield* held.guard(
-      platform.createGitHubApp({
-        ...input,
-        workerUrl: bootstrap.workerUrl,
-      }),
-    );
+    const githubApp = yield* platform.createGitHubApp({
+      ...input,
+      workerUrl: bootstrap.workerUrl,
+    });
     credentials = githubApp.credentials;
     yield* held.record((current) => ({
       github: {
@@ -140,19 +138,15 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
       },
     }));
 
-    yield* held.guard(
-      platform.activate({ ...input, deploymentId, credentials: githubApp.credentials }),
-    );
+    yield* platform.activate({ ...input, deploymentId, credentials: githubApp.credentials });
 
-    const installations = yield* held.guard(platform.installGitHubApp(githubApp.credentials));
+    const installations = yield* platform.installGitHubApp(githubApp.credentials);
     yield* held.record((current) => ({
       github: { ...current.github, installations: [...installations] },
     }));
 
-    yield* held.guard(
-      platform.claimRepositories(githubApp.credentials, deploymentId, installations),
-    );
-    yield* held.guard(platform.checkHealth(bootstrap.workerUrl, input.version));
+    yield* platform.claimRepositories(githubApp.credentials, deploymentId, installations);
+    yield* platform.checkHealth(bootstrap.workerUrl, input.version);
 
     const receipt = yield* held.finish({ phase: "active", outcome: "succeeded" });
 
@@ -163,12 +157,12 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
     } satisfies InstallResult;
   });
 
-  return yield* operation.pipe(
-    Effect.catch((cause: InstallFailure) => {
-      if (input.keepPartial === true) return Effect.fail(cause);
-      return held.receipt().pipe(
-        Effect.flatMap((receipt) =>
-          held.guard(
+  return yield* held.hold(
+    operation.pipe(
+      Effect.catch((cause: InstallFailure) => {
+        if (input.keepPartial === true) return Effect.fail(cause);
+        return held.receipt().pipe(
+          Effect.flatMap((receipt) =>
             platform.rollback({
               ...input,
               deploymentId,
@@ -176,14 +170,14 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
               ...(credentials === undefined ? {} : { credentials }),
             }),
           ),
-        ),
-        Effect.flatMap(() => held.deleteReceipt(deploymentId)),
-        Effect.matchEffect({
-          onFailure: (rollbackCause) =>
-            Effect.fail(new InstallRollbackError({ cause, rollbackCause })),
-          onSuccess: () => Effect.fail(cause),
-        }),
-      );
-    }),
+          Effect.flatMap(() => held.deleteReceipt(deploymentId)),
+          Effect.matchEffect({
+            onFailure: (rollbackCause) =>
+              Effect.fail(new InstallRollbackError({ cause, rollbackCause })),
+            onSuccess: () => Effect.fail(cause),
+          }),
+        );
+      }),
+    ),
   );
 });

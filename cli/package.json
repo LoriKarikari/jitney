@@ -34,9 +34,8 @@
     "prepack": "pnpm build",
     "build:worker": "wrangler deploy --dry-run --config wrangler.bundle.json --outdir assets/worker",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint --type-aware --deny-warnings .",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm test && pnpm build"
   },
   "dependencies": {
     "@distilled.cloud/cloudflare": "0.29.1",
@@ -53,8 +52,6 @@
   "devDependencies": {
     "@jitney/shared": "workspace:*",
     "@types/node": "catalog:",
-    "oxlint": "catalog:",
-    "oxlint-tsgolint": "catalog:",
     "tsup": "^8.5.1",
     "typescript": "catalog:",
     "vitest": "catalog:",

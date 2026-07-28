@@ -49,6 +49,7 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
       - run: pnpm --filter get-jitney check
       - name: Pack the tested CLI
         run: pnpm --config.ignore-scripts=true pack --pack-destination "$RUNNER_TEMP"

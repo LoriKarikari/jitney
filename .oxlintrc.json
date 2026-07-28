@@ -1,0 +1,4 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": ["cli/assets/**", "cli/dist/**", "worker/worker-configuration.d.ts"]
+}

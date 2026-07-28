@@ -85,13 +85,14 @@ tasks:
       - pnpm fmt
 
   ts:check:
-    desc: Format-check the workspace, then check the control plane
+    desc: Format-check and lint the workspace, then check the control plane
     cmds:
       - pnpm fmt:check
+      - pnpm lint
       - pnpm --filter jitney-worker check
 
   cli:check:
-    desc: Typecheck, lint, test, and package the deployment CLI
+    desc: Typecheck, test, and package the deployment CLI
     cmds:
       - pnpm --filter get-jitney check
 

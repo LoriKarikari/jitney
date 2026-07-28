@@ -5,10 +5,14 @@
   "scripts": {
     "fmt": "oxfmt --write cli worker shared",
     "fmt:check": "oxfmt --check cli worker shared",
-    "check": "pnpm fmt:check && pnpm -r check"
+    "lint": "oxlint --type-aware --deny-warnings cli worker shared",
+    "lint:fix": "oxlint --type-aware --fix cli worker shared",
+    "check": "pnpm fmt:check && pnpm lint && pnpm -r check"
   },
   "devDependencies": {
-    "oxfmt": "catalog:"
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:"
   },
   "packageManager": "pnpm@11.8.0"
 }

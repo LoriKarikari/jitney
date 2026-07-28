@@ -6,6 +6,9 @@ import { ReceiptBackendError, type ReceiptBackend } from "./store.js";
 
 export const RECEIPT_NAMESPACE_TITLE = "jitney-receipts";
 
+export const receiptValueText = (value: unknown): string =>
+  typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
+
 export interface CloudflareReceiptScope {
   readonly accountId: string;
   readonly namespaceId: string;
@@ -68,7 +71,7 @@ export const makeCloudflareReceiptBackend = Effect.fn(function* (scope: Cloudfla
   return {
     get: (name) =>
       provideApi(KV.getNamespaceValue({ ...scope, keyName: name })).pipe(
-        Effect.map((value) => String(value)),
+        Effect.map(receiptValueText),
         Effect.catchTag("KeyNotFound", () => Effect.succeed(undefined)),
         mapBackendError("get"),
       ),

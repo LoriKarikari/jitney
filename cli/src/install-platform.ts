@@ -27,7 +27,7 @@ import {
   releaseGitHubRepositories,
   waitForGitHubInstallations,
 } from "./github-installations.js";
-import { mintOperationSecret } from "../../shared/uninstall-protocol.js";
+import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
 import { InstallPlatform, type InstallInput, type InstallStackOutput } from "./install.js";
 import { deleteRunnerImageTag } from "./runner-image-registry.js";
 

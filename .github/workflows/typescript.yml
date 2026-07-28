@@ -5,12 +5,20 @@ on:
     paths:
       - "cli/**"
       - "worker/**"
+      - "shared/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/typescript.yml"
   push:
     branches: [main]
     paths:
       - "cli/**"
       - "worker/**"
+      - "shared/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/typescript.yml"
 
 permissions:
@@ -29,25 +37,22 @@ jobs:
       matrix:
         include:
           - name: Generated types
-            command: pnpm types && git diff --exit-code -- worker-configuration.d.ts
+            command: pnpm --filter jitney-worker types && git diff --exit-code -- worker/worker-configuration.d.ts
           - name: Typecheck
-            command: pnpm typecheck
+            command: pnpm --filter jitney-worker typecheck
           - name: Formatting
             command: pnpm fmt:check
           - name: Oxlint
-            command: pnpm lint
+            command: pnpm --filter jitney-worker lint
           - name: Knip
-            command: pnpm knip
+            command: pnpm --filter jitney-worker knip
           - name: Worker tests
-            command: pnpm test
+            command: pnpm --filter jitney-worker test
     env:
       GITHUB_WEBHOOK_SECRET: ci-placeholder
       GITHUB_APP_ID: ci-placeholder
       GITHUB_APP_PRIVATE_KEY: ci-placeholder
       JITNEY_UNINSTALL_SECRET: ci-placeholder
-    defaults:
-      run:
-        working-directory: worker
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -57,7 +62,7 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: worker/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: ${{ matrix.command }}
 
@@ -73,12 +78,6 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-          cache-dependency-path: |
-            cli/pnpm-lock.yaml
-            worker/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-        working-directory: worker
-      - run: pnpm install --frozen-lockfile
-        working-directory: cli
-      - run: pnpm check
-        working-directory: cli
+      - run: pnpm --filter get-jitney check

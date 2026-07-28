@@ -5,7 +5,7 @@ import { jitneyStack, type JitneyProviderLayer } from "./jitney-stack.js";
 import { jitneyProviders } from "./providers.js";
 import { withAlchemyWorkspace } from "./workspace.js";
 import { alchemyRuntime } from "../cloudflare-runtime.js";
-import { mintOperationSecret } from "../../../shared/uninstall-protocol.js";
+import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
 import { workerBundlePath } from "../config.js";
 import { InstallerError } from "../errors.js";
 import type { DeploymentReceipt } from "../receipts/schema.js";

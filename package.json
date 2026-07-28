@@ -1,0 +1,20 @@
+{
+  "name": "jitney-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "fmt": "oxfmt --write cli worker shared package.json pnpm-workspace.yaml",
+    "fmt:check": "oxfmt --check cli worker shared package.json pnpm-workspace.yaml",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "check": "pnpm fmt:check && pnpm -r check"
+  },
+  "devDependencies": {
+    "oxfmt": "catalog:"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.8.0"
+}

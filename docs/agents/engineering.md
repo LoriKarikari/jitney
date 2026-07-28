@@ -229,12 +229,11 @@ The project uses five triage labels:
 
 ## Tooling
 
-The repository has two self-contained modules. Go code and its module tooling
-live under `supervisor/`. TypeScript control-plane code and its package tooling
-live under `worker/`. The root Taskfile delegates to both.
+The repository has one Go module under `supervisor/` and one pnpm workspace
+for `cli/`, `worker/`, and `shared/`. The root Taskfile delegates to both.
 
-- **Taskfile** drives local automation: `task ci` runs the same checks as CI
-  (verify, lint, race tests, govulncheck, gosec).
+- **Taskfile** drives local automation: `task ci` runs the Go checks plus the
+  Worker and CLI checks.
 - **golangci-lint** with `supervisor/.golangci.yml` is the lint source of
   truth. Run `task lint` after every significant change.
 - CI runs tests with `-race -shuffle=on`, checks `go mod tidy` drift, and
@@ -242,25 +241,27 @@ live under `worker/`. The root Taskfile delegates to both.
   `security-extended` suite for both Go and TypeScript and uploads findings to
   GitHub code scanning.
 - Workflows are path-scoped: Go and Go CodeQL checks run only when
-  `supervisor/**` changes; TypeScript and TypeScript CodeQL checks only when
-  `worker/**` changes.
+  `supervisor/**` changes; TypeScript and TypeScript CodeQL checks run when
+  `cli/**`, `worker/**`, or `shared/**` changes.
 - The supervisor builds as a static `CGO_ENABLED=0` linux/amd64 binary; it
   ships inside the runner image, not as a released archive.
 - `//nolint` directives must name the linter and carry a justification.
 
 ### TypeScript
 
-- The control plane lives under `worker/` and uses pnpm with a committed
-  lockfile. Run `task ts:install` for a reproducible install.
+- `cli/`, `worker/`, and `shared/` use one root pnpm workspace and lockfile.
+  Run `task ts:install` for a reproducible install. Each package declares the
+  tools it runs; the workspace catalog keeps shared tool versions aligned.
 - Wrangler generates binding and runtime declarations in
   `worker/worker-configuration.d.ts`. Regenerate them after changing
   `wrangler.jsonc`.
 - TypeScript uses strict mode, including unchecked-index and exact-optional
   checks.
 - Oxfmt is the formatter. Oxlint, including its type-aware rules, is the lint
-  source of truth. Use `pnpm fmt` to write formatting and `pnpm lint` to lint.
-- Knip fails the build on unused files, exports, and dependencies. Run
-  `pnpm knip` before opening a PR.
+  source of truth. Run `pnpm fmt` at the repository root and use
+  `pnpm --filter <package> lint` for package linting.
+- Knip fails the Worker build on unused files, exports, and dependencies. Run
+  `pnpm --filter jitney-worker knip` before opening a PR.
 - The Durable Object schema authority is `worker/src/schema.ts`. After
   changing it, run `pnpm exec drizzle-kit generate` and commit the generated
   migration; the Scheduler applies migrations on construction. Never edit an

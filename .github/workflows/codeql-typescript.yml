@@ -3,13 +3,17 @@ name: CodeQL (TypeScript)
 on:
   pull_request:
     paths:
+      - "cli/**"
       - "worker/**"
+      - "shared/**"
       - ".github/codeql/**"
       - ".github/workflows/codeql-typescript.yml"
   push:
     branches: [main]
     paths:
+      - "cli/**"
       - "worker/**"
+      - "shared/**"
       - ".github/codeql/**"
       - ".github/workflows/codeql-typescript.yml"
   schedule:

@@ -13,7 +13,11 @@ import { jitneyStack, type JitneyProviderLayer } from "./alchemy/jitney-stack.js
 import { jitneyProviders } from "./alchemy/providers.js";
 import { withAlchemyWorkspace } from "./alchemy/workspace.js";
 import { waitForDeploymentRemoval } from "./cloudflare-inventory.js";
-import { alchemyCli, captureCloudflareServices } from "./cloudflare-runtime.js";
+import {
+  alchemyCli,
+  captureCloudflareServices,
+  nonInteractiveAlchemyContext,
+} from "./cloudflare-runtime.js";
 import { workerBundlePath } from "./config.js";
 import { InstallerError } from "./errors.js";
 import {
@@ -127,6 +131,7 @@ export const makeInstallPlatform = Effect.fn(function* (
       }),
     ).pipe(
       Effect.provideService(Alchemy.Cli, alchemyCli),
+      Effect.provide(nonInteractiveAlchemyContext),
       Effect.mapError(
         (cause) =>
           new InstallerError({
@@ -148,6 +153,7 @@ export const makeInstallPlatform = Effect.fn(function* (
       }),
     ).pipe(
       Effect.provideService(Alchemy.Cli, alchemyCli),
+      Effect.provide(nonInteractiveAlchemyContext),
       Effect.asVoid,
       Effect.mapError(
         (cause) =>

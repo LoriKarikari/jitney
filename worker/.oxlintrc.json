@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "$schema": "../node_modules/oxlint/configuration_schema.json",
   "ignorePatterns": ["worker-configuration.d.ts"],
   "rules": {
     "typescript/no-explicit-any": "error",

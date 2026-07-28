@@ -258,8 +258,9 @@ for `cli/`, `worker/`, and `shared/`. The root Taskfile delegates to both.
 - TypeScript uses strict mode, including unchecked-index and exact-optional
   checks.
 - Oxfmt is the formatter. Oxlint, including its type-aware rules, is the lint
-  source of truth. Run `pnpm fmt` at the repository root and use
-  `pnpm --filter <package> lint` for package linting.
+  source of truth. Both run once from the repository root as `pnpm fmt` and
+  `pnpm lint`, and pick up each package's own `.oxfmtrc.json` and
+  `.oxlintrc.json`.
 - Knip fails the Worker build on unused files, exports, and dependencies. Run
   `pnpm --filter jitney-worker knip` before opening a PR.
 - The Durable Object schema authority is `worker/src/schema.ts`. After

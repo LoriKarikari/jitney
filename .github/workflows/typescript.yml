@@ -43,7 +43,7 @@ jobs:
           - name: Formatting
             command: pnpm fmt:check
           - name: Oxlint
-            command: pnpm --filter jitney-worker lint
+            command: pnpm lint
           - name: Knip
             command: pnpm --filter jitney-worker knip
           - name: Worker tests

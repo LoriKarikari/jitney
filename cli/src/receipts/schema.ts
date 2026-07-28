@@ -1,7 +1,7 @@
 import { DateTime, Effect, Schema } from "effect";
 import { ulid } from "ulid";
 
-export const DeploymentId = Schema.String.check(Schema.isPattern(/^[0-9A-HJKMNP-TV-Z]{26}$/));
+const DeploymentId = Schema.String.check(Schema.isPattern(/^[0-9A-HJKMNP-TV-Z]{26}$/));
 
 export const DeploymentPhase = Schema.Literals([
   "installing",
@@ -32,7 +32,7 @@ export const DestroyResidue = Schema.Struct({
   reason: Schema.String,
 });
 
-export const ReceiptHistoryEntry = Schema.Struct({
+const ReceiptHistoryEntry = Schema.Struct({
   operation: DeploymentOperation,
   actor: Schema.String,
   startedAt: Schema.DateTimeUtcFromString,
@@ -104,7 +104,7 @@ export type DeploymentReceipt = typeof DeploymentReceiptSchema.Type;
 export type DeploymentOperation = typeof DeploymentOperation.Type;
 export type DeploymentPhase = typeof DeploymentPhase.Type;
 export type OperationLease = typeof OperationLease.Type;
-export type ReceiptHistoryEntry = typeof ReceiptHistoryEntry.Type;
+type ReceiptHistoryEntry = typeof ReceiptHistoryEntry.Type;
 export type GitHubInstallation = typeof GitHubInstallation.Type;
 export type DestroyResidue = typeof DestroyResidue.Type;
 

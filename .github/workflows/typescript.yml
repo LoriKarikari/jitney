@@ -45,7 +45,9 @@ jobs:
           - name: Oxlint
             command: pnpm lint
           - name: Knip
-            command: pnpm --filter jitney-worker knip
+            command: pnpm knip
+          - name: Deduplicated lockfile
+            command: pnpm dedupe --check
           - name: Worker tests
             command: pnpm --filter jitney-worker test
     env:

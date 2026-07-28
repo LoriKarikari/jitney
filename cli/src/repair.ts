@@ -14,7 +14,7 @@ export type RepairAction =
     }
   | { readonly kind: "rewrite_ownership"; readonly fullName: string };
 
-export interface RepairBlocker {
+interface RepairBlocker {
   readonly reason: string;
   readonly command?: string;
 }
@@ -71,7 +71,7 @@ const parseAdoptions = (
         );
   });
 
-export const planRepair = Effect.fn(function* (
+const planRepair = Effect.fn(function* (
   input: RepairInput,
   receipt: DeploymentReceipt,
   now: DateTime.Utc,

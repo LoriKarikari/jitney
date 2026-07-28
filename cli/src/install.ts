@@ -34,7 +34,7 @@ export interface InstallInput {
   readonly keepPartial?: boolean;
 }
 
-export interface InstallResult {
+interface InstallResult {
   readonly deploymentId: string;
   readonly workerUrl: string;
   readonly receipt: DeploymentReceipt;

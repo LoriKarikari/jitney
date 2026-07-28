@@ -48,7 +48,7 @@ const installationToken = (credentials: GitHubAppCredentials, installationId: nu
     },
   );
 
-export const listGitHubInstallations = Effect.fn(function* (credentials: GitHubAppCredentials) {
+const listGitHubInstallations = Effect.fn(function* (credentials: GitHubAppCredentials) {
   const token = yield* appToken(credentials);
   const installations: GitHubInstallation[] = [];
   for (let installationPage = 1; ; installationPage += 1) {

@@ -1,13 +1,10 @@
 {
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "target": "ES2024",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
     "esModuleInterop": true,
-    "skipLibCheck": true,
     "types": ["node"]
   },
   "include": ["src", "test"]

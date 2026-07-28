@@ -7,9 +7,11 @@
     "fmt:check": "oxfmt --check cli worker shared",
     "lint": "oxlint --type-aware --deny-warnings cli worker shared",
     "lint:fix": "oxlint --type-aware --fix cli worker shared",
-    "check": "pnpm fmt:check && pnpm lint && pnpm -r check"
+    "knip": "knip",
+    "check": "pnpm fmt:check && pnpm lint && pnpm knip && pnpm -r check"
   },
   "devDependencies": {
+    "knip": "^6.26.0",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:"

@@ -1,4 +1,3 @@
-import { createAppAuth } from "@octokit/auth-app";
 import { request } from "@octokit/request";
 import { randomBytes, createPrivateKey } from "node:crypto";
 import { createServer } from "node:http";
@@ -145,24 +144,6 @@ export function waitForGitHubAppDeletion(
   credentials: GitHubAppCredentials,
 ): Effect.Effect<void, InstallerError, HttpClient.HttpClient> {
   return waitForGitHubAppDeletionFor(credentials, "rollback");
-}
-
-export function installationCount(
-  credentials: GitHubAppCredentials,
-): Effect.Effect<number, InstallerError> {
-  return tryPromise(
-    "github_app_installation",
-    "Could not inspect GitHub App installations",
-    async () => {
-      const auth = createAppAuth({ appId: credentials.appId, privateKey: credentials.privateKey });
-      const appAuthentication = await auth({ type: "app" });
-      const response = await request("GET /app/installations", {
-        headers: { authorization: `bearer ${appAuthentication.token}` },
-        per_page: 100,
-      });
-      return response.data.length;
-    },
-  );
 }
 
 export async function listenForManifestCode(

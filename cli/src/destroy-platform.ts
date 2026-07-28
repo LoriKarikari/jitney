@@ -7,7 +7,7 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { destroyDeploymentStack } from "./alchemy/destroy-deployment.js";
 import { observeAccount } from "./cloudflare-inventory.js";
 import { captureCloudflareServices } from "./cloudflare-runtime.js";
-import { DestroyPlatform, renderDestroyPlan } from "./destroy.js";
+import { DestroyPlatform, renderDestroyPlan, type DestroyPlan } from "./destroy.js";
 import { InstallerError, orStepError, stepError, tryPromise } from "./errors.js";
 import {
   openGitHubAppDeletionFor,
@@ -16,6 +16,11 @@ import {
 } from "./github-app.js";
 import { workerAddress } from "./lifecycle-status-client.js";
 import { confirmInTerminal } from "./prompt.js";
+import {
+  mintOperationSecret,
+  UNINSTALL_IDENTITY_MISMATCH,
+  type UninstallAction,
+} from "../../shared/uninstall-protocol.js";
 import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
 import {
   DeploymentReceiptSchema,
@@ -29,17 +34,8 @@ import {
 } from "./runner-image-registry.js";
 
 const DrainResponse = Schema.Struct({ activeAttempts: Schema.Number });
-// Mirrors the Worker's UninstallAction schema; the endpoint rejects unknown actions.
-const UninstallAction = Schema.Literals([
-  "suspend",
-  "drain",
-  "delete_ownership",
-  "delete_installations",
-]);
-type UninstallAction = typeof UninstallAction.Type;
-// The Worker reads the expiry from the segment before the first dot.
 const operationSecret = (): string =>
-  `${Date.now() + 15 * 60_000}.${randomBytes(32).toString("base64url")}`;
+  mintOperationSecret(Date.now() + 15 * 60_000, randomBytes(32).toString("base64url"));
 
 const fail = stepError("destroy");
 
@@ -123,7 +119,7 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
       );
       if (response.status !== 204 && response.status !== 200) {
         const message =
-          response.status === 404
+          response.status === UNINSTALL_IDENTITY_MISMATCH
             ? `The Worker for ${receipt.cloudflare.workerName} does not recognize deployment ${receipt.id}. Run repair first.`
             : `Uninstall ${action} returned ${response.status}`;
         return yield* Effect.fail(new InstallerError({ step: "destroy", message }));
@@ -133,12 +129,12 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         : Option.some<unknown>(undefined);
     }).pipe(Effect.mapError(orStepError("destroy", `Could not run uninstall ${action}`)));
 
-  return DestroyPlatform.of({
-    exportReceipt: (receipt, path) =>
+  const steps = {
+    exportReceipt: (receipt: DeploymentReceipt, path: string) =>
       writeExport(path, receipt, null).pipe(
         Effect.andThen(Ref.set(exportedPath, Option.some(path))),
       ),
-    confirm: (plan) =>
+    confirm: (plan: DestroyPlan) =>
       assumeYes
         ? Effect.succeed(true)
         : confirmInTerminal({
@@ -147,8 +143,8 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
             question: `Type ${plan.name} to confirm: `,
             accept: (answer) => answer === plan.name,
           }),
-    suspend: (receipt) => callUninstall(receipt, "suspend").pipe(Effect.asVoid),
-    drain: (receipt) => {
+    suspend: (receipt: DeploymentReceipt) => callUninstall(receipt, "suspend").pipe(Effect.asVoid),
+    drain: (receipt: DeploymentReceipt) => {
       const pending = fail(`Runner Attempts are still active for ${receipt.name}`);
       return callUninstall(receipt, "drain").pipe(
         Effect.flatMap(
@@ -171,7 +167,7 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         }),
       );
     },
-    deleteOwnership: (receipt) =>
+    deleteOwnership: (receipt: DeploymentReceipt) =>
       callUninstall(receipt, "delete_ownership").pipe(
         Effect.flatMap(
           Option.match({
@@ -188,10 +184,11 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
           }),
         ),
       ),
-    deleteInstallations: (receipt) =>
+    deleteInstallations: (receipt: DeploymentReceipt) =>
       callUninstall(receipt, "delete_installations").pipe(Effect.asVoid),
-    destroyCloudflare: (receipt) => provideCloudflare(destroyDeploymentStack(receipt)),
-    pruneImages: (receipt, protectedTags) =>
+    destroyCloudflare: (receipt: DeploymentReceipt) =>
+      provideCloudflare(destroyDeploymentStack(receipt)),
+    pruneImages: (receipt: DeploymentReceipt, protectedTags: ReadonlySet<string>) =>
       provideCloudflare(
         listRunnerImageTags(receipt.cloudflare.accountId, receipt.cloudflare.registryRepo),
       ).pipe(
@@ -212,7 +209,7 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         ),
         Effect.andThen(provideCloudflare(garbageCollectRunnerLayers(receipt.cloudflare.accountId))),
       ),
-    deleteApp: (receipt) => {
+    deleteApp: (receipt: DeploymentReceipt) => {
       const app = appIdentity(receipt);
       if (app === null) return Effect.void;
       return Effect.sync(() =>
@@ -226,7 +223,7 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         ),
       );
     },
-    verify: (receipt) =>
+    verify: (receipt: DeploymentReceipt) =>
       Effect.gen(function* () {
         const residue = [...(yield* Ref.get(accumulatedResidue))];
         const snapshot = yield* provideCloudflare(observeAccount(receipt.cloudflare.accountId));
@@ -273,5 +270,21 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         }
         return residue;
       }).pipe(Effect.mapError(orStepError("destroy", "Could not verify teardown"))),
+  };
+
+  return DestroyPlatform.of({
+    exportReceipt: steps.exportReceipt,
+    confirm: steps.confirm,
+    teardown: ({ receipt, now, protectedTags }) =>
+      Effect.gen(function* () {
+        yield* steps.suspend(receipt);
+        if (!now) yield* steps.drain(receipt);
+        yield* steps.deleteOwnership(receipt);
+        yield* steps.deleteInstallations(receipt);
+        yield* steps.destroyCloudflare(receipt);
+        yield* steps.pruneImages(receipt, protectedTags);
+        yield* steps.deleteApp(receipt);
+        return yield* steps.verify(receipt);
+      }),
   });
 });

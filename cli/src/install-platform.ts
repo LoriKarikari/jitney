@@ -27,6 +27,7 @@ import {
   releaseGitHubRepositories,
   waitForGitHubInstallations,
 } from "./github-installations.js";
+import { mintOperationSecret } from "../../shared/uninstall-protocol.js";
 import { InstallPlatform, type InstallInput, type InstallStackOutput } from "./install.js";
 import { deleteRunnerImageTag } from "./runner-image-registry.js";
 
@@ -58,9 +59,10 @@ export const makeInstallPlatform = Effect.fn(function* (
   const cloudflare = yield* captureCloudflareServices;
   const httpClient = cloudflare.client;
   const provideCloudflareApi = cloudflare.provide;
-  // Install the uninstall secret already expired: destroy mints a live one when
-  // it needs the endpoint, so a fresh deployment ships with it inert.
-  const uninstallSecret = Redacted.make(`0.${randomBytes(32).toString("base64url")}`);
+  // Deploy ships the endpoint inert; destroy mints a live secret when it needs one.
+  const uninstallSecret = Redacted.make(
+    mintOperationSecret(0, randomBytes(32).toString("base64url")),
+  );
 
   const githubOperations = Layer.succeed(GitHubAppOperations, {
     reconcile: ({ current }) => {

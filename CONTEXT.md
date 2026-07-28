@@ -131,6 +131,14 @@ Any residue keeps the Deployment Receipt in `phase: destroying`; zero residue
 allows the receipt and, when empty, its namespace to be deleted.
 _Avoid_: cleanup warning, probably deleted
 
+**Uninstall Protocol**:
+The authenticated wire contract between `destroy` and a Deployment's Worker.
+Destroy temporarily installs an `expiry.random` secret, then sends one of four
+ordered actions: suspend intake, drain Runner Attempts, delete repository
+ownership, or delete installations. Fresh Deployments carry a permanently
+expired secret, so the protocol is inert outside an active destroy operation.
+_Avoid_: admin endpoint, cleanup API
+
 ## Relationships
 
 - A **Delivery** carries one **Workflow Event**.
@@ -148,6 +156,7 @@ _Avoid_: cleanup warning, probably deleted
 - Deployment ownership always matches on the ULID, never the name.
 - `list` assigns a **Resource Classification** without changing either control plane.
 - A failed final destroy sweep records **Destroy Residue** before releasing the lease.
+- The **Uninstall Protocol** is live only while `destroy` holds an Operation Lease.
 
 ## Architecture
 

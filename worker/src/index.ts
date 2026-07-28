@@ -1,4 +1,5 @@
 import { Data, Effect, Schema } from "effect";
+import { UNINSTALL_IDENTITY_MISMATCH } from "../../shared/uninstall-protocol";
 import { classifyDelivery } from "./delivery-classification";
 import { discoverQueuedJobs } from "./github";
 import { reconcile } from "./reconciliation";
@@ -41,7 +42,7 @@ const handleRequest = Effect.fn("IngressWorker.fetch")(function* (request: Reque
   }
   if (request.method === "POST" && url.pathname === "/lifecycle/uninstall") {
     if (request.headers.get("X-Jitney-Deployment") !== env.JITNEY_DEPLOYMENT) {
-      return new Response(null, { status: 404 });
+      return new Response(null, { status: UNINSTALL_IDENTITY_MISMATCH });
     }
     if (!authorizeUninstall(request, env.JITNEY_UNINSTALL_SECRET)) {
       return new Response(null, { status: 401 });

@@ -40,7 +40,7 @@
   "dependencies": {
     "@distilled.cloud/cloudflare": "0.29.1",
     "@distilled.cloud/cloudflare-runtime": "0.13.5",
-    "@effect/platform-node": "4.0.0-beta.99",
+    "@effect/platform-node": "4.0.0-beta.102",
     "@octokit/auth-app": "catalog:",
     "@octokit/request": "^10.0.11",
     "alchemy": "2.0.0-beta.63",

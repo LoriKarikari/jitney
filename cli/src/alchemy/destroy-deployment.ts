@@ -1,11 +1,10 @@
-import * as Alchemy from "alchemy";
 import { destroy as alchemyDestroy } from "alchemy/Destroy";
 import { Effect, Layer, Redacted } from "effect";
 import { GitHubAppOperationError, GitHubAppOperations } from "./github-app.js";
 import { jitneyStack, type JitneyProviderLayer } from "./jitney-stack.js";
 import { jitneyProviders } from "./providers.js";
 import { withAlchemyWorkspace } from "./workspace.js";
-import { alchemyCli, nonInteractiveAlchemyContext } from "../cloudflare-runtime.js";
+import { alchemyRuntime } from "../cloudflare-runtime.js";
 import { workerBundlePath } from "../config.js";
 import { InstallerError } from "../errors.js";
 import type { DeploymentReceipt } from "../receipts/schema.js";
@@ -51,8 +50,7 @@ export const destroyDeploymentStack = (
     { providers },
   );
   return withAlchemyWorkspace(alchemyDestroy({ stack, stage: receipt.name })).pipe(
-    Effect.provideService(Alchemy.Cli, alchemyCli),
-    Effect.provide(nonInteractiveAlchemyContext),
+    Effect.provide(alchemyRuntime),
     Effect.asVoid,
     Effect.mapError((cause) =>
       cause instanceof InstallerError

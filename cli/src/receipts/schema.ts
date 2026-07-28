@@ -116,6 +116,32 @@ export type NewDeploymentReceipt = Pick<
   readonly now: DateTime.Utc;
 };
 
+/** The image tags this receipt keeps alive: current and previous, when set. */
+export function recordedImageTags(cloudflare: DeploymentReceipt["cloudflare"]): readonly string[] {
+  return [cloudflare.tags.current, cloudflare.tags.previous].filter(
+    (tag): tag is string => tag !== null,
+  );
+}
+
+export interface RecordedRepository {
+  readonly installationId: number;
+  readonly repositoryId: number;
+  readonly fullName: string;
+}
+
+/** Every repository the receipt claims, flattened across installations. */
+export function recordedRepositories(
+  github: DeploymentReceipt["github"],
+): readonly RecordedRepository[] {
+  return github.installations.flatMap((installation) =>
+    installation.repositories.map((repository) => ({
+      installationId: installation.id,
+      repositoryId: repository.id,
+      fullName: repository.fullName,
+    })),
+  );
+}
+
 export function createDeploymentReceipt(input: NewDeploymentReceipt): DeploymentReceipt {
   const { now, version, ...resources } = input;
   return {

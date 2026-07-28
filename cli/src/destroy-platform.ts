@@ -1,23 +1,27 @@
-import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Workers from "@distilled.cloud/cloudflare/workers";
 import { randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
-import { createInterface } from "node:readline/promises";
 import { Effect, Option, Ref, Schedule, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { destroyDeploymentStack } from "./alchemy/destroy-deployment.js";
 import { observeAccount } from "./cloudflare-inventory.js";
+import { captureCloudflareServices } from "./cloudflare-runtime.js";
 import { DestroyPlatform, renderDestroyPlan } from "./destroy.js";
-import { InstallerError, tryPromise } from "./errors.js";
+import { InstallerError, orStepError, stepError, tryPromise } from "./errors.js";
 import {
   openGitHubAppDeletionFor,
   waitForGitHubAppDeletionFor,
   type GitHubAppIdentity,
 } from "./github-app.js";
 import { workerAddress } from "./lifecycle-status-client.js";
+import { confirmInTerminal } from "./prompt.js";
 import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
-import { DeploymentReceiptSchema } from "./receipts/schema.js";
+import {
+  DeploymentReceiptSchema,
+  recordedImageTags,
+  recordedRepositories,
+} from "./receipts/schema.js";
 import {
   deleteRunnerImageTag,
   garbageCollectRunnerLayers,
@@ -25,12 +29,19 @@ import {
 } from "./runner-image-registry.js";
 
 const DrainResponse = Schema.Struct({ activeAttempts: Schema.Number });
-type UninstallAction = "suspend" | "drain" | "delete_ownership" | "delete_installations";
+// Mirrors the Worker's UninstallAction schema; the endpoint rejects unknown actions.
+const UninstallAction = Schema.Literals([
+  "suspend",
+  "drain",
+  "delete_ownership",
+  "delete_installations",
+]);
+type UninstallAction = typeof UninstallAction.Type;
+// The Worker reads the expiry from the segment before the first dot.
 const operationSecret = (): string =>
   `${Date.now() + 15 * 60_000}.${randomBytes(32).toString("base64url")}`;
 
-const asDestroyError = (message: string) => (cause: unknown) =>
-  cause instanceof InstallerError ? cause : new InstallerError({ step: "destroy", message, cause });
+const fail = stepError("destroy");
 
 const appIdentity = (receipt: DeploymentReceipt): GitHubAppIdentity | null =>
   receipt.github.appSlug === null || receipt.github.ownerLogin === null
@@ -42,17 +53,11 @@ const appIdentity = (receipt: DeploymentReceipt): GitHubAppIdentity | null =>
       };
 
 export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
-  const credentials = yield* Credentials;
-  const client = yield* HttpClient.HttpClient;
+  const cloudflare = yield* captureCloudflareServices;
+  const provideCloudflare = cloudflare.provide;
+  const client = cloudflare.client;
   const accumulatedResidue = yield* Ref.make<DestroyResidue[]>([]);
   const exportedPath = yield* Ref.make<Option.Option<string>>(Option.none());
-  const provideCloudflare = <A, E>(
-    effect: Effect.Effect<A, E, Credentials | HttpClient.HttpClient>,
-  ) =>
-    effect.pipe(
-      Effect.provideService(Credentials, credentials),
-      Effect.provideService(HttpClient.HttpClient, client),
-    );
 
   const addResidue = (residue: readonly DestroyResidue[]) =>
     Ref.update(accumulatedResidue, (current) => [...current, ...residue]);
@@ -127,35 +132,25 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
       return response.status === 200
         ? Option.some(yield* response.json)
         : Option.some<unknown>(undefined);
-    }).pipe(Effect.mapError(asDestroyError(`Could not run uninstall ${action}`)));
+    }).pipe(Effect.mapError(orStepError("destroy", `Could not run uninstall ${action}`)));
 
   return DestroyPlatform.of({
     exportReceipt: (receipt, path) =>
       writeExport(path, receipt, null).pipe(
         Effect.andThen(Ref.set(exportedPath, Option.some(path))),
       ),
-    confirm: (plan) => {
-      if (assumeYes) return Effect.succeed(true);
-      return Effect.sync(() => console.log(`${renderDestroyPlan(plan)}\n`)).pipe(
-        Effect.andThen(
-          tryPromise("destroy", "Could not read destroy confirmation", async () => {
-            const readline = createInterface({ input: process.stdin, output: process.stdout });
-            try {
-              return await readline.question(`Type ${plan.name} to confirm: `);
-            } finally {
-              readline.close();
-            }
+    confirm: (plan) =>
+      assumeYes
+        ? Effect.succeed(true)
+        : confirmInTerminal({
+            step: "destroy",
+            render: `${renderDestroyPlan(plan)}\n`,
+            question: `Type ${plan.name} to confirm: `,
+            accept: (answer) => answer === plan.name,
           }),
-        ),
-        Effect.map((answer) => answer.trim() === plan.name),
-      );
-    },
     suspend: (receipt) => callUninstall(receipt, "suspend").pipe(Effect.asVoid),
     drain: (receipt) => {
-      const pending = new InstallerError({
-        step: "destroy",
-        message: `Runner Attempts are still active for ${receipt.name}`,
-      });
+      const pending = fail(`Runner Attempts are still active for ${receipt.name}`);
       return callUninstall(receipt, "drain").pipe(
         Effect.flatMap(
           Option.match({
@@ -163,7 +158,7 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
             onSome: (body) =>
               Effect.try({
                 try: () => Schema.decodeUnknownSync(DrainResponse)(body),
-                catch: asDestroyError("The Worker returned an invalid drain response"),
+                catch: orStepError("destroy", "The Worker returned an invalid drain response"),
               }).pipe(
                 Effect.flatMap(({ activeAttempts }) =>
                   activeAttempts === 0 ? Effect.void : Effect.fail(pending),
@@ -184,34 +179,27 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
             onSome: () => Effect.void,
             onNone: () =>
               addResidue(
-                receipt.github.installations.flatMap((installation) =>
-                  installation.repositories.map((repository) => ({
-                    plane: "github" as const,
-                    resource: "repository_variable",
-                    id: `${repository.fullName}:JITNEY_DEPLOYMENT`,
-                    reason: "Worker credentials were already gone",
-                  })),
-                ),
+                recordedRepositories(receipt.github).map((repository) => ({
+                  plane: "github" as const,
+                  resource: "repository_variable",
+                  id: `${repository.fullName}:JITNEY_DEPLOYMENT`,
+                  reason: "Worker credentials were already gone",
+                })),
               ),
           }),
         ),
       ),
     deleteInstallations: (receipt) =>
       callUninstall(receipt, "delete_installations").pipe(Effect.asVoid),
-    destroyCloudflare: (receipt) =>
-      destroyDeploymentStack(receipt).pipe(
-        Effect.provideService(Credentials, credentials),
-        Effect.provideService(HttpClient.HttpClient, client),
-      ),
+    destroyCloudflare: (receipt) => provideCloudflare(destroyDeploymentStack(receipt)),
     pruneImages: (receipt, protectedTags) =>
       provideCloudflare(
         listRunnerImageTags(receipt.cloudflare.accountId, receipt.cloudflare.registryRepo),
       ).pipe(
         Effect.flatMap((liveTags) =>
           Effect.forEach(
-            [receipt.cloudflare.tags.current, receipt.cloudflare.tags.previous].filter(
-              (tag): tag is string =>
-                tag !== null && liveTags.includes(tag) && !protectedTags.has(tag),
+            recordedImageTags(receipt.cloudflare).filter(
+              (tag) => liveTags.includes(tag) && !protectedTags.has(tag),
             ),
             (tag) =>
               provideCloudflare(
@@ -267,8 +255,8 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         const tags = yield* provideCloudflare(
           listRunnerImageTags(receipt.cloudflare.accountId, receipt.cloudflare.registryRepo),
         );
-        for (const tag of [receipt.cloudflare.tags.current, receipt.cloudflare.tags.previous]) {
-          if (tag !== null && tags.includes(tag)) {
+        for (const tag of recordedImageTags(receipt.cloudflare)) {
+          if (tags.includes(tag)) {
             residue.push({
               plane: "registry",
               resource: "image_tag",
@@ -285,6 +273,6 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
           });
         }
         return residue;
-      }).pipe(Effect.mapError(asDestroyError("Could not verify teardown"))),
+      }).pipe(Effect.mapError(orStepError("destroy", "Could not verify teardown"))),
   });
 });

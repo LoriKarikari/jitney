@@ -44,8 +44,9 @@ export const destroyDeploymentStack = (
       workerBundlePath: workerBundlePath(),
       version,
       manageGitHubApp: receipt.github.appSlug !== null,
-      // Destroy only reads existing resource state. This value is never applied.
-      uninstallSecret: Redacted.make("destroy-state-placeholder"),
+      // Destroy only reads existing resource state, and an expiry of 0 keeps the
+      // uninstall endpoint inert even if this value ever reached the Worker.
+      uninstallSecret: Redacted.make("0.destroy-state-placeholder"),
     },
     { providers },
   );

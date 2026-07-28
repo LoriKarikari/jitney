@@ -44,6 +44,20 @@ async function fakePlatform(activeAttempts = 0) {
 }
 
 describe("uninstall", () => {
+  it("never authorizes the inert secret installed at deploy time", () => {
+    // deploy writes `0.<random>`; destroy mints `<future-epoch>.<random>`.
+    const installed = "0.qL3nR7xKfP2wVtYbN8sJdA5mZcH1gE4u";
+
+    expect(
+      authorizeUninstall(
+        new Request("https://example.com", {
+          headers: { Authorization: `Bearer ${installed}` },
+        }),
+        installed,
+      ),
+    ).toBe(false);
+  });
+
   it("accepts only the matching unexpired operation secret", () => {
     const future = `${Date.now() + 60_000}.secret`;
     const expired = `${Date.now() - 1}.secret`;

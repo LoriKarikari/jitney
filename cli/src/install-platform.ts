@@ -1,4 +1,3 @@
-import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Alchemy from "alchemy";
 import { deploy as alchemyDeploy } from "alchemy/Deploy";
 import { destroy as alchemyDestroy } from "alchemy/Destroy";
@@ -14,7 +13,7 @@ import { jitneyStack, type JitneyProviderLayer } from "./alchemy/jitney-stack.js
 import { jitneyProviders } from "./alchemy/providers.js";
 import { withAlchemyWorkspace } from "./alchemy/workspace.js";
 import { waitForDeploymentRemoval } from "./cloudflare-inventory.js";
-import { alchemyCli } from "./cloudflare-runtime.js";
+import { alchemyCli, captureCloudflareServices } from "./cloudflare-runtime.js";
 import { workerBundlePath } from "./config.js";
 import { InstallerError } from "./errors.js";
 import {
@@ -57,16 +56,12 @@ const githubAppAttributes = (credentials: GitHubAppCredentials): GitHubAppAttrib
 export const makeInstallPlatform = Effect.fn(function* (
   capturedCredentials: Ref.Ref<Option.Option<GitHubAppCredentials>>,
 ) {
-  const credentialsService = yield* Credentials;
-  const httpClient = yield* HttpClient.HttpClient;
-  const uninstallSecret = Redacted.make(randomBytes(32).toString("base64url"));
-  const provideCloudflareApi = <A, E>(
-    effect: Effect.Effect<A, E, Credentials | HttpClient.HttpClient>,
-  ) =>
-    effect.pipe(
-      Effect.provideService(Credentials, credentialsService),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-    );
+  const cloudflare = yield* captureCloudflareServices;
+  const httpClient = cloudflare.client;
+  const provideCloudflareApi = cloudflare.provide;
+  // Install the uninstall secret already expired: destroy mints a live one when
+  // it needs the endpoint, so a fresh deployment ships with it inert.
+  const uninstallSecret = Redacted.make(`0.${randomBytes(32).toString("base64url")}`);
 
   const githubOperations = Layer.succeed(GitHubAppOperations, {
     reconcile: ({ current }) => {

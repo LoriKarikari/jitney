@@ -191,7 +191,8 @@ describe("repair", () => {
     const lease: OperationLease = {
       operation: "upgrade",
       actor: "lori@laptop",
-      expiresAt: DateTime.addDuration(createdAt, "1 day"),
+      // Liveness is judged against the wall clock, so anchor it there.
+      expiresAt: DateTime.addDuration(await Effect.runPromise(DateTime.now), "1 day"),
     };
     const backend = await makeMemoryBackend([fixtureReceipt({ lease })]);
     const store = makeReceiptStore(backend.service, { namespaceRemovalDelay: Duration.zero });

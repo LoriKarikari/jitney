@@ -59,6 +59,18 @@ export function isInstallFailure(cause: unknown): cause is InstallFailure {
   );
 }
 
+/** Build InstallerErrors bound to one lifecycle step. */
+export const stepError =
+  (step: InstallerStep) =>
+  (message: string, cause?: unknown): InstallerError =>
+    new InstallerError({ step, message, ...(cause === undefined ? {} : { cause }) });
+
+/** Wrap unknown causes in a step error; pass typed installer errors through. */
+export const orStepError =
+  (step: InstallerStep, message: string) =>
+  (cause: unknown): InstallerError =>
+    cause instanceof InstallerError ? cause : new InstallerError({ step, message, cause });
+
 export function tryPromise<A>(
   step: InstallerStep,
   message: string,

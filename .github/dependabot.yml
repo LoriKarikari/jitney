@@ -14,8 +14,15 @@ updates:
     schedule:
       interval: weekly
     ignore:
-      # Alchemy v2 and Effect 4 are pre-GA and must be upgraded together.
+      # Alchemy v2, Effect 4, and the Distilled packages they share form one
+      # pre-GA compatibility set. Alchemy pins an exact Effect floor and ships
+      # its own Distilled versions, so a bump to any of these alone leaves two
+      # copies in the tree and breaks Effect service identity. They move
+      # together on a tested branch instead.
       - dependency-name: effect
+      - dependency-name: "@effect/*"
+      - dependency-name: alchemy
+      - dependency-name: "@distilled.cloud/*"
     groups:
       npm-minor-and-patch:
         update-types:

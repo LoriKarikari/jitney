@@ -122,12 +122,11 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         }),
       );
       if (response.status !== 204 && response.status !== 200) {
-        return yield* Effect.fail(
-          new InstallerError({
-            step: "destroy",
-            message: `Uninstall ${action} returned ${response.status}`,
-          }),
-        );
+        const message =
+          response.status === 404
+            ? `The Worker for ${receipt.cloudflare.workerName} does not recognize deployment ${receipt.id}. Run repair first.`
+            : `Uninstall ${action} returned ${response.status}`;
+        return yield* Effect.fail(new InstallerError({ step: "destroy", message }));
       }
       return response.status === 200
         ? Option.some(yield* response.json)

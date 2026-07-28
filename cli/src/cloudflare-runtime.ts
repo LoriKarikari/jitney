@@ -7,7 +7,7 @@ import { Effect, Layer } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 
-export const alchemyCli = Alchemy.Cli.of({
+const alchemyCli = Alchemy.Cli.of({
   approvePlan: () => Effect.succeed(true),
   displayPlan: () => Effect.void,
   startApplySession: () =>
@@ -22,6 +22,25 @@ const commandRuntime = Layer.merge(platformRuntime, Layer.succeed(AuthProviders,
 
 export const cloudflareRuntime = Cloudflare.CloudflareApiLive().pipe(
   Layer.provideMerge(commandRuntime),
+);
+
+/**
+ * Bootstrap and upgrade the Cloudflare state store without asking. Alchemy
+ * is an internal implementation detail, so its confirmations must never
+ * reach the user; without this, a fresh account pauses on a Clank prompt
+ * and CI dies on an out-of-date store.
+ */
+const nonInteractiveAlchemyContext = Layer.provide(
+  Layer.effect(
+    Alchemy.AlchemyContext,
+    Alchemy.AlchemyContext.pipe(Effect.map((context) => ({ ...context, updateStateStore: true }))),
+  ),
+  Alchemy.AlchemyContextLive,
+);
+
+export const alchemyRuntime = Layer.merge(
+  Layer.succeed(Alchemy.Cli, alchemyCli),
+  nonInteractiveAlchemyContext,
 );
 
 export interface CloudflareServices {

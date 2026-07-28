@@ -6,9 +6,15 @@ settings:
 
 catalogs:
   default:
+    '@octokit/auth-app':
+      specifier: ^8.2.0
+      version: 8.2.0
     '@types/node':
       specifier: ^26.1.1
       version: 26.1.2
+    effect:
+      specifier: 4.0.0-beta.99
+      version: 4.0.0-beta.99
     oxfmt:
       specifier: ^0.58.0
       version: 0.58.0
@@ -32,6 +38,9 @@ importers:
 
   .:
     devDependencies:
+      knip:
+        specifier: ^6.26.0
+        version: 6.29.0
       oxfmt:
         specifier: 'catalog:'
         version: 0.58.0
@@ -54,7 +63,7 @@ importers:
         specifier: 4.0.0-beta.99
         version: 4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1)
       '@octokit/auth-app':
-        specifier: ^8.2.0
+        specifier: 'catalog:'
         version: 8.2.0
       '@octokit/request':
         specifier: ^10.0.11
@@ -63,7 +72,7 @@ importers:
         specifier: 2.0.0-beta.63
         version: 2.0.0-beta.63(@effect/platform-node@4.0.0-beta.99(effect@4.0.0-beta.99)(ioredis@5.11.1))(@types/node@26.1.2)(effect@4.0.0-beta.99)(vite@8.1.5(@types/node@26.1.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0))(vitest@4.1.10(@types/node@26.1.2)(vite@8.1.5(@types/node@26.1.2)(esbuild@0.27.7)(jiti@2.7.0)(tsx@4.23.1)(yaml@2.9.0)))(workerd@1.20260722.1)(ws@8.21.1)
       effect:
-        specifier: 4.0.0-beta.99
+        specifier: 'catalog:'
         version: 4.0.0-beta.99
       open:
         specifier: ^11.0.0
@@ -102,7 +111,7 @@ importers:
         specifier: ^0.3.7
         version: 0.3.7
       '@octokit/auth-app':
-        specifier: ^8.2.0
+        specifier: 'catalog:'
         version: 8.2.0
       '@octokit/webhooks-methods':
         specifier: ^6.0.0
@@ -111,7 +120,7 @@ importers:
         specifier: ^0.45.2
         version: 0.45.2(@libsql/client@0.17.4)(mysql2@3.23.2(@types/node@26.1.2))(pg@8.22.0)
       effect:
-        specifier: 4.0.0-beta.99
+        specifier: 'catalog:'
         version: 4.0.0-beta.99
       octokit:
         specifier: ^5.0.5
@@ -129,9 +138,6 @@ importers:
       drizzle-kit:
         specifier: ^0.31.10
         version: 0.31.10
-      knip:
-        specifier: ^6.26.0
-        version: 6.29.0
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

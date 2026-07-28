@@ -15,7 +15,7 @@ export const deploymentWorkerTag = (deploymentId: string): string =>
 
 export const runnerApplicationName = (name: string): string => `${name}-runner`;
 
-export interface LiveWorker {
+interface LiveWorker {
   readonly name: string;
   readonly jitneyTagged: boolean;
   /** Deployment ULID from the Worker's tag, the id proof for re-derivation. */

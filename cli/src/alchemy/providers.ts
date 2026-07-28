@@ -57,7 +57,7 @@ const selectedProviders = Layer.mergeAll(
   Layer.provideMerge(Cloudflare.CloudflareApiLive()),
 );
 
-export const JitneyCloudflareProviders = Layer.effect(
+const JitneyCloudflareProviders = Layer.effect(
   Cloudflare.Providers,
   Provider.collection([
     // Alchemy beta.63's ResourceClass has an exact-optional mismatch with collection().

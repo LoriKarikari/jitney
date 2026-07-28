@@ -65,7 +65,7 @@ export class ListPlatform extends Context.Service<
 
 type ListPlatformService = ListPlatform["Service"];
 
-export interface DeploymentStatus {
+interface DeploymentStatus {
   readonly name: string;
   readonly deploymentId: string;
   readonly phase: DeploymentReceipt["phase"];
@@ -492,5 +492,3 @@ export function renderListReport(report: ListReport): string {
   }
   return lines.join("\n");
 }
-
-export type ListError = ReceiptReadError;

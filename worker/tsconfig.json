@@ -1,18 +1,11 @@
 {
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "target": "es2022",
     "module": "es2022",
     "moduleResolution": "bundler",
     "lib": ["es2022"],
-    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types"],
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "exactOptionalPropertyTypes": true,
-    "noEmit": true,
-    "isolatedModules": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers/types"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts", "worker-configuration.d.ts"]
 }

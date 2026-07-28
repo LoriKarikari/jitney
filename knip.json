@@ -1,0 +1,32 @@
+{
+  "$schema": "./node_modules/knip/schema.json",
+  "workspaces": {
+    "cli": {
+      "entry": [
+        "src/cli.ts",
+        "test/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ]
+    },
+    "worker": {
+      "entry": [
+        "test/**/*.test.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "test/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "cloudflare"
+      ]
+    },
+    "shared": {
+      "project": [
+        "**/*.ts"
+      ]
+    }
+  }
+}

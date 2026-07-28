@@ -261,8 +261,12 @@ for `cli/`, `worker/`, and `shared/`. The root Taskfile delegates to both.
   source of truth. Both run once from the repository root as `pnpm fmt` and
   `pnpm lint`, and pick up each package's own `.oxfmtrc.json` and
   `.oxlintrc.json`.
-- Knip fails the Worker build on unused files, exports, and dependencies. Run
-  `pnpm --filter jitney-worker knip` before opening a PR.
+- Knip fails the build on unused files, exports, and dependencies across every
+  workspace package. Run `pnpm knip` before opening a PR; `knip.json` at the
+  root holds the per-package entry points.
+- Shared compiler strictness lives in `tsconfig.base.json`. Package configs
+  extend it and add only what genuinely differs, such as the CLI's Node
+  resolution and the Worker's generated binding types.
 - The Durable Object schema authority is `worker/src/schema.ts`. After
   changing it, run `pnpm exec drizzle-kit generate` and commit the generated
   migration; the Scheduler applies migrations on construction. Never edit an
@@ -304,7 +308,9 @@ interface only when the installed SDK has no suitable typed operation.
 This is an Effect-native project — CLI and Worker alike — built on Alchemy v2;
 use idiomatic Effect and Alchemy APIs everywhere. While both dependencies are
 pre-GA, pin exact versions and upgrade them together on a tested branch; never
-accept an independent automated beta bump. The current compatibility set is
+accept an independent automated beta bump. `effect` is pinned once in the
+workspace catalog in `pnpm-workspace.yaml`, so the CLI and Worker cannot drift
+apart. The current compatibility set is
 `alchemy@2.0.0-beta.63`, `effect@4.0.0-beta.99`,
 `@effect/platform-node@4.0.0-beta.99`, and
 `@distilled.cloud/cloudflare-runtime@0.13.5`.

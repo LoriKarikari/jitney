@@ -23,7 +23,7 @@ export interface DestroyInput {
   readonly exportPath?: string;
 }
 
-export interface DestroyResult {
+interface DestroyResult {
   readonly status: "dry_run" | "cancelled" | "destroyed";
   readonly plan: DestroyPlan;
 }
@@ -52,7 +52,7 @@ export class DestroyPlatform extends Context.Service<
 
 const destroyError = stepError("destroy");
 
-export const planDestroy = (receipt: DeploymentReceipt): DestroyPlan => ({
+const planDestroy = (receipt: DeploymentReceipt): DestroyPlan => ({
   name: receipt.name,
   deploymentId: receipt.id,
   workerName: receipt.cloudflare.workerName,

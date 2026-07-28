@@ -5,7 +5,7 @@ import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import type { DeploymentReceipt } from "./receipts/schema.js";
 
-export const LifecycleResponse = Schema.Struct({
+const LifecycleResponse = Schema.Struct({
   app: Schema.Literals(["ok", "unknown"]),
   installations: Schema.Literals(["ok", "drifted", "unknown"]),
   ownership: Schema.Array(

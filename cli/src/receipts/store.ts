@@ -20,12 +20,12 @@ export class ReceiptBackendError extends Data.TaggedError("ReceiptBackendError")
   cause: unknown;
 }> {}
 
-export class InvalidReceiptError extends Data.TaggedError("InvalidReceiptError")<{
+class InvalidReceiptError extends Data.TaggedError("InvalidReceiptError")<{
   name: string;
   cause: unknown;
 }> {}
 
-export class ReceiptNotFoundError extends Data.TaggedError("ReceiptNotFoundError")<{
+class ReceiptNotFoundError extends Data.TaggedError("ReceiptNotFoundError")<{
   name: string;
 }> {}
 
@@ -63,7 +63,7 @@ export class LeaseExpiredError extends Data.TaggedError("LeaseExpiredError")<{
   lease: OperationLease;
 }> {}
 
-export class DeploymentOwnershipError extends Data.TaggedError("DeploymentOwnershipError")<{
+class DeploymentOwnershipError extends Data.TaggedError("DeploymentOwnershipError")<{
   name: string;
   expectedId: string;
   observedId: string;

@@ -349,9 +349,10 @@ Passing automated checks alone does not prove compliance.
   idempotent `reconcile` (observe → ensure → sync), `delete`, `list`, and an
   ownership-aware `read` that returns `Unowned` for foreign resources so
   repair and adoption flows can refuse takeovers by default.
-- Alchemy's Cloudflare state store is bootstrapped and upgraded silently
-  (`updateStateStore: true` via `nonInteractiveAlchemyContext`). Alchemy's
-  own confirmations must never reach the user or CI.
+- `alchemyRuntime` bootstraps and upgrades Alchemy's account-shared Cloudflare
+  state store silently. Destroy retains this backend because removing it can
+  erase state for unrelated Alchemy projects. Alchemy's own confirmations
+  must never reach the user or CI.
 - For Alchemy stack tests, prefer the `alchemy/Test/Vitest` harness
   (`Test.make` + `test.provider` scratch stacks) over hand-wired state and
   platform services.

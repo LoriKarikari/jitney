@@ -1,18 +1,22 @@
-import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as KV from "@distilled.cloud/cloudflare/kv";
 import { Effect, Option, Stream } from "effect";
-import * as HttpClient from "effect/unstable/http/HttpClient";
+import { captureCloudflareServices } from "../cloudflare-runtime.js";
 import { ReceiptBackendError, type ReceiptBackend } from "./store.js";
 
 export const RECEIPT_NAMESPACE_TITLE = "jitney-receipts";
-
-export const receiptValueText = (value: unknown): string =>
-  typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
 
 export interface CloudflareReceiptScope {
   readonly accountId: string;
   readonly namespaceId: string;
 }
+
+/**
+ * KV hands back parsed JSON when the stored value carries a JSON content type,
+ * so a receipt written as text can come back as an object. The store decodes
+ * receipts itself and only ever wants the raw text.
+ */
+export const receiptValueText = (value: unknown): string =>
+  typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
 
 const backendError = (operation: ReceiptBackendError["operation"], cause: unknown) =>
   new ReceiptBackendError({ operation, cause });
@@ -60,13 +64,7 @@ export const ensureCloudflareReceiptNamespace = Effect.fn(function* (accountId: 
 });
 
 export const makeCloudflareReceiptBackend = Effect.fn(function* (scope: CloudflareReceiptScope) {
-  const credentials = yield* Credentials;
-  const httpClient = yield* HttpClient.HttpClient;
-  const provideApi = <A, E>(effect: Effect.Effect<A, E, Credentials | HttpClient.HttpClient>) =>
-    effect.pipe(
-      Effect.provideService(Credentials, credentials),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-    );
+  const { provide: provideApi } = yield* captureCloudflareServices;
 
   return {
     get: (name) =>

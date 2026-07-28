@@ -75,34 +75,25 @@ tasks:
       - govulncheck ./...
 
   ts:install:
-    desc: Install control-plane dependencies from the lockfile
-    dir: worker
+    desc: Install TypeScript dependencies from the workspace lockfile
     cmds:
       - pnpm install --frozen-lockfile
 
   ts:fmt:
-    desc: Format control-plane TypeScript
-    dir: worker
+    desc: Format workspace TypeScript
     cmds:
       - pnpm fmt
 
   ts:check:
-    desc: Generate bindings, typecheck, format-check, lint, and test the control plane
-    dir: worker
+    desc: Format-check the workspace, then check the control plane
     cmds:
-      - pnpm check
-
-  cli:install:
-    desc: Install CLI dependencies from the lockfile
-    dir: cli
-    cmds:
-      - pnpm install --frozen-lockfile
+      - pnpm fmt:check
+      - pnpm --filter jitney-worker check
 
   cli:check:
     desc: Typecheck, lint, test, and package the deployment CLI
-    dir: cli
     cmds:
-      - pnpm check
+      - pnpm --filter get-jitney check
 
   build:
     desc: Build the supervisor (static linux/amd64, as shipped in the runner image)

@@ -1,7 +1,7 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
 import { Context, Data, Effect, Predicate, Schema } from "effect";
-import { isLiveSecret, UNINSTALL_ACTIONS } from "../../shared/uninstall-protocol.js";
+import { isLiveSecret, UNINSTALL_ACTIONS } from "@jitney/shared/uninstall-protocol";
 
 export const UninstallAction = Schema.Literals([...UNINSTALL_ACTIONS]);
 export type UninstallAction = typeof UninstallAction.Type;

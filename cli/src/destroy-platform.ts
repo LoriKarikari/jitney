@@ -16,7 +16,7 @@ import {
 } from "./github-app.js";
 import { workerAddress } from "./lifecycle-status-client.js";
 import { confirmInTerminal } from "./prompt.js";
-import { mintOperationSecret, type UninstallAction } from "../../shared/uninstall-protocol.js";
+import { mintOperationSecret, type UninstallAction } from "@jitney/shared/uninstall-protocol";
 import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
 import {
   DeploymentReceiptSchema,

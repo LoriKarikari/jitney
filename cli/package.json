@@ -34,11 +34,9 @@
     "prepack": "pnpm build",
     "build:worker": "wrangler deploy --dry-run --config wrangler.bundle.json --outdir assets/worker",
     "typecheck": "tsc --noEmit",
-    "fmt": "oxfmt --write . && (cd .. && cli/node_modules/.bin/oxfmt --write shared)",
-    "fmt:check": "oxfmt --check . && (cd .. && cli/node_modules/.bin/oxfmt --check shared)",
     "lint": "oxlint --type-aware --deny-warnings .",
     "test": "vitest run",
-    "check": "pnpm typecheck && pnpm fmt:check && pnpm lint && pnpm test && pnpm build"
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
   },
   "dependencies": {
     "@distilled.cloud/cloudflare": "0.29.1",
@@ -53,17 +51,16 @@
     "ulid": "3.0.1"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1",
-    "oxfmt": "^0.58.0",
-    "oxlint": "^1.73.0",
-    "oxlint-tsgolint": "^0.24.0",
+    "@jitney/shared": "workspace:*",
+    "@types/node": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
     "tsup": "^8.5.1",
-    "typescript": "^7.0.2",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.111.0"
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "wrangler": "catalog:"
   },
   "engines": {
     "node": ">=24"
-  },
-  "packageManager": "pnpm@11.8.0"
+  }
 }

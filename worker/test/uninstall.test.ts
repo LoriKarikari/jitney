@@ -1,6 +1,6 @@
 import { Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
-import { mintOperationSecret } from "../../shared/uninstall-protocol";
+import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
 import {
   UninstallPlatform,
   authorizeUninstall,

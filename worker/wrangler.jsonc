@@ -22,7 +22,12 @@
     "SCHEDULER_TICK_MS": "1000",
   },
   "secrets": {
-    "required": ["GITHUB_WEBHOOK_SECRET", "GITHUB_APP_ID", "GITHUB_APP_PRIVATE_KEY"],
+    "required": [
+      "GITHUB_WEBHOOK_SECRET",
+      "GITHUB_APP_ID",
+      "GITHUB_APP_PRIVATE_KEY",
+      "JITNEY_UNINSTALL_SECRET",
+    ],
   },
   "durable_objects": {
     "bindings": [

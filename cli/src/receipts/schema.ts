@@ -25,6 +25,13 @@ export const OperationLease = Schema.Struct({
   expiresAt: Schema.DateTimeUtcFromString,
 });
 
+export const DestroyResidue = Schema.Struct({
+  plane: Schema.Literals(["cloudflare", "github", "registry"]),
+  resource: Schema.String,
+  id: Schema.String,
+  reason: Schema.String,
+});
+
 export const ReceiptHistoryEntry = Schema.Struct({
   operation: DeploymentOperation,
   actor: Schema.String,
@@ -90,6 +97,7 @@ export const DeploymentReceiptSchema = Schema.Struct({
   github: GitHubResources,
   autoUpgrade: AutoUpgrade,
   history: Schema.Array(ReceiptHistoryEntry).check(Schema.isMaxLength(20)),
+  residue: Schema.Array(DestroyResidue).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 });
 
 export type DeploymentReceipt = typeof DeploymentReceiptSchema.Type;
@@ -98,6 +106,7 @@ export type DeploymentPhase = typeof DeploymentPhase.Type;
 export type OperationLease = typeof OperationLease.Type;
 export type ReceiptHistoryEntry = typeof ReceiptHistoryEntry.Type;
 export type GitHubInstallation = typeof GitHubInstallation.Type;
+export type DestroyResidue = typeof DestroyResidue.Type;
 
 export type NewDeploymentReceipt = Pick<
   DeploymentReceipt,
@@ -106,6 +115,32 @@ export type NewDeploymentReceipt = Pick<
   readonly version: string;
   readonly now: DateTime.Utc;
 };
+
+/** The image tags this receipt keeps alive: current and previous, when set. */
+export function recordedImageTags(cloudflare: DeploymentReceipt["cloudflare"]): readonly string[] {
+  return [cloudflare.tags.current, cloudflare.tags.previous].filter(
+    (tag): tag is string => tag !== null,
+  );
+}
+
+export interface RecordedRepository {
+  readonly installationId: number;
+  readonly repositoryId: number;
+  readonly fullName: string;
+}
+
+/** Every repository the receipt claims, flattened across installations. */
+export function recordedRepositories(
+  github: DeploymentReceipt["github"],
+): readonly RecordedRepository[] {
+  return github.installations.flatMap((installation) =>
+    installation.repositories.map((repository) => ({
+      installationId: installation.id,
+      repositoryId: repository.id,
+      fullName: repository.fullName,
+    })),
+  );
+}
 
 export function createDeploymentReceipt(input: NewDeploymentReceipt): DeploymentReceipt {
   const { now, version, ...resources } = input;
@@ -118,6 +153,7 @@ export function createDeploymentReceipt(input: NewDeploymentReceipt): Deployment
     lease: null,
     versions: { current: version, previous: null },
     history: [],
+    residue: [],
   };
 }
 

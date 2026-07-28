@@ -125,6 +125,12 @@ The result of comparing one recorded resource with the live control plane:
 inconclusive; Jitney never infers live state from a failed request.
 _Avoid_: assumed healthy, probably missing
 
+**Destroy Residue**:
+A receipt-owned report of resources that remain after the final destroy sweep.
+Any residue keeps the Deployment Receipt in `phase: destroying`; zero residue
+allows the receipt and, when empty, its namespace to be deleted.
+_Avoid_: cleanup warning, probably deleted
+
 ## Relationships
 
 - A **Delivery** carries one **Workflow Event**.
@@ -141,6 +147,7 @@ _Avoid_: assumed healthy, probably missing
 - A **Deployment Receipt** holds at most one **Operation Lease** at a time.
 - Deployment ownership always matches on the ULID, never the name.
 - `list` assigns a **Resource Classification** without changing either control plane.
+- A failed final destroy sweep records **Destroy Residue** before releasing the lease.
 
 ## Architecture
 

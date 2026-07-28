@@ -16,8 +16,11 @@ import { assignments, attempts, deliveries, jobs, pending } from "./schema";
 
 export type { AcceptResult, AssignmentSnapshot, AttemptSnapshot, JobSnapshot } from "./lifecycle";
 
+const intakeSuspendedKey = "jitney:intake-suspended";
+
 export class Scheduler extends DurableObject<Env> {
   #lifecycle: SchedulerLifecycle;
+  #intakeSuspended = false;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -32,15 +35,34 @@ export class Scheduler extends DurableObject<Env> {
     );
     void ctx.blockConcurrencyWhile(async () => {
       await migrate(db, migrations);
+      this.#intakeSuspended = (await ctx.storage.get<boolean>(intakeSuspendedKey)) ?? false;
     });
   }
 
   accept(event: WorkflowEvent): Promise<AcceptResult> {
-    return Effect.runPromise(this.#lifecycle.accept(event));
+    return event.action === "queued" && this.#intakeSuspended
+      ? Promise.resolve({ outcome: "ignored" })
+      : Effect.runPromise(this.#lifecycle.accept(event));
   }
 
   reconcile(candidate: QueuedJobCandidate): Promise<AcceptResult> {
-    return Effect.runPromise(this.#lifecycle.reconcile(candidate));
+    return this.#intakeSuspended
+      ? Promise.resolve({ outcome: "ignored" })
+      : Effect.runPromise(this.#lifecycle.reconcile(candidate));
+  }
+
+  async suspendIntake(): Promise<void> {
+    await this.ctx.storage.put(intakeSuspendedKey, true);
+    this.#intakeSuspended = true;
+  }
+
+  async resumeIntake(): Promise<void> {
+    await this.ctx.storage.delete(intakeSuspendedKey);
+    this.#intakeSuspended = false;
+  }
+
+  activeAttemptCount(): number {
+    return this.#lifecycle.activeAttemptCount();
   }
 
   getJob(workflowJobId: number): JobSnapshot | undefined {

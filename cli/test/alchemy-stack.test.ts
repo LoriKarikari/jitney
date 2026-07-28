@@ -25,6 +25,7 @@ describe("Jitney Alchemy stack", () => {
           workerBundlePath: "assets/worker/index.js",
           version: "0.3.0",
           manageGitHubApp: true,
+          uninstallSecret: Redacted.make("uninstall-secret"),
           githubCredentials: {
             appId: Redacted.make("12345"),
             privateKey: Redacted.make("private-key"),

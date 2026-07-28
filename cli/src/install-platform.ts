@@ -1,10 +1,7 @@
-import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Alchemy from "alchemy";
 import { deploy as alchemyDeploy } from "alchemy/Deploy";
 import { destroy as alchemyDestroy } from "alchemy/Destroy";
-import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { Effect, Layer, Option, Redacted, Ref, Schedule, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import {
@@ -14,10 +11,11 @@ import {
 } from "./alchemy/github-app.js";
 import { jitneyStack, type JitneyProviderLayer } from "./alchemy/jitney-stack.js";
 import { jitneyProviders } from "./alchemy/providers.js";
+import { withAlchemyWorkspace } from "./alchemy/workspace.js";
 import { waitForDeploymentRemoval } from "./cloudflare-inventory.js";
-import { alchemyCli } from "./cloudflare-runtime.js";
+import { alchemyCli, captureCloudflareServices } from "./cloudflare-runtime.js";
 import { workerBundlePath } from "./config.js";
-import { InstallerError, tryPromise } from "./errors.js";
+import { InstallerError } from "./errors.js";
 import {
   createGitHubApp,
   openGitHubAppDeletion,
@@ -37,23 +35,6 @@ const HealthResponse = Schema.Struct({
   status: Schema.Literal("ok"),
   version: Schema.String,
 });
-
-const withAlchemyWorkspace = <A, E, R>(
-  effect: Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | InstallerError, R> =>
-  Effect.acquireUseRelease(
-    Effect.gen(function* () {
-      const previous = process.cwd();
-      const workspace = join(homedir(), ".cache", "jitney", "alchemy");
-      yield* tryPromise("filesystem", "Could not prepare the Alchemy workspace", () =>
-        mkdir(workspace, { recursive: true }),
-      );
-      yield* Effect.sync(() => process.chdir(workspace));
-      return previous;
-    }),
-    () => effect,
-    (previous) => Effect.sync(() => process.chdir(previous)),
-  );
 
 interface JitneyStackOutput {
   readonly workerUrl: string;
@@ -75,15 +56,12 @@ const githubAppAttributes = (credentials: GitHubAppCredentials): GitHubAppAttrib
 export const makeInstallPlatform = Effect.fn(function* (
   capturedCredentials: Ref.Ref<Option.Option<GitHubAppCredentials>>,
 ) {
-  const credentialsService = yield* Credentials;
-  const httpClient = yield* HttpClient.HttpClient;
-  const provideCloudflareApi = <A, E>(
-    effect: Effect.Effect<A, E, Credentials | HttpClient.HttpClient>,
-  ) =>
-    effect.pipe(
-      Effect.provideService(Credentials, credentialsService),
-      Effect.provideService(HttpClient.HttpClient, httpClient),
-    );
+  const cloudflare = yield* captureCloudflareServices;
+  const httpClient = cloudflare.client;
+  const provideCloudflareApi = cloudflare.provide;
+  // Install the uninstall secret already expired: destroy mints a live one when
+  // it needs the endpoint, so a fresh deployment ships with it inert.
+  const uninstallSecret = Redacted.make(`0.${randomBytes(32).toString("base64url")}`);
 
   const githubOperations = Layer.succeed(GitHubAppOperations, {
     reconcile: ({ current }) => {
@@ -121,6 +99,7 @@ export const makeInstallPlatform = Effect.fn(function* (
         workerBundlePath: workerBundlePath(),
         version: input.version,
         manageGitHubApp: credentials !== undefined,
+        uninstallSecret,
         ...(input.organization === undefined ? {} : { organization: input.organization }),
         ...(credentials === undefined
           ? {}

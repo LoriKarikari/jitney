@@ -255,7 +255,7 @@ const checkGitHub = Effect.fn(function* (
         findings.push(
           missingFinding(
             `ownership.${repository.fullName}`,
-            `${repository.fullName} has no JITNEY_DEPLOYMENT variable`,
+            `${repository.fullName} has no Jitney ownership environment`,
             receipt.id,
           ),
         );

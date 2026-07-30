@@ -16,6 +16,7 @@ import {
 } from "./github-app.js";
 import { workerAddress } from "./lifecycle-status-client.js";
 import { confirmInTerminal } from "./prompt.js";
+import { ownershipEnvironmentName } from "@jitney/shared/ownership-marker";
 import { mintOperationSecret, type UninstallAction } from "@jitney/shared/uninstall-protocol";
 import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
 import {
@@ -172,8 +173,8 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
             addResidue(
               recordedRepositories(receipt.github).map((repository) => ({
                 plane: "github" as const,
-                resource: "repository_variable",
-                id: `${repository.fullName}:JITNEY_DEPLOYMENT`,
+                resource: "repository_environment",
+                id: `${repository.fullName}:${ownershipEnvironmentName(receipt.id)}`,
                 reason: "Worker credentials were already gone",
               })),
             ),

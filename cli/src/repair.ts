@@ -259,7 +259,7 @@ export function renderRepairPlan(plan: RepairPlan): string {
           ? `release expired lease (${action.operation}, ${action.actor})`
           : action.kind === "record_application"
             ? `record container application ${action.applicationId} (${action.proof === "worker_tag" ? "id proven by worker tag" : "explicitly adopted"})`
-            : `rewrite JITNEY_DEPLOYMENT on ${action.fullName} (missing)`;
+            : `recreate ownership environment on ${action.fullName} (missing)`;
       lines.push(`  ${index + 1}. ${description}`);
     });
   }

@@ -1,6 +1,7 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
 import { Context, Data, Effect, Predicate, Schema } from "effect";
+import { ownershipEnvironmentName } from "@jitney/shared/ownership-marker";
 import { isLiveSecret, UNINSTALL_ACTIONS } from "@jitney/shared/uninstall-protocol";
 
 export const UninstallAction = Schema.Literals([...UNINSTALL_ACTIONS]);
@@ -106,11 +107,14 @@ export const makeUninstallPlatform = (env: Env): UninstallPlatform["Service"] =>
                   }),
                 )
               : ignoreMissing("delete_ownership", () =>
-                  installation.rest.actions.deleteRepoVariable({
-                    owner,
-                    repo,
-                    name: "JITNEY_DEPLOYMENT",
-                  }),
+                  installation.request(
+                    "DELETE /repos/{owner}/{repo}/environments/{environment_name}",
+                    {
+                      owner,
+                      repo,
+                      environment_name: ownershipEnvironmentName(env.JITNEY_DEPLOYMENT),
+                    },
+                  ),
                 );
           }).pipe(
             Effect.ensuring(

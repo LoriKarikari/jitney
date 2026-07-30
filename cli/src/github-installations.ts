@@ -1,11 +1,13 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { request } from "@octokit/request";
 import { Context, Effect, Schedule } from "effect";
+import {
+  deploymentIdFromOwnershipEnvironment,
+  ownershipEnvironmentName,
+} from "@jitney/shared/ownership-marker";
 import { InstallerError, tryPromise } from "./errors.js";
 import type { GitHubAppCredentials } from "./github-app.js";
 import type { GitHubInstallation } from "./receipts/schema.js";
-
-const DEPLOYMENT_VARIABLE = "JITNEY_DEPLOYMENT";
 
 const installationError = (message: string, cause?: unknown) =>
   new InstallerError({
@@ -20,9 +22,6 @@ const ownershipError = (message: string, cause?: unknown) =>
     message,
     ...(cause === undefined ? {} : { cause }),
   });
-
-const isNotFound = (cause: unknown): boolean =>
-  typeof cause === "object" && cause !== null && "status" in cause && cause.status === 404;
 
 const appToken = (credentials: GitHubAppCredentials) =>
   tryPromise("github_app_installation", "Could not authenticate as the GitHub App", async () => {
@@ -118,8 +117,8 @@ export const waitForGitHubInstallations = (
   );
 };
 
-export class RepositoryVariables extends Context.Service<
-  RepositoryVariables,
+export class RepositoryOwnership extends Context.Service<
+  RepositoryOwnership,
   {
     readonly read: (
       installationId: number,
@@ -133,22 +132,23 @@ export class RepositoryVariables extends Context.Service<
     readonly remove: (
       installationId: number,
       fullName: string,
+      deploymentId: string,
     ) => Effect.Effect<void, InstallerError>;
   }
->()("Jitney.RepositoryVariables") {}
+>()("Jitney.RepositoryOwnership") {}
 
 export const claimRepositoryOwnership = Effect.fn(function* (
   deploymentId: string,
   installations: readonly GitHubInstallation[],
 ) {
-  const variables = yield* RepositoryVariables;
+  const ownership = yield* RepositoryOwnership;
   const missing: Array<{ installationId: number; fullName: string }> = [];
 
   // Inspect every repository before writing any marker. A foreign deployment
   // anywhere aborts without leaving a partial set of claims behind.
   for (const installation of installations) {
     for (const repository of installation.repositories) {
-      const existing = yield* variables.read(installation.id, repository.fullName);
+      const existing = yield* ownership.read(installation.id, repository.fullName);
       if (existing !== undefined && existing !== deploymentId) {
         return yield* ownershipError(
           `${repository.fullName} already belongs to Jitney deployment ${existing}`,
@@ -161,12 +161,12 @@ export const claimRepositoryOwnership = Effect.fn(function* (
   }
 
   for (const repository of missing) {
-    yield* variables.create(repository.installationId, repository.fullName, deploymentId);
+    yield* ownership.create(repository.installationId, repository.fullName, deploymentId);
   }
 
   for (const installation of installations) {
     for (const repository of installation.repositories) {
-      const observed = yield* variables.read(installation.id, repository.fullName);
+      const observed = yield* ownership.read(installation.id, repository.fullName);
       if (observed !== deploymentId) {
         return yield* ownershipError(
           `Could not verify this deployment's ownership of ${repository.fullName}`,
@@ -180,16 +180,16 @@ export const releaseRepositoryOwnership = Effect.fn(function* (
   deploymentId: string,
   installations: readonly GitHubInstallation[],
 ) {
-  const variables = yield* RepositoryVariables;
+  const ownership = yield* RepositoryOwnership;
   for (const installation of installations) {
     for (const repository of installation.repositories) {
-      if ((yield* variables.read(installation.id, repository.fullName)) !== deploymentId) continue;
-      yield* variables.remove(installation.id, repository.fullName);
+      if ((yield* ownership.read(installation.id, repository.fullName)) !== deploymentId) continue;
+      yield* ownership.remove(installation.id, repository.fullName, deploymentId);
     }
   }
 });
 
-const makeRepositoryVariables = (credentials: GitHubAppCredentials) => {
+const makeRepositoryOwnership = (credentials: GitHubAppCredentials) => {
   const withRepository = <A>(
     installationId: number,
     fullName: string,
@@ -204,49 +204,57 @@ const makeRepositoryVariables = (credentials: GitHubAppCredentials) => {
     );
   };
 
-  return RepositoryVariables.of({
+  return RepositoryOwnership.of({
     read: (installationId, fullName) =>
       withRepository(installationId, fullName, (token, owner, repo) =>
         Effect.tryPromise({
-          try: () =>
-            request("GET /repos/{owner}/{repo}/actions/variables/{name}", {
-              owner,
-              repo,
-              name: DEPLOYMENT_VARIABLE,
-              headers: { authorization: `bearer ${token}` },
-            }),
+          try: async () => {
+            const markers = new Set<string>();
+            for (let page = 1; ; page++) {
+              const response = await request("GET /repos/{owner}/{repo}/environments", {
+                owner,
+                repo,
+                per_page: 100,
+                page,
+                headers: { authorization: `bearer ${token}` },
+              });
+              for (const environment of response.data.environments ?? []) {
+                const id = deploymentIdFromOwnershipEnvironment(environment.name);
+                if (id !== undefined) markers.add(id);
+              }
+              if ((response.data.environments?.length ?? 0) < 100) break;
+            }
+            if (markers.size > 1) {
+              throw new Error(`${owner}/${repo} has multiple Jitney ownership markers`);
+            }
+            return markers.values().next().value;
+          },
           catch: (cause) =>
-            ownershipError(`Could not read ${DEPLOYMENT_VARIABLE} on ${owner}/${repo}`, cause),
-        }).pipe(
-          Effect.map((response) => response.data.value),
-          Effect.catch((error) =>
-            isNotFound(error.cause) ? Effect.succeed(undefined) : Effect.fail(error),
-          ),
-        ),
+            ownershipError(`Could not read Jitney ownership on ${owner}/${repo}`, cause),
+        }),
       ),
     create: (installationId, fullName, deploymentId) =>
       withRepository(installationId, fullName, (token, owner, repo) =>
         Effect.tryPromise({
           try: () =>
-            request("POST /repos/{owner}/{repo}/actions/variables", {
+            request("PUT /repos/{owner}/{repo}/environments/{environment_name}", {
               owner,
               repo,
-              name: DEPLOYMENT_VARIABLE,
-              value: deploymentId,
+              environment_name: ownershipEnvironmentName(deploymentId),
               headers: { authorization: `bearer ${token}` },
             }),
           catch: (cause) =>
             ownershipError(`Could not claim ${fullName} for this deployment`, cause),
         }).pipe(Effect.asVoid),
       ),
-    remove: (installationId, fullName) =>
+    remove: (installationId, fullName, deploymentId) =>
       withRepository(installationId, fullName, (token, owner, repo) =>
         Effect.tryPromise({
           try: () =>
-            request("DELETE /repos/{owner}/{repo}/actions/variables/{name}", {
+            request("DELETE /repos/{owner}/{repo}/environments/{environment_name}", {
               owner,
               repo,
-              name: DEPLOYMENT_VARIABLE,
+              environment_name: ownershipEnvironmentName(deploymentId),
               headers: { authorization: `bearer ${token}` },
             }),
           catch: (cause) =>
@@ -262,7 +270,7 @@ export const claimGitHubRepositories = (
   installations: readonly GitHubInstallation[],
 ) =>
   claimRepositoryOwnership(deploymentId, installations).pipe(
-    Effect.provideService(RepositoryVariables, makeRepositoryVariables(credentials)),
+    Effect.provideService(RepositoryOwnership, makeRepositoryOwnership(credentials)),
   );
 
 export const releaseGitHubRepositories = (
@@ -271,5 +279,5 @@ export const releaseGitHubRepositories = (
   installations: readonly GitHubInstallation[],
 ) =>
   releaseRepositoryOwnership(deploymentId, installations).pipe(
-    Effect.provideService(RepositoryVariables, makeRepositoryVariables(credentials)),
+    Effect.provideService(RepositoryOwnership, makeRepositoryOwnership(credentials)),
   );

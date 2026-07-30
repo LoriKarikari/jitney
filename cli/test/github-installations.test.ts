@@ -1,7 +1,7 @@
 import { Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import {
-  RepositoryVariables,
+  RepositoryOwnership,
   claimRepositoryOwnership,
   releaseRepositoryOwnership,
 } from "../src/github-installations.js";
@@ -22,11 +22,13 @@ const installations: readonly GitHubInstallation[] = [
 
 describe("repository ownership markers", () => {
   it("checks every repository before writing and rejects a foreign deployment", async () => {
-    const fake = await makeVariables([["LoriKarikari/web", "01J00000000000000000000001"]]);
+    const fake = await makeOwnership([
+      ["LoriKarikari/web", "01J00000000000000000000001"],
+    ]);
 
     const error = await Effect.runPromise(
       claimRepositoryOwnership(deploymentId, installations).pipe(
-        Effect.provideService(RepositoryVariables, fake.service),
+        Effect.provideService(RepositoryOwnership, fake.service),
         Effect.flip,
       ),
     );
@@ -37,11 +39,11 @@ describe("repository ownership markers", () => {
   });
 
   it("writes missing markers and reads them back", async () => {
-    const fake = await makeVariables();
+    const fake = await makeOwnership();
 
     await Effect.runPromise(
       claimRepositoryOwnership(deploymentId, installations).pipe(
-        Effect.provideService(RepositoryVariables, fake.service),
+        Effect.provideService(RepositoryOwnership, fake.service),
       ),
     );
 
@@ -60,14 +62,14 @@ describe("repository ownership markers", () => {
   });
 
   it("removes only markers owned by this deployment", async () => {
-    const fake = await makeVariables([
+    const fake = await makeOwnership([
       ["LoriKarikari/api", deploymentId],
       ["LoriKarikari/web", "01J00000000000000000000001"],
     ]);
 
     await Effect.runPromise(
       releaseRepositoryOwnership(deploymentId, installations).pipe(
-        Effect.provideService(RepositoryVariables, fake.service),
+        Effect.provideService(RepositoryOwnership, fake.service),
       ),
     );
 
@@ -80,12 +82,12 @@ describe("repository ownership markers", () => {
   });
 });
 
-async function makeVariables(entries: ReadonlyArray<readonly [string, string]> = []) {
+async function makeOwnership(entries: ReadonlyArray<readonly [string, string]> = []) {
   const values = await Effect.runPromise(Ref.make(new Map(entries)));
   const events = await Effect.runPromise(Ref.make<string[]>([]));
   const record = (event: string) => Ref.update(events, (current) => [...current, event]);
   return {
-    service: RepositoryVariables.of({
+    service: RepositoryOwnership.of({
       read: (_installationId, fullName) =>
         record(`read:${fullName}`).pipe(
           Effect.andThen(Ref.get(values)),
@@ -95,7 +97,7 @@ async function makeVariables(entries: ReadonlyArray<readonly [string, string]> =
         record(`create:${fullName}`).pipe(
           Effect.andThen(Ref.update(values, (current) => new Map(current).set(fullName, value))),
         ),
-      remove: (_installationId, fullName) =>
+      remove: (_installationId, fullName, _deploymentId) =>
         record(`remove:${fullName}`).pipe(
           Effect.andThen(
             Ref.update(values, (current) => {

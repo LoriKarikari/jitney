@@ -250,8 +250,8 @@ describe("destroy", () => {
     const residue: DestroyResidue[] = [
       {
         plane: "github",
-        resource: "repository_variable",
-        id: "LoriKarikari/api:JITNEY_DEPLOYMENT",
+        resource: "repository_environment",
+        id: "LoriKarikari/api:jitney-01J00000000000000000000000",
         reason: "Worker credentials were already gone",
       },
     ];

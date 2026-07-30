@@ -378,7 +378,7 @@ describe("repair", () => {
 
     expect(output).toContain("WILL DO");
     expect(output).toContain("release expired lease (upgrade, lori@mbp)");
-    expect(output).toContain("rewrite JITNEY_DEPLOYMENT on LoriKarikari/api (missing)");
+    expect(output).toContain("recreate ownership environment on LoriKarikari/api (missing)");
     expect(output).toContain("WON'T TOUCH (needs you)");
     expect(output).toContain("--adopt application:a034dae7");
   });

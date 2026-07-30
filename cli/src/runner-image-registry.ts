@@ -133,7 +133,8 @@ export const deleteRunnerImageTag = (
     const auth = yield* scratchCredentials(accountId, ["pull", "push"], "registry_cleanup");
     const headers = {
       Authorization: `Basic ${Buffer.from(`${auth.username}:${auth.password}`).toString("base64")}`,
-      Accept: "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
+      Accept:
+        "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json",
     };
     const base = `https://${REGISTRY_HOST}/v2/${accountId}/${repository}/manifests`;
     const manifest = yield* client.head(`${base}/${tag}`, { headers });

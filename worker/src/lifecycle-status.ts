@@ -143,10 +143,12 @@ export const makeLifecycleGitHub = (env: Env): LifecycleGitHub["Service"] => {
         try: async () => {
           const markers = new Set<string>();
           for (let page = 1; ; page++) {
-            const response = await installation.request(
-              "GET /repos/{owner}/{repo}/environments",
-              { owner, repo, per_page: 100, page },
-            );
+            const response = await installation.request("GET /repos/{owner}/{repo}/environments", {
+              owner,
+              repo,
+              per_page: 100,
+              page,
+            });
             for (const environment of response.data.environments ?? []) {
               const id = deploymentIdFromOwnershipEnvironment(environment.name);
               if (id !== undefined) markers.add(id);
@@ -156,7 +158,7 @@ export const makeLifecycleGitHub = (env: Env): LifecycleGitHub["Service"] => {
           if (markers.size > 1) {
             throw new Error(`${fullName} has multiple Jitney ownership markers`);
           }
-          return Option.fromNullable(markers.values().next().value);
+          return Option.fromUndefinedOr(markers.values().next().value);
         },
         catch: (cause) => new LifecycleGitHubError({ operation: "ownership", cause }),
       });

@@ -22,9 +22,7 @@ const installations: readonly GitHubInstallation[] = [
 
 describe("repository ownership markers", () => {
   it("checks every repository before writing and rejects a foreign deployment", async () => {
-    const fake = await makeOwnership([
-      ["LoriKarikari/web", "01J00000000000000000000001"],
-    ]);
+    const fake = await makeOwnership([["LoriKarikari/web", "01J00000000000000000000001"]]);
 
     const error = await Effect.runPromise(
       claimRepositoryOwnership(deploymentId, installations).pipe(

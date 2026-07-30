@@ -51,6 +51,8 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
   const client = cloudflare.client;
   const accumulatedResidue = yield* Ref.make<DestroyResidue[]>([]);
   const exportedPath = yield* Ref.make<Option.Option<string>>(Option.none());
+  const uninstallSecret = operationSecret();
+  const uninstallSecretInstalled = yield* Ref.make(false);
 
   const addResidue = (residue: readonly DestroyResidue[]) =>
     Ref.update(accumulatedResidue, (current) => [...current, ...residue]);
@@ -78,24 +80,26 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         workerAddress(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
       );
       if (!worker.exists || worker.url === null) return Option.none<unknown>();
-      const secret = operationSecret();
-      const installed = yield* provideCloudflare(
-        Workers.putScriptSecret({
-          accountId: receipt.cloudflare.accountId,
-          scriptName: receipt.cloudflare.workerName,
-          name: "JITNEY_UNINSTALL_SECRET",
-          text: secret,
-          type: "secret_text",
-        }),
-      ).pipe(
-        Effect.as(true),
-        Effect.catchTag("WorkerNotFound", () => Effect.succeed(false)),
-      );
-      if (!installed) return Option.none<unknown>();
+      if (!(yield* Ref.get(uninstallSecretInstalled))) {
+        const installed = yield* provideCloudflare(
+          Workers.putScriptSecret({
+            accountId: receipt.cloudflare.accountId,
+            scriptName: receipt.cloudflare.workerName,
+            name: "JITNEY_UNINSTALL_SECRET",
+            text: uninstallSecret,
+            type: "secret_text",
+          }),
+        ).pipe(
+          Effect.as(true),
+          Effect.catchTag("WorkerNotFound", () => Effect.succeed(false)),
+        );
+        if (!installed) return Option.none<unknown>();
+        yield* Ref.set(uninstallSecretInstalled, true);
+      }
       const request = HttpClientRequest.bodyJsonUnsafe(
         HttpClientRequest.post(`${worker.url}/lifecycle/uninstall`, {
           headers: {
-            Authorization: `Bearer ${secret}`,
+            Authorization: `Bearer ${uninstallSecret}`,
             "X-Jitney-Deployment": receipt.id,
           },
         }),
@@ -111,7 +115,8 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         ),
         Effect.retry({
           while: (error) => error === secretPending,
-          schedule: Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(29)]),
+          times: 59,
+          schedule: Schedule.spaced("1 second"),
         }),
       );
       if (response.status !== 204 && response.status !== 200) {

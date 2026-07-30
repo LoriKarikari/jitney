@@ -188,6 +188,27 @@ describe("record-intent deployment", () => {
     expect(await Effect.runPromise(Ref.get(events))).toEqual(["health", "rollback"]);
   });
 
+  it("rolls back defects and removes the installing receipt", async () => {
+    const backend = await makeMemoryBackend();
+    const store = makeReceiptStore(backend.service, { namespaceRemovalDelay: Duration.zero });
+    const rolledBack = await Effect.runPromise(Ref.make(false));
+    const platform = successfulPlatform({
+      deployBootstrap: () => Effect.die("broken output projection"),
+      rollback: () => Ref.set(rolledBack, true),
+    });
+
+    const exit = await Effect.runPromiseExit(
+      installDeployment(input).pipe(
+        Effect.provideService(DeploymentReceipts, store),
+        Effect.provideService(InstallPlatform, platform),
+      ),
+    );
+
+    expect(exit._tag).toBe("Failure");
+    expect(await Effect.runPromise(Ref.get(rolledBack))).toBe(true);
+    expect(await backend.values()).toEqual([]);
+  });
+
   it("keeps the installing receipt and skips rollback with --keep-partial", async () => {
     const backend = await makeMemoryBackend();
     const store = makeReceiptStore(backend.service, { namespaceRemovalDelay: Duration.zero });

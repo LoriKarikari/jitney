@@ -18,6 +18,17 @@ export interface CloudflareReceiptScope {
 export const receiptValueText = (value: unknown): string =>
   typeof value === "string" ? value : (JSON.stringify(value) ?? String(value));
 
+export const collectNamespaceKeyNames = <E, R>(
+  pages: Stream.Stream<KV.ListNamespaceKeysResponse, E, R>,
+): Effect.Effect<readonly string[], E, R> =>
+  pages.pipe(
+    Stream.takeUntil((page) => !page.resultInfo?.cursor),
+    Stream.flatMap((page) => Stream.fromIterable(page.result)),
+    Stream.map((key) => key.name),
+    Stream.runCollect,
+    Effect.map((keys) => [...keys]),
+  );
+
 const backendError = (operation: ReceiptBackendError["operation"], cause: unknown) =>
   new ReceiptBackendError({ operation, cause });
 
@@ -78,8 +89,7 @@ export const makeCloudflareReceiptBackend = Effect.fn(function* (scope: Cloudfla
     remove: (name) =>
       voidResult("remove", provideApi(KV.deleteNamespaceValue({ ...scope, keyName: name }))),
     listKeys: () =>
-      provideApi(KV.listNamespaceKeys.items(scope).pipe(Stream.runCollect)).pipe(
-        Effect.map((keys) => [...keys].map((key) => key.name)),
+      provideApi(collectNamespaceKeyNames(KV.listNamespaceKeys.pages(scope))).pipe(
         mapBackendError("list_keys"),
       ),
     removeNamespace: () => voidResult("remove_namespace", provideApi(KV.deleteNamespace(scope))),

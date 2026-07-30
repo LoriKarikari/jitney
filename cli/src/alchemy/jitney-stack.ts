@@ -103,7 +103,7 @@ export function jitneyStack(
         durableObjects: {
           namespaceId: worker.durableObjectNamespaces.pipe(
             Output.map((names) => {
-              const namespaceId = names.RUNNER_CONTAINERS;
+              const namespaceId = names.RunnerContainer;
               if (namespaceId === undefined) {
                 throw new Error("RUNNER_CONTAINERS namespace is missing");
               }

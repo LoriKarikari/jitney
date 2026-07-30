@@ -1,6 +1,6 @@
-import { DateTime, Duration, Effect, Option, Ref } from "effect";
+import { DateTime, Duration, Effect, Option, Ref, Stream } from "effect";
 import { describe, expect, it } from "vitest";
-import { receiptValueText } from "../src/receipts/cloudflare.js";
+import { collectNamespaceKeyNames, receiptValueText } from "../src/receipts/cloudflare.js";
 import {
   createDeploymentReceipt,
   generateDeploymentId,
@@ -22,6 +22,20 @@ describe("Cloudflare receipt values", () => {
     expect(receiptValueText({ schemaVersion: 1, name: "staging" })).toBe(
       '{"schemaVersion":1,"name":"staging"}',
     );
+  });
+
+  it("stops listing when Cloudflare returns an empty cursor", async () => {
+    const names = await Effect.runPromise(
+      collectNamespaceKeyNames(
+        Stream.fromIterable([
+          { result: [{ name: "first" }], resultInfo: { cursor: "next" } },
+          { result: [{ name: "last" }], resultInfo: { cursor: "" } },
+          { result: [{ name: "repeated" }], resultInfo: { cursor: "" } },
+        ]),
+      ),
+    );
+
+    expect(names).toEqual(["first", "last"]);
   });
 });
 

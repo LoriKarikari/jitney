@@ -231,16 +231,16 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
           reason: "Cloudflare still reports the Worker",
         });
       }
-      if (
-        receipt.cloudflare.applicationId !== null &&
-        snapshot.applications.some(
-          (application) => application.id === receipt.cloudflare.applicationId,
-        )
-      ) {
+      const application = snapshot.applications.find((candidate) =>
+        receipt.cloudflare.applicationId === null
+          ? candidate.name === receipt.cloudflare.applicationName
+          : candidate.id === receipt.cloudflare.applicationId,
+      );
+      if (application !== undefined) {
         residue.push({
           plane: "cloudflare",
           resource: "container_application",
-          id: receipt.cloudflare.applicationId,
+          id: application.id,
           reason: "Cloudflare still reports the container application",
         });
       }
@@ -272,10 +272,15 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
     confirm,
     teardown: ({ receipt, now, protectedTags }) =>
       Effect.gen(function* () {
-        yield* suspend(receipt);
-        if (!now) yield* drain(receipt);
-        yield* deleteOwnership(receipt);
-        yield* deleteInstallations(receipt);
+        const hasInstallations = receipt.github.installations.length > 0;
+        if (hasInstallations) {
+          yield* suspend(receipt);
+          if (!now) yield* drain(receipt);
+        }
+        if (recordedRepositories(receipt.github).length > 0) {
+          yield* deleteOwnership(receipt);
+        }
+        if (hasInstallations) yield* deleteInstallations(receipt);
         yield* destroyCloudflare(receipt);
         yield* pruneImages(receipt, protectedTags);
         yield* deleteApp(receipt);

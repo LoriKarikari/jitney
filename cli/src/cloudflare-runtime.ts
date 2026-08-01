@@ -2,6 +2,7 @@ import { Credentials } from "@distilled.cloud/cloudflare/Credentials";
 import * as Alchemy from "alchemy";
 import { AuthProviders } from "alchemy/Auth";
 import * as Cloudflare from "alchemy/Cloudflare";
+import { RandomProvider } from "alchemy/Random";
 import { PlatformServices } from "alchemy/Util/PlatformServices";
 import { Effect, Layer } from "effect";
 import * as FetchHttpClient from "effect/unstable/http/FetchHttpClient";
@@ -41,6 +42,13 @@ const nonInteractiveAlchemyContext = Layer.provide(
 export const alchemyRuntime = Layer.merge(
   Layer.succeed(Alchemy.Cli, alchemyCli),
   nonInteractiveAlchemyContext,
+);
+
+export const ensureAlchemyStateStore = Cloudflare.bootstrap().pipe(
+  Effect.provide(RandomProvider()),
+  Effect.provide(alchemyRuntime),
+  Effect.provide(cloudflareRuntime),
+  Effect.asVoid,
 );
 
 export interface CloudflareServices {

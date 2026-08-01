@@ -103,5 +103,6 @@ export function renderFailure(error: InstallFailure): string {
   if (error._tag === "InstallRollbackError") {
     return "Installation failed and cleanup was incomplete. The deployment receipt was kept for repair.";
   }
-  return `${error.message} (${error.step})`;
+  const detail = error.cause instanceof Error ? `: ${error.cause.message}` : "";
+  return `${error.message} (${error.step})${detail}`;
 }

@@ -4,7 +4,7 @@ import { GitHubAppOperationError, GitHubAppOperations } from "./github-app.js";
 import { jitneyStack, type JitneyProviderLayer } from "./jitney-stack.js";
 import { jitneyProviders } from "./providers.js";
 import { withAlchemyWorkspace } from "./workspace.js";
-import { alchemyRuntime } from "../cloudflare-runtime.js";
+import { alchemyRuntime, ensureAlchemyStateStore } from "../cloudflare-runtime.js";
 import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
 import { workerBundlePath } from "../config.js";
 import { InstallerError } from "../errors.js";
@@ -50,7 +50,9 @@ export const destroyDeploymentStack = (
     },
     { providers },
   );
-  return withAlchemyWorkspace(alchemyDestroy({ stack, stage: receipt.name })).pipe(
+  return withAlchemyWorkspace(
+    ensureAlchemyStateStore.pipe(Effect.andThen(alchemyDestroy({ stack, stage: receipt.name }))),
+  ).pipe(
     Effect.provide(alchemyRuntime),
     Effect.asVoid,
     Effect.mapError((cause) =>

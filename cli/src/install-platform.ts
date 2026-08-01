@@ -12,7 +12,11 @@ import { jitneyStack, type JitneyProviderLayer } from "./alchemy/jitney-stack.js
 import { jitneyProviders } from "./alchemy/providers.js";
 import { withAlchemyWorkspace } from "./alchemy/workspace.js";
 import { waitForDeploymentRemoval } from "./cloudflare-inventory.js";
-import { alchemyRuntime, captureCloudflareServices } from "./cloudflare-runtime.js";
+import {
+  alchemyRuntime,
+  captureCloudflareServices,
+  ensureAlchemyStateStore,
+} from "./cloudflare-runtime.js";
 import { workerBundlePath } from "./config.js";
 import { InstallerError } from "./errors.js";
 import {
@@ -122,10 +126,14 @@ export const makeInstallPlatform = Effect.fn(function* (
     credentials?: GitHubAppCredentials,
   ) =>
     withAlchemyWorkspace(
-      alchemyDeploy({
-        stack: stackFor(input, credentials),
-        stage: input.name,
-      }),
+      ensureAlchemyStateStore.pipe(
+        Effect.andThen(
+          alchemyDeploy({
+            stack: stackFor(input, credentials),
+            stage: input.name,
+          }),
+        ),
+      ),
     ).pipe(
       Effect.provide(alchemyRuntime),
       Effect.mapError(
@@ -143,10 +151,14 @@ export const makeInstallPlatform = Effect.fn(function* (
     credentials?: GitHubAppCredentials,
   ) =>
     withAlchemyWorkspace(
-      alchemyDestroy({
-        stack: stackFor(input, credentials),
-        stage: input.name,
-      }),
+      ensureAlchemyStateStore.pipe(
+        Effect.andThen(
+          alchemyDestroy({
+            stack: stackFor(input, credentials),
+            stage: input.name,
+          }),
+        ),
+      ),
     ).pipe(
       Effect.provide(alchemyRuntime),
       Effect.asVoid,

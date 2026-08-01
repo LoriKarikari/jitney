@@ -159,8 +159,8 @@ function makeProviders(events: Ref.Ref<string[]>) {
           url: `https://${news.name ?? id}.example.workers.dev`,
           tags: news.tags,
           durableObjectNamespaces: {
-            SCHEDULER: "scheduler-namespace",
-            RUNNER_CONTAINERS: "runner-container-namespace",
+            Scheduler: "scheduler-namespace",
+            RunnerContainer: "runner-container-namespace",
           },
           accountId: "account",
           domains: [],

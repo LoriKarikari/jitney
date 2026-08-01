@@ -94,8 +94,8 @@ Options:
 });
 
 const exit = await Effect.runPromiseExit(program);
-Exit.match(exit, {
-  onSuccess: () => undefined,
+const exitCode = Exit.match(exit, {
+  onSuccess: () => 0,
   onFailure: (cause) => {
     const failure = Cause.findErrorOption(cause);
     console.error(
@@ -103,6 +103,11 @@ Exit.match(exit, {
         ? renderFailure(failure.value)
         : Cause.pretty(cause),
     );
-    process.exitCode = 1;
+    return 1;
   },
 });
+await Promise.all([
+  new Promise<void>((resolve) => process.stdout.write("", "utf8", () => resolve())),
+  new Promise<void>((resolve) => process.stderr.write("", "utf8", () => resolve())),
+]);
+process.exit(exitCode);

@@ -16,6 +16,7 @@ import {
 } from "./github-app.js";
 import { workerAddress } from "./lifecycle-status-client.js";
 import { confirmInTerminal } from "./prompt.js";
+import { ownershipEnvironmentName } from "@jitney/shared/ownership-marker";
 import { mintOperationSecret, type UninstallAction } from "@jitney/shared/uninstall-protocol";
 import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
 import {
@@ -50,6 +51,8 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
   const client = cloudflare.client;
   const accumulatedResidue = yield* Ref.make<DestroyResidue[]>([]);
   const exportedPath = yield* Ref.make<Option.Option<string>>(Option.none());
+  const uninstallSecret = operationSecret();
+  const uninstallSecretInstalled = yield* Ref.make(false);
 
   const addResidue = (residue: readonly DestroyResidue[]) =>
     Ref.update(accumulatedResidue, (current) => [...current, ...residue]);
@@ -77,42 +80,42 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         workerAddress(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
       );
       if (!worker.exists || worker.url === null) return Option.none<unknown>();
-      const secret = operationSecret();
-      const installed = yield* provideCloudflare(
-        Workers.putScriptSecret({
-          accountId: receipt.cloudflare.accountId,
-          scriptName: receipt.cloudflare.workerName,
-          name: "JITNEY_UNINSTALL_SECRET",
-          text: secret,
-          type: "secret_text",
-        }),
-      ).pipe(
-        Effect.as(true),
-        Effect.catchTag("WorkerNotFound", () => Effect.succeed(false)),
-      );
-      if (!installed) return Option.none<unknown>();
+      if (!(yield* Ref.get(uninstallSecretInstalled))) {
+        const installed = yield* provideCloudflare(
+          Workers.putScriptSecret({
+            accountId: receipt.cloudflare.accountId,
+            scriptName: receipt.cloudflare.workerName,
+            name: "JITNEY_UNINSTALL_SECRET",
+            text: uninstallSecret,
+            type: "secret_text",
+          }),
+        ).pipe(
+          Effect.as(true),
+          Effect.catchTag("WorkerNotFound", () => Effect.succeed(false)),
+        );
+        if (!installed) return Option.none<unknown>();
+        yield* Ref.set(uninstallSecretInstalled, true);
+      }
       const request = HttpClientRequest.bodyJsonUnsafe(
         HttpClientRequest.post(`${worker.url}/lifecycle/uninstall`, {
           headers: {
-            Authorization: `Bearer ${secret}`,
+            Authorization: `Bearer ${uninstallSecret}`,
             "X-Jitney-Deployment": receipt.id,
           },
         }),
         { action },
       );
-      const secretPending = new InstallerError({
-        step: "destroy",
-        message: "The Worker has not activated the uninstall secret yet",
-      });
-      const response = yield* client.execute(request).pipe(
-        Effect.flatMap((response) =>
-          response.status === 401 ? Effect.fail(secretPending) : Effect.succeed(response),
-        ),
-        Effect.retry({
-          while: (error) => error === secretPending,
-          schedule: Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(29)]),
-        }),
-      );
+      let response = yield* client.execute(request);
+      for (let attempt = 0; response.status === 401 && attempt < 59; attempt++) {
+        yield* Effect.sleep("1 second");
+        response = yield* client.execute(request);
+      }
+      if (response.status === 401) {
+        return yield* new InstallerError({
+          step: "destroy",
+          message: "The Worker has not activated the uninstall secret yet",
+        });
+      }
       if (response.status !== 204 && response.status !== 200) {
         // The Worker answers 404 when the deployment identity does not match.
         const message =
@@ -172,8 +175,8 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
             addResidue(
               recordedRepositories(receipt.github).map((repository) => ({
                 plane: "github" as const,
-                resource: "repository_variable",
-                id: `${repository.fullName}:JITNEY_DEPLOYMENT`,
+                resource: "repository_environment",
+                id: `${repository.fullName}:${ownershipEnvironmentName(receipt.id)}`,
                 reason: "Worker credentials were already gone",
               })),
             ),
@@ -231,16 +234,16 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
           reason: "Cloudflare still reports the Worker",
         });
       }
-      if (
-        receipt.cloudflare.applicationId !== null &&
-        snapshot.applications.some(
-          (application) => application.id === receipt.cloudflare.applicationId,
-        )
-      ) {
+      const application = snapshot.applications.find((candidate) =>
+        receipt.cloudflare.applicationId === null
+          ? candidate.name === receipt.cloudflare.applicationName
+          : candidate.id === receipt.cloudflare.applicationId,
+      );
+      if (application !== undefined) {
         residue.push({
           plane: "cloudflare",
           resource: "container_application",
-          id: receipt.cloudflare.applicationId,
+          id: application.id,
           reason: "Cloudflare still reports the container application",
         });
       }
@@ -272,13 +275,18 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
     confirm,
     teardown: ({ receipt, now, protectedTags }) =>
       Effect.gen(function* () {
-        yield* suspend(receipt);
-        if (!now) yield* drain(receipt);
-        yield* deleteOwnership(receipt);
-        yield* deleteInstallations(receipt);
+        const hasInstallations = receipt.github.installations.length > 0;
+        if (hasInstallations) {
+          yield* suspend(receipt);
+          if (!now) yield* drain(receipt);
+        }
+        if (recordedRepositories(receipt.github).length > 0) {
+          yield* deleteOwnership(receipt);
+        }
+        if (hasInstallations) yield* deleteInstallations(receipt);
+        yield* deleteApp(receipt);
         yield* destroyCloudflare(receipt);
         yield* pruneImages(receipt, protectedTags);
-        yield* deleteApp(receipt);
         return yield* verify(receipt);
       }),
   });

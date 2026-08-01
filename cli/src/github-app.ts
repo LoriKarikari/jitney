@@ -236,7 +236,7 @@ export function githubAppManifest(
     redirect_url: redirectUrl,
     public: false,
     default_events: ["workflow_job"],
-    default_permissions: { actions: "read", administration: "write", variables: "write" },
+    default_permissions: { actions: "read", administration: "write", environments: "write" },
   };
 }
 

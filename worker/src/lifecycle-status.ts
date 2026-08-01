@@ -1,6 +1,10 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
-import { Array as Arr, Context, Data, Effect, Option, Predicate, Result, Schema } from "effect";
+import { Array as Arr, Context, Data, Effect, Option, Result, Schema } from "effect";
+import {
+  deploymentIdFromOwnershipEnvironment,
+  ownershipEnvironmentName,
+} from "@jitney/shared/ownership-marker";
 
 const Receipt = Schema.Struct({
   id: Schema.String,
@@ -34,8 +38,6 @@ export interface LifecycleInstallation {
   readonly id: number;
   readonly repositories: readonly { readonly id: number; readonly fullName: string }[];
 }
-
-class VariableMissing extends Data.TaggedError("VariableMissing")<{}> {}
 
 export class LifecycleGitHubError extends Data.TaggedError("LifecycleGitHubError")<{
   operation: "inventory" | "ownership";
@@ -138,20 +140,28 @@ export const makeLifecycleGitHub = (env: Env): LifecycleGitHub["Service"] => {
         },
       });
       return Effect.tryPromise({
-        try: () =>
-          installation.rest.actions.getRepoVariable({
-            owner,
-            repo,
-            name: "JITNEY_DEPLOYMENT",
-          }),
-        catch: (cause) =>
-          Predicate.hasProperty(cause, "status") && cause.status === 404
-            ? new VariableMissing()
-            : new LifecycleGitHubError({ operation: "ownership", cause }),
-      }).pipe(
-        Effect.map((response) => Option.some(response.data.value)),
-        Effect.catchTag("VariableMissing", () => Effect.succeed(Option.none())),
-      );
+        try: async () => {
+          const markers = new Set<string>();
+          for (let page = 1; ; page++) {
+            const response = await installation.request("GET /repos/{owner}/{repo}/environments", {
+              owner,
+              repo,
+              per_page: 100,
+              page,
+            });
+            for (const environment of response.data.environments ?? []) {
+              const id = deploymentIdFromOwnershipEnvironment(environment.name);
+              if (id !== undefined) markers.add(id);
+            }
+            if ((response.data.environments?.length ?? 0) < 100) break;
+          }
+          if (markers.size > 1) {
+            throw new Error(`${fullName} has multiple Jitney ownership markers`);
+          }
+          return Option.fromUndefinedOr(markers.values().next().value);
+        },
+        catch: (cause) => new LifecycleGitHubError({ operation: "ownership", cause }),
+      });
     },
     rewriteOwnership: (installationId, fullName, value) => {
       const [owner, repo] = fullName.split("/", 2);
@@ -173,11 +183,10 @@ export const makeLifecycleGitHub = (env: Env): LifecycleGitHub["Service"] => {
       });
       return Effect.tryPromise({
         try: () =>
-          installation.rest.actions.createRepoVariable({
+          installation.request("PUT /repos/{owner}/{repo}/environments/{environment_name}", {
             owner,
             repo,
-            name: "JITNEY_DEPLOYMENT",
-            value,
+            environment_name: ownershipEnvironmentName(value),
           }),
         catch: (cause) => new LifecycleGitHubError({ operation: "ownership", cause }),
       }).pipe(Effect.asVoid);

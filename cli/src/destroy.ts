@@ -88,8 +88,8 @@ export function renderDestroyPlan(plan: DestroyPlan): string {
   return [
     `${plan.name} (${plan.deploymentId}) will be destroyed:`,
     `  Worker: ${plan.workerName}`,
-    `  Container application: ${plan.applicationId ?? "already missing"}`,
-    `  GitHub App: ${plan.appSlug ?? "already missing"}`,
+    `  Container application: ${plan.applicationId ?? "not recorded"}`,
+    `  GitHub App: ${plan.appSlug ?? "not recorded"}`,
     `  Installations: ${plan.installationIds.join(", ") || "none"}`,
     `  Repositories: ${plan.repositories.join(", ") || "none"}`,
     `  Image tags: ${plan.imageTags.join(", ") || "none"}`,

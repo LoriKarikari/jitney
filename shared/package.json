@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./ownership-marker": "./ownership-marker.ts",
     "./uninstall-protocol": "./uninstall-protocol.ts"
   }
 }

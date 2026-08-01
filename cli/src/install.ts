@@ -1,5 +1,5 @@
-import { Context, DateTime, Effect } from "effect";
-import { InstallRollbackError, type InstallerError, type InstallFailure } from "./errors.js";
+import { Cause, Context, DateTime, Effect } from "effect";
+import { InstallRollbackError, type InstallerError } from "./errors.js";
 import type { GitHubAppCredentials } from "./github-app.js";
 import { runnerApplicationName } from "./cloudflare-inventory.js";
 import { beginInstallOperation } from "./receipts/leased-operation.js";
@@ -159,8 +159,8 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
 
   return yield* held.hold(
     operation.pipe(
-      Effect.catch((cause: InstallFailure) => {
-        if (input.keepPartial === true) return Effect.fail(cause);
+      Effect.catchCause((cause) => {
+        if (input.keepPartial === true) return Effect.failCause(cause);
         return held.receipt().pipe(
           Effect.flatMap((receipt) =>
             platform.rollback({
@@ -173,8 +173,8 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
           Effect.flatMap(() => held.deleteReceipt(deploymentId)),
           Effect.matchEffect({
             onFailure: (rollbackCause) =>
-              Effect.fail(new InstallRollbackError({ cause, rollbackCause })),
-            onSuccess: () => Effect.fail(cause),
+              Effect.fail(new InstallRollbackError({ cause: Cause.squash(cause), rollbackCause })),
+            onSuccess: () => Effect.failCause(cause),
           }),
         );
       }),

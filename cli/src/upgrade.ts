@@ -1,5 +1,5 @@
 import { Cause, Context, Effect } from "effect";
-import { InstallerError, UpgradeRollbackError } from "./errors.js";
+import { InstallerError, UpgradeRollbackError, orStepError } from "./errors.js";
 import { DeploymentReceipts } from "./install.js";
 import { beginLeasedOperation } from "./receipts/leased-operation.js";
 import { recordedImageTags, type DeploymentReceipt } from "./receipts/schema.js";
@@ -41,8 +41,7 @@ export class UpgradePlatform extends Context.Service<
   }
 >()("Jitney.UpgradePlatform") {}
 
-const missingVersion = (message: string) =>
-  new InstallerError({ step: "upgrade", message });
+const missingVersion = (message: string) => new InstallerError({ step: "upgrade", message });
 
 function targetFor(
   receipt: DeploymentReceipt,
@@ -50,8 +49,7 @@ function targetFor(
 ): Effect.Effect<PreparedVersion, InstallerError, UpgradePlatform> {
   return Effect.gen(function* () {
     const platform = yield* UpgradePlatform;
-    const version =
-      input.operation === "upgrade" ? input.targetVersion : receipt.versions.previous;
+    const version = input.operation === "upgrade" ? input.targetVersion : receipt.versions.previous;
     const existingTag = input.operation === "rollback" ? receipt.cloudflare.tags.previous : null;
     if (version === undefined || version === null) {
       return yield* missingVersion(
@@ -73,12 +71,7 @@ function targetFor(
 export const changeDeploymentVersion = Effect.fn(function* (input: VersionChangeInput) {
   const receipts = yield* DeploymentReceipts;
   const platform = yield* UpgradePlatform;
-  const held = yield* beginLeasedOperation(
-    receipts,
-    input.name,
-    input.operation,
-    input.actor,
-  );
+  const held = yield* beginLeasedOperation(receipts, input.name, input.operation, input.actor);
   const original = yield* held.receipt();
   let drained = false;
 
@@ -114,7 +107,9 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
 
     if (input.operation === "upgrade" && original.cloudflare.tags.previous !== null) {
       const protectedTags = new Set(
-        (yield* receipts.list())
+        (yield* receipts
+          .list()
+          .pipe(Effect.mapError(orStepError("receipt_store", "Could not inspect image ownership"))))
           .filter((receipt) => receipt.id !== original.id)
           .flatMap((receipt) => recordedImageTags(receipt.cloudflare)),
       );

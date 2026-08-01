@@ -64,17 +64,15 @@ async function memoryBackend(receipt: DeploymentReceipt) {
     service,
     receipt: () =>
       Effect.runPromise(
-        Effect.map(Ref.get(values), (current) =>
-          JSON.parse(current.get(receipt.name) ?? "null") as DeploymentReceipt,
+        Effect.map(
+          Ref.get(values),
+          (current) => JSON.parse(current.get(receipt.name) ?? "null") as DeploymentReceipt,
         ),
       ),
   };
 }
 
-async function fakePlatform(options?: {
-  failTarget?: boolean;
-  failRollback?: boolean;
-}) {
+async function fakePlatform(options?: { failTarget?: boolean; failRollback?: boolean }) {
   const calls = await Effect.runPromise(Ref.make<string[]>([]));
   const call = (event: string) => Ref.update(calls, (current) => [...current, event]);
   const activate = (version: string) =>
@@ -92,9 +90,7 @@ async function fakePlatform(options?: {
     calls,
     service: UpgradePlatform.of({
       prepare: (_receipt, operation: VersionChangeOperation, version, existingTag) =>
-        call(`prepare:${operation}:${version}`).pipe(
-          Effect.as(existingTag ?? "target-tag"),
-        ),
+        call(`prepare:${operation}:${version}`).pipe(Effect.as(existingTag ?? "target-tag")),
       drain: () => call("drain"),
       activate: (_receipt, version) => activate(version),
       resume: () => call("resume"),

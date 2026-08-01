@@ -6,7 +6,7 @@ import { destroyDeploymentStack } from "./alchemy/destroy-deployment.js";
 import { observeAccount } from "./cloudflare-inventory.js";
 import { captureCloudflareServices } from "./cloudflare-runtime.js";
 import { DestroyPlatform, renderDestroyPlan, type DestroyPlan } from "./destroy.js";
-import { InstallerError, orStepError, stepError, tryPromise } from "./errors.js";
+import { orStepError, stepError, tryPromise } from "./errors.js";
 import {
   openGitHubAppDeletionFor,
   waitForGitHubAppDeletionFor,

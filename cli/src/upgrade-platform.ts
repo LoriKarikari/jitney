@@ -105,9 +105,7 @@ export const makeUpgradePlatform = Effect.fn(function* (localVersion: string) {
         { providers },
       );
       yield* withAlchemyWorkspace(
-        ensureAlchemyStateStore.pipe(
-          Effect.andThen(alchemyDeploy({ stack, stage: receipt.name })),
-        ),
+        ensureAlchemyStateStore.pipe(Effect.andThen(alchemyDeploy({ stack, stage: receipt.name }))),
       ).pipe(
         Effect.provide(alchemyRuntime),
         Effect.mapError(
@@ -136,7 +134,7 @@ export const makeUpgradePlatform = Effect.fn(function* (localVersion: string) {
         Effect.mapError(orStepError("health_check", `Jitney ${version} failed its health gate`)),
         Effect.retry(Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(29)])),
       );
-    });
+    }) as unknown as Effect.Effect<void, InstallerError>;
 
   return UpgradePlatform.of({
     prepare: (receipt, operation, targetVersion, existingTag) =>

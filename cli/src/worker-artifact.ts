@@ -21,11 +21,14 @@ export const downloadWorkerBundle = (version: string): Effect.Effect<string, Ins
     }
     const directory = join(homedir(), ".cache", "jitney", "versions", version);
     const bundle = join(directory, "package", "assets", "worker", "index.js");
-    const cached = yield* tryPromise("filesystem", "Could not inspect the Worker bundle cache", () =>
-      access(bundle).then(
-        () => true,
-        () => false,
-      ),
+    const cached = yield* tryPromise(
+      "filesystem",
+      "Could not inspect the Worker bundle cache",
+      () =>
+        access(bundle).then(
+          () => true,
+          () => false,
+        ),
     );
     if (cached) return bundle;
 

@@ -58,10 +58,7 @@ Options:
     return;
   }
 
-  if (
-    (positionals[0] === "upgrade" || positionals[0] === "rollback") &&
-    positionals.length === 2
-  ) {
+  if ((positionals[0] === "upgrade" || positionals[0] === "rollback") && positionals.length === 2) {
     return yield* upgradeCommand({ name: positionals[1]!, operation: positionals[0] });
   }
 

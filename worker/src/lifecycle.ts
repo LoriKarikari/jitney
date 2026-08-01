@@ -111,12 +111,18 @@ export class SchedulerLifecycle {
     return Effect.gen({ self: this }, function* () {
       const now = Date.now();
       const result = yield* this.#transaction(() => {
-        if (event.deliveryId !== undefined && !this.#recordDelivery(event, now)) {
+        const deliveryId = event.deliveryId;
+        if (
+          deliveryId !== undefined &&
+          !this.#recordDelivery({ deliveryId, workflowJobId: event.workflowJobId }, now)
+        ) {
           return { outcome: "duplicate" } as const;
         }
-        return this.#dominantOutcome(event.workflowJobId, "queued") ?? this.#recordDeferred(event, now);
+        return (
+          this.#dominantOutcome(event.workflowJobId, "queued") ?? this.#recordDeferred(event, now)
+        );
       });
-      this.#emitTransition(event, result);
+      this.#emitTransition({ ...event, action: "queued" }, result);
       return result;
     });
   }

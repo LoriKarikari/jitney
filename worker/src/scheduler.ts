@@ -49,7 +49,9 @@ export class Scheduler extends DurableObject<Env> {
 
   reconcile(candidate: QueuedJobCandidate): Promise<AcceptResult> {
     return Effect.runPromise(
-      this.#intakeSuspended ? this.#lifecycle.defer(candidate) : this.#lifecycle.reconcile(candidate),
+      this.#intakeSuspended
+        ? this.#lifecycle.defer(candidate)
+        : this.#lifecycle.reconcile(candidate),
     );
   }
 

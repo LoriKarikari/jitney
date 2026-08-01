@@ -6,7 +6,8 @@ import {
   orStepError,
   stepError,
   trySync,
-  type InstallerError,
+  isInstallFailure,
+  type InstallFailure,
   type InstallerStep,
 } from "./errors.js";
 import {
@@ -34,8 +35,8 @@ export function runLifecycleCommand<A>(
   failureMessage: string,
   use: (
     context: LifecycleCommandContext,
-  ) => Effect.Effect<A, InstallerError, LifecycleCommandServices>,
-): Effect.Effect<A, InstallerError> {
+  ) => Effect.Effect<A, InstallFailure, LifecycleCommandServices>,
+): Effect.Effect<A, InstallFailure> {
   const fail = stepError(step);
   return Effect.gen(function* () {
     const actor = yield* trySync(
@@ -53,5 +54,10 @@ export function runLifecycleCommand<A>(
       Effect.mapError((cause) => fail("Could not connect to the receipt store", cause)),
     );
     return yield* use({ actor, accountId, receipts });
-  }).pipe(Effect.provide(cloudflareRuntime), Effect.mapError(orStepError(step, failureMessage)));
+  }).pipe(
+    Effect.provide(cloudflareRuntime),
+    Effect.mapError((cause) =>
+      isInstallFailure(cause) ? cause : orStepError(step, failureMessage)(cause),
+    ),
+  );
 }

@@ -311,9 +311,10 @@ pre-GA, pin exact versions and upgrade them together on a tested branch; never
 accept an independent automated beta bump. `effect` is pinned once in the
 workspace catalog in `pnpm-workspace.yaml`, so the CLI and Worker cannot drift
 apart. The current compatibility set is
-`alchemy@2.0.0-beta.63`, `effect@4.0.0-beta.99`,
-`@effect/platform-node@4.0.0-beta.99`, and
-`@distilled.cloud/cloudflare-runtime@0.13.5`.
+`alchemy@2.0.0-beta.65`, `effect@4.0.0-beta.102`,
+`@effect/platform-node@4.0.0-beta.102`,
+`@distilled.cloud/cloudflare@0.30.2`, and
+`@distilled.cloud/cloudflare-runtime@0.13.10`.
 
 - Avoid async/await and raw Promise workflows unless an external boundary
   makes them unavoidable; isolate such code in the owning adapter.

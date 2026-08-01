@@ -7,13 +7,18 @@ catalog:
   "@octokit/auth-app": ^8.2.0
   "@types/node": ^26.1.1
   # Alchemy and Effect are pre-GA and must move together.
-  effect: 4.0.0-beta.99
+  effect: 4.0.0-beta.102
   oxfmt: ^0.58.0
   oxlint: ^1.73.0
   oxlint-tsgolint: ^7.0.2001
   typescript: ^7.0.2
   vitest: ^4.1.10
   wrangler: ^4.111.0
+
+peerDependencyRules:
+  allowedVersions:
+    "@distilled.cloud/cloudflare-runtime>@distilled.cloud/cloudflare": ^0.30.0
+    "@distilled.cloud/cloudflare-vite-plugin>@distilled.cloud/cloudflare": ^0.30.0
 
 allowBuilds:
   esbuild: true

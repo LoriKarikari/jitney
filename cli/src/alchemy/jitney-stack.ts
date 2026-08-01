@@ -51,15 +51,16 @@ export function jitneyStack(
       const receipts = yield* Cloudflare.KV.Namespace("LifecycleReceipts", {
         title: RECEIPT_NAMESPACE_TITLE,
       }).pipe(adopt(true), retain());
+      const runnerApplicationProps = {
+        name: runnerApplicationName(input.workerName),
+        image: `ghcr.io/lorikarikari/jitney:${input.version}`,
+        instances: 0,
+        maxInstances: 5,
+        instanceType: "standard-2",
+      } satisfies Cloudflare.Containers.RemoteContainerProps;
       const runnerApplication = yield* Cloudflare.Containers.ContainerPlatform(
         "RunnerApplication",
-        {
-          name: runnerApplicationName(input.workerName),
-          image: `ghcr.io/lorikarikari/jitney:${input.version}`,
-          instances: 0,
-          maxInstances: 5,
-          instanceType: "standard-2",
-        },
+        runnerApplicationProps,
       );
       const scheduler = Cloudflare.DurableObject("SCHEDULER", { className: "Scheduler" });
       const runnerContainers = Cloudflare.DurableObject("RUNNER_CONTAINERS", {

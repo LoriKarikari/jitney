@@ -126,8 +126,9 @@ function makeProviders(events: Ref.Ref<string[]>) {
   };
   const container: Provider.ProviderService<Cloudflare.Containers.ContainerApplication> = {
     list: () => Effect.succeed([]),
-    reconcile: ({ id, news, output, bindings }) =>
-      record(`container:reconcile:${news.image?.split(":").at(-1)}`).pipe(
+    reconcile: ({ id, news, output, bindings }) => {
+      const image = "image" in news ? news.image : undefined;
+      return record(`container:reconcile:${image?.split(":").at(-1)}`).pipe(
         Effect.as({
           applicationId: output?.applicationId ?? `application-${id}`,
           applicationName: news.name ?? id,
@@ -137,14 +138,15 @@ function makeProviders(events: Ref.Ref<string[]>) {
           maxInstances: news.maxInstances ?? 20,
           constraints: news.constraints,
           affinities: news.affinities,
-          configuration: { image: news.image ?? "" },
+          configuration: { image: image ?? "" },
           durableObjects: bindings.find((binding) => binding.data.durableObjects !== undefined)
             ?.data.durableObjects,
           createdAt: output?.createdAt ?? "2026-07-20T00:00:00.000Z",
           version: (output?.version ?? 0) + 1,
           dev: undefined,
         }),
-      ),
+      );
+    },
     delete: ({ output }) => record(`container:delete:${output.applicationName}`),
   };
   const worker: Provider.ProviderService<Cloudflare.Workers.Worker> = {

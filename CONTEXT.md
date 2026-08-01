@@ -125,6 +125,14 @@ The result of comparing one recorded resource with the live control plane:
 inconclusive; Jitney never infers live state from a failed request.
 _Avoid_: assumed healthy, probably missing
 
+**Ownership Marker**:
+The claim one Deployment records on a repository it may serve: a GitHub
+environment named `jitney-<deployment ULID>`, holding nothing but its name.
+It is checked when repositories are claimed and when drift is classified,
+not on the job path, so it catches duplicate setup rather than enforcing
+exclusivity at dispatch.
+_Avoid_: deployment environment, lock
+
 **Destroy Residue**:
 A receipt-owned report of resources that remain after the final destroy sweep.
 Any residue keeps the Deployment Receipt in `phase: destroying`; zero residue
@@ -154,6 +162,7 @@ _Avoid_: admin endpoint, cleanup API
 - A **Deployment** has exactly one **Deployment Receipt**, keyed by its name.
 - A **Deployment Receipt** holds at most one **Operation Lease** at a time.
 - Deployment ownership always matches on the ULID, never the name.
+- A repository carries at most one **Ownership Marker**; a foreign one blocks `deploy`.
 - `list` assigns a **Resource Classification** without changing either control plane.
 - A failed final destroy sweep records **Destroy Residue** before releasing the lease.
 - The **Uninstall Protocol** is live only while `destroy` holds an Operation Lease.

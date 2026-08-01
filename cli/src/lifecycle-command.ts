@@ -34,9 +34,7 @@ export type LifecycleCommandServices = Layer.Success<typeof cloudflareRuntime>;
 export function runLifecycleCommand<A, E extends InstallFailure>(
   step: InstallerStep,
   failureMessage: string,
-  use: (
-    context: LifecycleCommandContext,
-  ) => Effect.Effect<A, E, LifecycleCommandServices>,
+  use: (context: LifecycleCommandContext) => Effect.Effect<A, E, LifecycleCommandServices>,
 ): Effect.Effect<A, E | InstallerError> {
   const fail = stepError(step);
   return Effect.gen(function* () {

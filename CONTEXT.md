@@ -141,10 +141,11 @@ _Avoid_: cleanup warning, probably deleted
 
 **Uninstall Protocol**:
 The authenticated wire contract between `destroy` and a Deployment's Worker.
-Destroy temporarily installs an `expiry.random` secret, then sends one of four
-ordered actions: suspend intake, drain Runner Attempts, delete repository
-ownership, or delete installations. Fresh Deployments carry a permanently
-expired secret, so the protocol is inert outside an active destroy operation.
+A lifecycle command temporarily installs an `expiry.random` secret, then sends
+an authenticated intake, drain, or uninstall action. Destroy suspends intake
+and installations before removal; upgrade suspends only provisioning, so queued
+jobs are still recorded. Fresh Deployments carry a permanently expired secret,
+so the protocol is inert outside an active lifecycle operation.
 _Avoid_: admin endpoint, cleanup API
 
 ## Relationships
@@ -165,7 +166,7 @@ _Avoid_: admin endpoint, cleanup API
 - A repository carries at most one **Ownership Marker**; a foreign one blocks `deploy`.
 - `list` assigns a **Resource Classification** without changing either control plane.
 - A failed final destroy sweep records **Destroy Residue** before releasing the lease.
-- The **Uninstall Protocol** is live only while `destroy` holds an Operation Lease.
+- The **Uninstall Protocol** is live only while `destroy`, `upgrade`, or `rollback` holds an Operation Lease.
 
 ## Architecture
 

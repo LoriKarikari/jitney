@@ -6,6 +6,9 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import type { DeploymentReceipt } from "./receipts/schema.js";
 
 const LifecycleResponse = Schema.Struct({
+  version: Schema.String,
+  scheduler: Schema.Literals(["ok", "unknown"]),
+  container: Schema.Literals(["ok", "unknown"]),
   app: Schema.Literals(["ok", "unknown"]),
   installations: Schema.Literals(["ok", "drifted", "unknown"]),
   ownership: Schema.Array(

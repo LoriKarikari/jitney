@@ -105,6 +105,22 @@ export class SchedulerLifecycle {
     });
   }
 
+  defer(
+    event: QueuedJobCandidate & { readonly deliveryId?: string },
+  ): Effect.Effect<AcceptResult, SchedulerStorageError> {
+    return Effect.gen({ self: this }, function* () {
+      const now = Date.now();
+      const result = yield* this.#transaction(() => {
+        if (event.deliveryId !== undefined && !this.#recordDelivery(event, now)) {
+          return { outcome: "duplicate" } as const;
+        }
+        return this.#dominantOutcome(event.workflowJobId, "queued") ?? this.#recordDeferred(event, now);
+      });
+      this.#emitTransition(event, result);
+      return result;
+    });
+  }
+
   reconcile(candidate: QueuedJobCandidate): Effect.Effect<AcceptResult, SchedulerStorageError> {
     return Effect.gen({ self: this }, function* () {
       const now = Date.now();
@@ -172,7 +188,7 @@ export class SchedulerLifecycle {
     });
   }
 
-  #recordDelivery(event: WorkflowEvent, now: number): boolean {
+  #recordDelivery(event: { deliveryId: string; workflowJobId: number }, now: number): boolean {
     const { deliveryId, workflowJobId } = event;
     const inserted = this.#db
       .insert(deliveries)
@@ -183,17 +199,42 @@ export class SchedulerLifecycle {
     return inserted.length === 1;
   }
 
-  #acceptQueued(event: QueuedJobCandidate, deliveryId: string | null, now: number): AcceptResult {
-    const viableAttempt = this.#db
+  #recordDeferred(event: QueuedJobCandidate, now: number): AcceptResult {
+    const viableAttempt = this.#viableAttempt(event.workflowJobId);
+    if (viableAttempt !== undefined) {
+      return { outcome: "duplicate", runnerName: viableAttempt.runnerName };
+    }
+    this.#db
+      .insert(jobs)
+      .values({
+        workflowJobId: event.workflowJobId,
+        state: "queued",
+        repositoryId: event.repositoryId,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: jobs.workflowJobId,
+        set: { state: "queued", repositoryId: event.repositoryId, updatedAt: now },
+      })
+      .run();
+    return { outcome: "accepted" };
+  }
+
+  #viableAttempt(workflowJobId: number) {
+    return this.#db
       .select({ runnerName: attempts.runnerName })
       .from(attempts)
       .where(
         and(
-          eq(attempts.workflowJobId, event.workflowJobId),
+          eq(attempts.workflowJobId, workflowJobId),
           inArray(attempts.state, viableAttemptStates),
         ),
       )
       .all()[0];
+  }
+
+  #acceptQueued(event: QueuedJobCandidate, deliveryId: string | null, now: number): AcceptResult {
+    const viableAttempt = this.#viableAttempt(event.workflowJobId);
     if (viableAttempt !== undefined) {
       return { outcome: "duplicate", runnerName: viableAttempt.runnerName };
     }

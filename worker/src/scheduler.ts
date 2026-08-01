@@ -40,15 +40,17 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   accept(event: WorkflowEvent): Promise<AcceptResult> {
-    return event.action === "queued" && this.#intakeSuspended
-      ? Promise.resolve({ outcome: "ignored" })
-      : Effect.runPromise(this.#lifecycle.accept(event));
+    return Effect.runPromise(
+      event.action === "queued" && this.#intakeSuspended
+        ? this.#lifecycle.defer(event)
+        : this.#lifecycle.accept(event),
+    );
   }
 
   reconcile(candidate: QueuedJobCandidate): Promise<AcceptResult> {
-    return this.#intakeSuspended
-      ? Promise.resolve({ outcome: "ignored" })
-      : Effect.runPromise(this.#lifecycle.reconcile(candidate));
+    return Effect.runPromise(
+      this.#intakeSuspended ? this.#lifecycle.defer(candidate) : this.#lifecycle.reconcile(candidate),
+    );
   }
 
   async suspendIntake(): Promise<void> {

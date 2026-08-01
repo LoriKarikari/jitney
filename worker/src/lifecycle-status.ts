@@ -19,6 +19,9 @@ const Receipt = Schema.Struct({
 });
 
 export const LifecycleStatus = Schema.Struct({
+  version: Schema.String,
+  scheduler: Schema.Literals(["ok", "unknown"]),
+  container: Schema.Literals(["ok", "unknown"]),
   app: Schema.Literals(["ok", "unknown"]),
   installations: Schema.Literals(["ok", "drifted", "unknown"]),
   ownership: Schema.Array(
@@ -70,7 +73,11 @@ const inventoryKey = (installations: readonly LifecycleInstallation[]): string =
     .sort()
     .join(",");
 
-const unknownStatus = (receipt: Receipt): LifecycleStatus => ({
+const unknownStatus = (
+  receipt: Receipt,
+  runtime: Pick<LifecycleStatus, "version" | "scheduler" | "container">,
+): LifecycleStatus => ({
+  ...runtime,
   app: "unknown",
   installations: "unknown",
   ownership: Arr.flatMap(receipt.github.installations, (installation) =>
@@ -240,11 +247,22 @@ export const rewriteLifecycleOwnership = Effect.fn("GitHub.rewriteLifecycleOwner
 
 export const lifecycleStatus = Effect.fn("GitHub.lifecycleStatus")(function* (env: Env) {
   const github = yield* LifecycleGitHub;
+  const scheduler = yield* Effect.result(
+    Effect.tryPromise({
+      try: () => env.SCHEDULER.getByName("global-v3").activeAttemptCount(),
+      catch: (cause) => cause,
+    }),
+  );
+  const runtime = {
+    version: env.JITNEY_VERSION,
+    scheduler: Result.isSuccess(scheduler) ? ("ok" as const) : ("unknown" as const),
+    container: env.RUNNER_CONTAINERS === undefined ? ("unknown" as const) : ("ok" as const),
+  };
   const { receipt, matches } = yield* readOwnReceipt(env);
-  if (!matches) return unknownStatus(receipt);
+  if (!matches) return unknownStatus(receipt, runtime);
 
   const liveInventory = yield* Effect.result(github.inventory());
-  if (Result.isFailure(liveInventory)) return unknownStatus(receipt);
+  if (Result.isFailure(liveInventory)) return unknownStatus(receipt, runtime);
 
   const ownership: LifecycleStatus["ownership"][number][] = [];
   for (const recordedInstallation of receipt.github.installations) {
@@ -266,6 +284,7 @@ export const lifecycleStatus = Effect.fn("GitHub.lifecycleStatus")(function* (en
   }
 
   return {
+    ...runtime,
     app: "ok",
     installations:
       inventoryKey(liveInventory.success) === inventoryKey(receipt.github.installations)

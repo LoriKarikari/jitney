@@ -30,7 +30,10 @@ function testEnv(value: unknown = receipt): Env {
   return {
     JITNEY_DEPLOYMENT: deploymentId,
     JITNEY_RECEIPT_NAME: "jitney",
+    JITNEY_VERSION: "0.4.0",
     JITNEY_RECEIPTS: { get: () => Promise.resolve(value) },
+    SCHEDULER: { getByName: () => ({ activeAttemptCount: () => Promise.resolve(0) }) },
+    RUNNER_CONTAINERS: {},
   } as unknown as Env;
 }
 
@@ -132,6 +135,9 @@ describe("lifecycle status", () => {
     );
 
     expect(status).toEqual({
+      version: "0.4.0",
+      scheduler: "ok",
+      container: "ok",
       app: "ok",
       installations: "ok",
       ownership: [
@@ -171,6 +177,9 @@ describe("lifecycle status", () => {
     );
 
     expect(status).toEqual({
+      version: "0.4.0",
+      scheduler: "ok",
+      container: "ok",
       app: "ok",
       installations: "drifted",
       ownership: [

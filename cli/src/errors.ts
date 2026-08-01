@@ -21,6 +21,7 @@ export type InstallerStep =
   | "receipt_store"
   | "rollback"
   | "secret_storage"
+  | "upgrade"
   | "worker_deployment";
 
 export class InstallerError extends Data.TaggedError("InstallerError")<{
@@ -44,18 +45,26 @@ export class InstallRollbackError extends Data.TaggedError("InstallRollbackError
   rollbackCause: unknown;
 }> {}
 
+export class UpgradeRollbackError extends Data.TaggedError("UpgradeRollbackError")<{
+  operation: "upgrade" | "rollback";
+  cause: unknown;
+  rollbackCause: unknown;
+}> {}
+
 export type InstallFailure =
   | InstallerError
   | ExistingWorkerError
   | ExistingDeploymentError
-  | InstallRollbackError;
+  | InstallRollbackError
+  | UpgradeRollbackError;
 
 export function isInstallFailure(cause: unknown): cause is InstallFailure {
   return (
     cause instanceof InstallerError ||
     cause instanceof ExistingWorkerError ||
     cause instanceof ExistingDeploymentError ||
-    cause instanceof InstallRollbackError
+    cause instanceof InstallRollbackError ||
+    cause instanceof UpgradeRollbackError
   );
 }
 
@@ -102,6 +111,14 @@ export function renderFailure(error: InstallFailure): string {
   }
   if (error._tag === "InstallRollbackError") {
     return "Installation failed and cleanup was incomplete. The deployment receipt was kept for repair.";
+  }
+  if (error._tag === "UpgradeRollbackError") {
+    const original = error.cause instanceof Error ? error.cause.message : String(error.cause);
+    const rollback =
+      error.rollbackCause instanceof Error
+        ? error.rollbackCause.message
+        : String(error.rollbackCause);
+    return `${error.operation} failed: ${original}\nAutomatic rollback failed: ${rollback}\nProvisioning remains suspended. Run repair.`;
   }
   const detail = error.cause instanceof Error ? `: ${error.cause.message}` : "";
   return `${error.message} (${error.step})${detail}`;

@@ -7,6 +7,7 @@ import { destroyCommand } from "./destroy-command.js";
 import { InstallerError, isInstallFailure, renderFailure, trySync } from "./errors.js";
 import { listCommand } from "./list-command.js";
 import { repairCommand } from "./repair-command.js";
+import { upgradeCommand } from "./upgrade-command.js";
 
 const program = Effect.gen(function* () {
   const { positionals, values } = yield* trySync(
@@ -38,6 +39,8 @@ Commands:
   deploy                       Install a Jitney deployment
   list                         Inspect deployments and report drift
   repair <name>                Reconcile a deployment with its receipt
+  upgrade <name>               Upgrade to this CLI package version
+  rollback <name>              Restore the previous version
   destroy <name>               Remove a deployment and verify zero residue
 
 Options:
@@ -53,6 +56,13 @@ Options:
   -h, --help                   Show this help`),
     );
     return;
+  }
+
+  if (
+    (positionals[0] === "upgrade" || positionals[0] === "rollback") &&
+    positionals.length === 2
+  ) {
+    return yield* upgradeCommand({ name: positionals[1]!, operation: positionals[0] });
   }
 
   if (positionals[0] === "destroy" && positionals.length === 2) {

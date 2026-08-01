@@ -21,6 +21,7 @@ export interface JitneyStackInput {
   version: string;
   organization?: string;
   manageGitHubApp?: boolean;
+  githubConfigured?: boolean;
   uninstallSecret: Redacted.Redacted<string>;
   githubCredentials?: {
     appId: Redacted.Redacted<string>;
@@ -74,7 +75,10 @@ export function jitneyStack(
           date: "2026-07-01",
           flags: ["nodejs_compat"],
         },
-        crons: input.githubCredentials === undefined ? [] : ["*/5 * * * *"],
+        crons:
+          input.githubConfigured === true || input.githubCredentials !== undefined
+            ? ["*/5 * * * *"]
+            : [],
         observability: {
           enabled: true,
           headSamplingRate: 1,

@@ -6,6 +6,8 @@ import {
   orStepError,
   stepError,
   trySync,
+  isInstallFailure,
+  type InstallFailure,
   type InstallerError,
   type InstallerStep,
 } from "./errors.js";
@@ -29,13 +31,11 @@ export type LifecycleCommandServices = Layer.Success<typeof cloudflareRuntime>;
  * resolve the Cloudflare account, require the receipt namespace, connect the
  * store, and wrap unknown failures in the command's step.
  */
-export function runLifecycleCommand<A>(
+export function runLifecycleCommand<A, E extends InstallFailure>(
   step: InstallerStep,
   failureMessage: string,
-  use: (
-    context: LifecycleCommandContext,
-  ) => Effect.Effect<A, InstallerError, LifecycleCommandServices>,
-): Effect.Effect<A, InstallerError> {
+  use: (context: LifecycleCommandContext) => Effect.Effect<A, E, LifecycleCommandServices>,
+): Effect.Effect<A, E | InstallerError> {
   const fail = stepError(step);
   return Effect.gen(function* () {
     const actor = yield* trySync(
@@ -53,5 +53,10 @@ export function runLifecycleCommand<A>(
       Effect.mapError((cause) => fail("Could not connect to the receipt store", cause)),
     );
     return yield* use({ actor, accountId, receipts });
-  }).pipe(Effect.provide(cloudflareRuntime), Effect.mapError(orStepError(step, failureMessage)));
+  }).pipe(
+    Effect.provide(cloudflareRuntime),
+    Effect.mapError((cause) =>
+      isInstallFailure(cause) ? cause : orStepError(step, failureMessage)(cause),
+    ),
+  );
 }

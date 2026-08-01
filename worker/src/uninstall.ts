@@ -35,6 +35,7 @@ export class UninstallPlatform extends Context.Service<
   UninstallPlatform,
   {
     readonly suspendIntake: () => Effect.Effect<void, unknown>;
+    readonly resumeIntake: () => Effect.Effect<void, unknown>;
     readonly suspendInstallations: (ids: readonly number[]) => Effect.Effect<void, unknown>;
     readonly activeAttempts: () => Effect.Effect<number, unknown>;
     readonly deleteOwnership: (
@@ -70,6 +71,11 @@ export const makeUninstallPlatform = (env: Env): UninstallPlatform["Service"] =>
     suspendIntake: () =>
       Effect.tryPromise({
         try: () => scheduler.suspendIntake(),
+        catch: (cause) => new UninstallOperationError({ operation: "scheduler", cause }),
+      }),
+    resumeIntake: () =>
+      Effect.tryPromise({
+        try: () => scheduler.resumeIntake(),
         catch: (cause) => new UninstallOperationError({ operation: "scheduler", cause }),
       }),
     activeAttempts: () =>
@@ -171,11 +177,17 @@ export const executeUninstall = Effect.fn("GitHub.executeUninstall")(function* (
       yield* platform.suspendIntake();
       yield* platform.suspendInstallations(installationIds);
       return { accepted: true } as const;
+    case "suspend_intake":
+      yield* platform.suspendIntake();
+      return { accepted: true } as const;
     case "drain":
       return {
         accepted: true,
         activeAttempts: yield* platform.activeAttempts(),
       } as const;
+    case "resume_intake":
+      yield* platform.resumeIntake();
+      return { accepted: true } as const;
     case "delete_ownership":
       yield* platform.deleteOwnership(receipt.github.installations);
       return { accepted: true } as const;

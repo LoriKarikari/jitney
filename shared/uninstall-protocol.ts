@@ -1,7 +1,9 @@
 /** Wire contract between the CLI and `/lifecycle/uninstall`. */
 export const UNINSTALL_ACTIONS = [
   "suspend",
+  "suspend_intake",
   "drain",
+  "resume_intake",
   "delete_ownership",
   "delete_installations",
 ] as const;

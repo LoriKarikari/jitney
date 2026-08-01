@@ -61,6 +61,26 @@ function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
 describe("Scheduler admission", () => {
   afterEach(disarmSchedulerAlarms);
 
+  it("queues jobs during a drain and creates no attempt until intake resumes", async () => {
+    const scheduler = env.SCHEDULER.getByName("drain-intake");
+    const event = queuedEvent(1000, "delivery-drain");
+
+    await scheduler.suspendIntake();
+    expect(await scheduler.accept(event)).toEqual({ outcome: "accepted" });
+    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+      state: "queued",
+      pending: false,
+    });
+    expect(await scheduler.getAttempts(event.workflowJobId)).toEqual([]);
+
+    await scheduler.resumeIntake();
+    const { action: _action, deliveryId: _deliveryId, ...candidate } = event;
+    expect(await scheduler.reconcile(candidate)).toEqual({
+      outcome: "accepted",
+      runnerName: "jitney-456-1000-1",
+    });
+  });
+
   it("suppresses delivery replay and manual redelivery while an attempt is viable", async () => {
     const scheduler = env.SCHEDULER.getByName("duplicate-delivery");
     const event = queuedEvent(1001, "delivery-1");

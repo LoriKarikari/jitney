@@ -27,6 +27,7 @@ async function fakePlatform(activeAttempts = 0) {
     calls,
     service: UninstallPlatform.of({
       suspendIntake: () => call("suspend_intake"),
+      resumeIntake: () => call("resume_intake"),
       suspendInstallations: (ids) => call(`suspend:${ids.join(",")}`),
       activeAttempts: () => call("active_attempts").pipe(Effect.as(activeAttempts)),
       deleteOwnership: (installations) =>
@@ -93,6 +94,22 @@ describe("uninstall", () => {
     expect(await Effect.runPromise(Ref.get(platform.calls))).toEqual([
       "suspend_intake",
       "suspend:42",
+    ]);
+  });
+
+  it("controls intake without suspending installations during an upgrade", async () => {
+    const platform = await fakePlatform();
+
+    await Effect.runPromise(
+      executeUninstall(receipt, receipt.id, "suspend_intake").pipe(
+        Effect.andThen(executeUninstall(receipt, receipt.id, "resume_intake")),
+        Effect.provideService(UninstallPlatform, platform.service),
+      ),
+    );
+
+    expect(await Effect.runPromise(Ref.get(platform.calls))).toEqual([
+      "suspend_intake",
+      "resume_intake",
     ]);
   });
 

@@ -84,6 +84,9 @@ describe("worker entrypoint", () => {
 
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
+        version: "dev",
+        scheduler: "ok",
+        container: "ok",
         app: "unknown",
         installations: "unknown",
         ownership: [],
@@ -183,7 +186,7 @@ describe("worker entrypoint", () => {
     expect(response.status).toBe(204);
   });
 
-  it("ignores new queued jobs after uninstall suspends intake", async () => {
+  it("queues new jobs without provisioning while intake is suspended", async () => {
     const scheduler = env.SCHEDULER.getByName("global-v3");
     await scheduler.suspendIntake();
     try {
@@ -201,7 +204,8 @@ describe("worker entrypoint", () => {
       });
 
       expect(response.status).toBe(202);
-      expect(await scheduler.getJob(790)).toBeUndefined();
+      expect(await scheduler.getJob(790)).toMatchObject({ state: "queued", pending: false });
+      expect(await scheduler.getAttempts(790)).toEqual([]);
     } finally {
       await scheduler.resumeIntake();
     }

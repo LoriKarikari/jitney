@@ -145,7 +145,7 @@ const assertDeploymentAbsent = Effect.fn(function* (name: string, receipts: Rece
   }
 });
 
-function packageVersion(): Effect.Effect<string, InstallerError> {
+export function packageVersion(): Effect.Effect<string, InstallerError> {
   return tryPromise("filesystem", "Could not read the Jitney package version", () =>
     readFile(new URL("../package.json", import.meta.url), "utf8"),
   ).pipe(

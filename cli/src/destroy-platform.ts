@@ -1,23 +1,20 @@
-import * as Workers from "@distilled.cloud/cloudflare/workers";
 import { randomBytes } from "node:crypto";
 import { writeFile } from "node:fs/promises";
 import { Effect, Option, Ref, Schedule, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
-import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import { destroyDeploymentStack } from "./alchemy/destroy-deployment.js";
 import { observeAccount } from "./cloudflare-inventory.js";
 import { captureCloudflareServices } from "./cloudflare-runtime.js";
 import { DestroyPlatform, renderDestroyPlan, type DestroyPlan } from "./destroy.js";
-import { InstallerError, orStepError, stepError, tryPromise } from "./errors.js";
+import { orStepError, stepError, tryPromise } from "./errors.js";
 import {
   openGitHubAppDeletionFor,
   waitForGitHubAppDeletionFor,
   type GitHubAppIdentity,
 } from "./github-app.js";
-import { workerAddress } from "./lifecycle-status-client.js";
 import { confirmInTerminal } from "./prompt.js";
 import { ownershipEnvironmentName } from "@jitney/shared/ownership-marker";
-import { mintOperationSecret, type UninstallAction } from "@jitney/shared/uninstall-protocol";
+import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
 import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
 import {
   DeploymentReceiptSchema,
@@ -29,6 +26,7 @@ import {
   garbageCollectRunnerLayers,
   listRunnerImageTags,
 } from "./runner-image-registry.js";
+import { makeWorkerLifecycleClient } from "./worker-lifecycle-client.js";
 
 const DrainResponse = Schema.Struct({ activeAttempts: Schema.Number });
 const operationSecret = (): string =>
@@ -52,7 +50,7 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
   const accumulatedResidue = yield* Ref.make<DestroyResidue[]>([]);
   const exportedPath = yield* Ref.make<Option.Option<string>>(Option.none());
   const uninstallSecret = operationSecret();
-  const uninstallSecretInstalled = yield* Ref.make(false);
+  const lifecycle = yield* makeWorkerLifecycleClient(cloudflare, "destroy", uninstallSecret);
 
   const addResidue = (residue: readonly DestroyResidue[]) =>
     Ref.update(accumulatedResidue, (current) => [...current, ...residue]);
@@ -74,61 +72,6 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
       ),
     );
 
-  const callUninstall = (receipt: DeploymentReceipt, action: UninstallAction) =>
-    Effect.gen(function* () {
-      const worker = yield* provideCloudflare(
-        workerAddress(receipt.cloudflare.accountId, receipt.cloudflare.workerName),
-      );
-      if (!worker.exists || worker.url === null) return Option.none<unknown>();
-      if (!(yield* Ref.get(uninstallSecretInstalled))) {
-        const installed = yield* provideCloudflare(
-          Workers.putScriptSecret({
-            accountId: receipt.cloudflare.accountId,
-            scriptName: receipt.cloudflare.workerName,
-            name: "JITNEY_UNINSTALL_SECRET",
-            text: uninstallSecret,
-            type: "secret_text",
-          }),
-        ).pipe(
-          Effect.as(true),
-          Effect.catchTag("WorkerNotFound", () => Effect.succeed(false)),
-        );
-        if (!installed) return Option.none<unknown>();
-        yield* Ref.set(uninstallSecretInstalled, true);
-      }
-      const request = HttpClientRequest.bodyJsonUnsafe(
-        HttpClientRequest.post(`${worker.url}/lifecycle/uninstall`, {
-          headers: {
-            Authorization: `Bearer ${uninstallSecret}`,
-            "X-Jitney-Deployment": receipt.id,
-          },
-        }),
-        { action },
-      );
-      let response = yield* client.execute(request);
-      for (let attempt = 0; response.status === 401 && attempt < 59; attempt++) {
-        yield* Effect.sleep("1 second");
-        response = yield* client.execute(request);
-      }
-      if (response.status === 401) {
-        return yield* new InstallerError({
-          step: "destroy",
-          message: "The Worker has not activated the uninstall secret yet",
-        });
-      }
-      if (response.status !== 204 && response.status !== 200) {
-        // The Worker answers 404 when the deployment identity does not match.
-        const message =
-          response.status === 404
-            ? `The Worker for ${receipt.cloudflare.workerName} does not recognize deployment ${receipt.id}. Run repair first.`
-            : `Uninstall ${action} returned ${response.status}`;
-        return yield* Effect.fail(new InstallerError({ step: "destroy", message }));
-      }
-      return response.status === 200
-        ? Option.some(yield* response.json)
-        : Option.some<unknown>(undefined);
-    }).pipe(Effect.mapError(orStepError("destroy", `Could not run uninstall ${action}`)));
-
   const exportReceipt = (receipt: DeploymentReceipt, path: string) =>
     writeExport(path, receipt, null).pipe(Effect.andThen(Ref.set(exportedPath, Option.some(path))));
 
@@ -142,10 +85,10 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
           accept: (answer) => answer === plan.name,
         });
   const suspend = (receipt: DeploymentReceipt) =>
-    callUninstall(receipt, "suspend").pipe(Effect.asVoid);
+    lifecycle.call(receipt, "suspend").pipe(Effect.asVoid);
   const drain = (receipt: DeploymentReceipt) => {
     const pending = fail(`Runner Attempts are still active for ${receipt.name}`);
-    return callUninstall(receipt, "drain").pipe(
+    return lifecycle.call(receipt, "drain").pipe(
       Effect.flatMap(
         Option.match({
           onNone: () => Effect.void,
@@ -167,7 +110,7 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
     );
   };
   const deleteOwnership = (receipt: DeploymentReceipt) =>
-    callUninstall(receipt, "delete_ownership").pipe(
+    lifecycle.call(receipt, "delete_ownership").pipe(
       Effect.flatMap(
         Option.match({
           onSome: () => Effect.void,
@@ -184,7 +127,7 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
       ),
     );
   const deleteInstallations = (receipt: DeploymentReceipt) =>
-    callUninstall(receipt, "delete_installations").pipe(Effect.asVoid);
+    lifecycle.call(receipt, "delete_installations").pipe(Effect.asVoid);
   const destroyCloudflare = (receipt: DeploymentReceipt) =>
     provideCloudflare(destroyDeploymentStack(receipt));
   const pruneImages = (receipt: DeploymentReceipt, protectedTags: ReadonlySet<string>) =>

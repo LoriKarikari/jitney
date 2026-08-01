@@ -1,8 +1,10 @@
 import * as Containers from "@distilled.cloud/cloudflare/containers";
 import type { Credentials } from "@distilled.cloud/cloudflare/Credentials";
+import { sha256Object } from "alchemy/Util/sha256";
 import { Effect, Schema } from "effect";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import { InstallerError, type InstallerStep } from "./errors.js";
+import { copyImage } from "./oras.js";
 
 const REGISTRY_HOST = "registry.cloudflare.com";
 const RegistryTags = Schema.Struct({
@@ -47,6 +49,24 @@ const scratchCredentials = (
         : Effect.succeed({ username, password: registry.password });
     }),
   );
+
+export const copyRunnerImage = (
+  accountId: string,
+  repository: string,
+  version: string,
+): Effect.Effect<string, InstallerError, CloudflareApi> =>
+  Effect.gen(function* () {
+    const source = `ghcr.io/lorikarikari/jitney:${version}`;
+    const tag = (yield* sha256Object({ image: source })).slice(0, 16);
+    const credentials = yield* scratchCredentials(accountId, ["push"], "registry_copy");
+    yield* copyImage({
+      source,
+      destination: `${REGISTRY_HOST}/${accountId}/${repository}:${tag}`,
+      registryHost: REGISTRY_HOST,
+      ...credentials,
+    });
+    return tag;
+  });
 
 export const listRunnerImageTags = (
   accountId: string,

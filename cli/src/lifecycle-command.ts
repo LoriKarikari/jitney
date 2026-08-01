@@ -8,6 +8,7 @@ import {
   trySync,
   isInstallFailure,
   type InstallFailure,
+  type InstallerError,
   type InstallerStep,
 } from "./errors.js";
 import {
@@ -30,13 +31,13 @@ export type LifecycleCommandServices = Layer.Success<typeof cloudflareRuntime>;
  * resolve the Cloudflare account, require the receipt namespace, connect the
  * store, and wrap unknown failures in the command's step.
  */
-export function runLifecycleCommand<A>(
+export function runLifecycleCommand<A, E extends InstallFailure>(
   step: InstallerStep,
   failureMessage: string,
   use: (
     context: LifecycleCommandContext,
-  ) => Effect.Effect<A, InstallFailure, LifecycleCommandServices>,
-): Effect.Effect<A, InstallFailure> {
+  ) => Effect.Effect<A, E, LifecycleCommandServices>,
+): Effect.Effect<A, E | InstallerError> {
   const fail = stepError(step);
   return Effect.gen(function* () {
     const actor = yield* trySync(

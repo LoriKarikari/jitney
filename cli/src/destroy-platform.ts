@@ -105,20 +105,17 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
         }),
         { action },
       );
-      const secretPending = new InstallerError({
-        step: "destroy",
-        message: "The Worker has not activated the uninstall secret yet",
-      });
-      const response = yield* client.execute(request).pipe(
-        Effect.flatMap((response) =>
-          response.status === 401 ? Effect.fail(secretPending) : Effect.succeed(response),
-        ),
-        Effect.retry({
-          while: (error) => error === secretPending,
-          times: 59,
-          schedule: Schedule.spaced("1 second"),
-        }),
-      );
+      let response = yield* client.execute(request);
+      for (let attempt = 0; response.status === 401 && attempt < 59; attempt++) {
+        yield* Effect.sleep("1 second");
+        response = yield* client.execute(request);
+      }
+      if (response.status === 401) {
+        return yield* new InstallerError({
+          step: "destroy",
+          message: "The Worker has not activated the uninstall secret yet",
+        });
+      }
       if (response.status !== 204 && response.status !== 200) {
         // The Worker answers 404 when the deployment identity does not match.
         const message =
@@ -287,9 +284,9 @@ export const makeDestroyPlatform = Effect.fn(function* (assumeYes: boolean) {
           yield* deleteOwnership(receipt);
         }
         if (hasInstallations) yield* deleteInstallations(receipt);
+        yield* deleteApp(receipt);
         yield* destroyCloudflare(receipt);
         yield* pruneImages(receipt, protectedTags);
-        yield* deleteApp(receipt);
         return yield* verify(receipt);
       }),
   });

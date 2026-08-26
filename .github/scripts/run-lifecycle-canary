@@ -5,15 +5,14 @@ stage=${1:?canary stage is required}
 marker="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$stage"
 title="Jitney canary / $marker"
 
-gh workflow run "$CANARY_WORKFLOW" --repo "$CANARY_REPOSITORY" --ref main -f correlation="$marker"
+gh workflow run jitney.yml --repo LoriKarikari/jitney-test --ref main -f correlation="$marker"
 
-run_id=""
 for _ in {1..30}; do
-  run_id=$(gh api "/repos/$CANARY_REPOSITORY/actions/workflows/$CANARY_WORKFLOW/runs?event=workflow_dispatch&per_page=20" \
+  run_id=$(gh api "/repos/LoriKarikari/jitney-test/actions/workflows/jitney.yml/runs?event=workflow_dispatch&per_page=20" \
     --jq ".workflow_runs | map(select(.display_title == \"$title\")) | .[0].id // empty")
   [[ -n "$run_id" ]] && break
   sleep 2
 done
 
 [[ -n "$run_id" ]]
-gh run watch "$run_id" --repo "$CANARY_REPOSITORY" --exit-status --interval 5
+gh run watch "$run_id" --repo LoriKarikari/jitney-test --exit-status --interval 5

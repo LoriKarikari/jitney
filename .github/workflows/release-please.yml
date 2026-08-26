@@ -92,10 +92,7 @@ jobs:
 
   lifecycle_smoke:
     needs: [release_please, publish_cli, publish_runner_image]
-    if: >-
-      needs.release_please.outputs.release_created == 'true' &&
-      needs.publish_cli.result == 'success' &&
-      needs.publish_runner_image.result == 'success'
+    if: needs.release_please.outputs.release_created == 'true'
     permissions:
       contents: read
     uses: ./.github/workflows/lifecycle-smoke.yml

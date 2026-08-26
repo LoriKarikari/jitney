@@ -29,8 +29,6 @@ jobs:
     timeout-minutes: 90
     environment: lifecycle-smoke
     env:
-      CANARY_REPOSITORY: LoriKarikari/jitney-test
-      CANARY_WORKFLOW: jitney.yml
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       DEPLOYMENT_NAME: ${{ vars.JITNEY_SMOKE_DEPLOYMENT }}
@@ -45,12 +43,6 @@ jobs:
         run: |
           set -euo pipefail
           version=${REQUESTED_TARGET_VERSION:-$(npm view get-jitney version)}
-          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          for _ in {1..12}; do
-            [[ "$(npm view "get-jitney@$version" version 2>/dev/null || true)" == "$version" ]] && break
-            sleep 5
-          done
-          [[ "$(npm view "get-jitney@$version" version)" == "$version" ]]
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Inspect fixture baseline

@@ -98,7 +98,6 @@ jobs:
       needs.publish_runner_image.result == 'success'
     permissions:
       contents: read
-      issues: write
     uses: ./.github/workflows/lifecycle-smoke.yml
     with:
       target_version: ${{ needs.release_please.outputs.version }}

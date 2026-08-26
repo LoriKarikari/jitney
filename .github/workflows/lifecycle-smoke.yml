@@ -24,328 +24,117 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  prepare:
-    name: Prepare and inspect baseline
+  smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90
     environment: lifecycle-smoke
-    permissions:
-      contents: read
-    outputs:
-      deployment_name: ${{ steps.prepare.outputs.deployment_name }}
-      rollback_version: ${{ steps.prepare.outputs.rollback_version }}
-      target_version: ${{ steps.prepare.outputs.target_version }}
     env:
+      CANARY_REPOSITORY: LoriKarikari/jitney-test
+      CANARY_WORKFLOW: jitney.yml
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       DEPLOYMENT_NAME: ${{ vars.JITNEY_SMOKE_DEPLOYMENT }}
+      GH_TOKEN: ${{ secrets.JITNEY_SMOKE_GITHUB_TOKEN }}
       REQUESTED_TARGET_VERSION: ${{ inputs.target_version }}
     steps:
-      - name: Resolve target and inspect baseline
-        id: prepare
+      - uses: actions/checkout@v7
+
+      - name: Resolve published target
+        id: target
         shell: bash
         run: |
-          set -Eeuo pipefail
-          baseline_inventory="$RUNNER_TEMP/baseline-inventory.json"
-          printf '{}\n' > "$baseline_inventory"
-          [[ -n "$CLOUDFLARE_ACCOUNT_ID" ]]
-          [[ -n "$CLOUDFLARE_API_TOKEN" ]]
-          [[ -n "$DEPLOYMENT_NAME" ]]
-
-          target_version="$REQUESTED_TARGET_VERSION"
-          if [[ -z "$target_version" ]]; then
-            target_version=$(npm view get-jitney version)
-          fi
-          [[ "$target_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
-          published_version=""
+          set -euo pipefail
+          version=${REQUESTED_TARGET_VERSION:-$(npm view get-jitney version)}
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]
           for _ in {1..12}; do
-            published_version=$(npm view "get-jitney@$target_version" version 2>/dev/null || true)
-            [[ "$published_version" == "$target_version" ]] && break
+            [[ "$(npm view "get-jitney@$version" version 2>/dev/null || true)" == "$version" ]] && break
             sleep 5
           done
-          [[ "$published_version" == "$target_version" ]]
+          [[ "$(npm view "get-jitney@$version" version)" == "$version" ]]
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
-          npx --yes --package "get-jitney@$target_version" -- jitney list --json > "$baseline_inventory"
+      - name: Inspect fixture baseline
+        id: baseline
+        env:
+          TARGET_VERSION: ${{ steps.target.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$CLOUDFLARE_API_TOKEN" && -n "$DEPLOYMENT_NAME" && -n "$GH_TOKEN" ]]
+          npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney list --json > "$RUNNER_TEMP/baseline.json"
           jq -e --arg name "$DEPLOYMENT_NAME" '
-            (.deployments | type) == "array" and
-            (.deployments | length) == 1 and
-            .deployments[0].name == $name and
-            .deployments[0].phase == "active" and
+            (.deployments | type) == "array" and (.deployments | length) == 1 and
+            .deployments[0].name == $name and .deployments[0].phase == "active" and
             .deployments[0].health == "ok" and
             (.deployments[0].version | type) == "string" and
-            (.deployments[0].version | length) > 0 and
             (.deployments[0].previousVersion | type) == "string" and
-            (.deployments[0].previousVersion | length) > 0 and
             .deployments[0].version != .deployments[0].previousVersion and
-            (.deployments[0].findings | type) == "array" and
-            (.deployments[0].findings | length) == 0 and
-            (.orphans | type) == "array" and
-            (.orphans | length) == 0 and
-            (.accountFindings | type) == "array" and
-            (.accountFindings | length) == 0
-          ' "$baseline_inventory" > /dev/null
+            (.deployments[0].findings | type) == "array" and (.deployments[0].findings | length) == 0 and
+            (.orphans | type) == "array" and (.orphans | length) == 0 and
+            (.accountFindings | type) == "array" and (.accountFindings | length) == 0
+          ' "$RUNNER_TEMP/baseline.json" > /dev/null
+          current=$(jq -r '.deployments[0].version' "$RUNNER_TEMP/baseline.json")
+          previous=$(jq -r '.deployments[0].previousVersion' "$RUNNER_TEMP/baseline.json")
+          [[ "$current" == "$TARGET_VERSION" ]] && rollback=$previous || rollback=$current
+          printf 'rollback_version=%s\n' "$rollback" >> "$GITHUB_OUTPUT"
 
-          baseline_version=$(jq -r '.deployments[0].version' "$baseline_inventory")
-          previous_version=$(jq -r '.deployments[0].previousVersion' "$baseline_inventory")
-          rollback_version="$baseline_version"
-          if [[ "$baseline_version" == "$target_version" ]]; then
-            rollback_version="$previous_version"
-          fi
-          {
-            printf 'deployment_name=%s\n' "$DEPLOYMENT_NAME"
-            printf 'rollback_version=%s\n' "$rollback_version"
-            printf 'target_version=%s\n' "$target_version"
-          } >> "$GITHUB_OUTPUT"
-      - name: Upload baseline inventory
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: lifecycle-smoke-baseline-${{ github.run_id }}
-          path: ${{ runner.temp }}/baseline-inventory.json
-          if-no-files-found: warn
-          retention-days: 30
+      - name: Run baseline canary
+        run: .github/scripts/run-lifecycle-canary baseline
 
-  baseline_canary:
-    name: Baseline canary
-    needs: prepare
-    uses: ./.github/workflows/lifecycle-canary.yml
-    with:
-      stage: baseline
+      - name: Upgrade
+        env:
+          TARGET_VERSION: ${{ steps.target.outputs.version }}
+        run: npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney upgrade "$DEPLOYMENT_NAME"
 
-  upgrade:
-    name: Upgrade
-    needs: [prepare, baseline_canary]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: lifecycle-smoke
-    permissions:
-      contents: read
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      DEPLOYMENT_NAME: ${{ needs.prepare.outputs.deployment_name }}
-      TARGET_VERSION: ${{ needs.prepare.outputs.target_version }}
-    steps:
-      - run: npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney upgrade "$DEPLOYMENT_NAME"
+      - name: Run upgraded canary
+        run: .github/scripts/run-lifecycle-canary upgraded
 
-  upgraded_canary:
-    name: Upgraded canary
-    needs: upgrade
-    uses: ./.github/workflows/lifecycle-canary.yml
-    with:
-      stage: upgraded
-
-  rollback:
-    name: Roll back
-    needs: [prepare, upgraded_canary]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: lifecycle-smoke
-    permissions:
-      contents: read
-    env:
-      ROLLBACK_VERSION: ${{ needs.prepare.outputs.rollback_version }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      DEPLOYMENT_NAME: ${{ needs.prepare.outputs.deployment_name }}
-      TARGET_VERSION: ${{ needs.prepare.outputs.target_version }}
-    steps:
-      - name: Roll back and verify version
+      - name: Roll back
+        env:
+          ROLLBACK_VERSION: ${{ steps.baseline.outputs.rollback_version }}
+          TARGET_VERSION: ${{ steps.target.outputs.version }}
         shell: bash
         run: |
-          set -Eeuo pipefail
-          jitney() {
-            npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney "$@"
-          }
-          jitney rollback "$DEPLOYMENT_NAME"
-          jitney list --json | jq -e --arg name "$DEPLOYMENT_NAME" --arg version "$ROLLBACK_VERSION" '
-            (.deployments | type) == "array" and
-            (.deployments | length) == 1 and
-            .deployments[0].name == $name and
-            .deployments[0].version == $version
-          ' > /dev/null
+          set -euo pipefail
+          npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney rollback "$DEPLOYMENT_NAME"
+          npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney list --json |
+            jq -e --arg name "$DEPLOYMENT_NAME" --arg version "$ROLLBACK_VERSION" \
+              '.deployments[0].name == $name and .deployments[0].version == $version' > /dev/null
 
-  rolled_back_canary:
-    name: Rolled-back canary
-    needs: rollback
-    uses: ./.github/workflows/lifecycle-canary.yml
-    with:
-      stage: rolled-back
+      - name: Run rolled-back canary
+        run: .github/scripts/run-lifecycle-canary rolled-back
 
-  roll_forward:
-    name: Roll forward
-    needs: [prepare, rolled_back_canary]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    environment: lifecycle-smoke
-    permissions:
-      contents: read
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      DEPLOYMENT_NAME: ${{ needs.prepare.outputs.deployment_name }}
-      TARGET_VERSION: ${{ needs.prepare.outputs.target_version }}
-    steps:
-      - run: npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney upgrade "$DEPLOYMENT_NAME"
+      - name: Roll forward
+        env:
+          TARGET_VERSION: ${{ steps.target.outputs.version }}
+        run: npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney upgrade "$DEPLOYMENT_NAME"
 
-  final_canary:
-    name: Final canary
-    needs: roll_forward
-    uses: ./.github/workflows/lifecycle-canary.yml
-    with:
-      stage: final
+      - name: Run final canary
+        run: .github/scripts/run-lifecycle-canary final
 
-  final_verification:
-    name: Final verification
-    if: ${{ always() && needs.prepare.result == 'success' }}
-    needs: [prepare, final_canary]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: lifecycle-smoke
-    permissions:
-      contents: read
-    env:
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      DEPLOYMENT_NAME: ${{ needs.prepare.outputs.deployment_name }}
-      TARGET_VERSION: ${{ needs.prepare.outputs.target_version }}
-    steps:
-      - name: Inspect final deployment
+      - name: Verify final fixture
+        env:
+          TARGET_VERSION: ${{ steps.target.outputs.version }}
         shell: bash
         run: |
-          set -Eeuo pipefail
-          final_inventory="$RUNNER_TEMP/final-inventory.json"
-          printf '{}\n' > "$final_inventory"
-          npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney list --json > "$final_inventory"
+          set -euo pipefail
+          npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney list --json > "$RUNNER_TEMP/final.json"
           jq -e --arg name "$DEPLOYMENT_NAME" --arg version "$TARGET_VERSION" '
-            (.deployments | type) == "array" and
-            (.deployments | length) == 1 and
-            .deployments[0].name == $name and
-            .deployments[0].phase == "active" and
-            .deployments[0].health == "ok" and
-            .deployments[0].version == $version and
-            (.deployments[0].previousVersion | type) == "string" and
-            (.deployments[0].previousVersion | length) > 0 and
-            (.deployments[0].findings | type) == "array" and
-            (.deployments[0].findings | length) == 0 and
-            (.orphans | type) == "array" and
-            (.orphans | length) == 0 and
-            (.accountFindings | type) == "array" and
-            (.accountFindings | length) == 0
-          ' "$final_inventory" > /dev/null
-      - name: Upload final inventory
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: lifecycle-smoke-final-${{ github.run_id }}
-          path: ${{ runner.temp }}/final-inventory.json
-          if-no-files-found: warn
-          retention-days: 30
+            (.deployments | type) == "array" and (.deployments | length) == 1 and
+            .deployments[0].name == $name and .deployments[0].phase == "active" and
+            .deployments[0].health == "ok" and .deployments[0].version == $version and
+            (.deployments[0].findings | type) == "array" and (.deployments[0].findings | length) == 0 and
+            (.orphans | type) == "array" and (.orphans | length) == 0 and
+            (.accountFindings | type) == "array" and (.accountFindings | length) == 0
+          ' "$RUNNER_TEMP/final.json" > /dev/null
 
-  report:
-    name: Report and upload evidence
-    if: ${{ always() }}
-    needs:
-      - prepare
-      - baseline_canary
-      - upgrade
-      - upgraded_canary
-      - rollback
-      - rolled_back_canary
-      - roll_forward
-      - final_canary
-      - final_verification
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      issues: write
-    steps:
-      - name: Build ordered result ledger
-        id: ledger
-        shell: bash
-        env:
-          PREPARE_RESULT: ${{ needs.prepare.result }}
-          BASELINE_CANARY_RESULT: ${{ needs.baseline_canary.result }}
-          UPGRADE_RESULT: ${{ needs.upgrade.result }}
-          UPGRADED_CANARY_RESULT: ${{ needs.upgraded_canary.result }}
-          ROLLBACK_RESULT: ${{ needs.rollback.result }}
-          ROLLED_BACK_CANARY_RESULT: ${{ needs.rolled_back_canary.result }}
-          ROLL_FORWARD_RESULT: ${{ needs.roll_forward.result }}
-          FINAL_CANARY_RESULT: ${{ needs.final_canary.result }}
-          FINAL_VERIFICATION_RESULT: ${{ needs.final_verification.result }}
-        run: |
-          ledger="$RUNNER_TEMP/lifecycle-smoke-ledger.md"
-          printf '%s\n' '# Lifecycle smoke result ledger' '' '| Order | Job | Result |' '| ---: | --- | --- |' > "$ledger"
-          results=(
-            "$PREPARE_RESULT"
-            "$BASELINE_CANARY_RESULT"
-            "$UPGRADE_RESULT"
-            "$UPGRADED_CANARY_RESULT"
-            "$ROLLBACK_RESULT"
-            "$ROLLED_BACK_CANARY_RESULT"
-            "$ROLL_FORWARD_RESULT"
-            "$FINAL_CANARY_RESULT"
-            "$FINAL_VERIFICATION_RESULT"
-          )
-          names=(
-            'Prepare and inspect baseline'
-            'Baseline canary'
-            'Upgrade'
-            'Upgraded canary'
-            'Roll back'
-            'Rolled-back canary'
-            'Roll forward'
-            'Final canary'
-            'Final verification'
-          )
-          failed=false
-          failed_job=""
-          for index in "${!results[@]}"; do
-            printf '| %d | %s | `%s` |\n' "$((index + 1))" "${names[$index]}" "${results[$index]}" >> "$ledger"
-            if [[ "${results[$index]}" != success ]]; then
-              failed=true
-              [[ -n "$failed_job" ]] || failed_job="${names[$index]}"
-            fi
-          done
-          cat "$ledger" >> "$GITHUB_STEP_SUMMARY"
-          {
-            printf 'failed=%s\n' "$failed"
-            printf 'failed_job=%s\n' "$failed_job"
-          } >> "$GITHUB_OUTPUT"
-      - name: Report failure
-        if: steps.ledger.outputs.failed == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          DEPLOYMENT_NAME: ${{ needs.prepare.outputs.deployment_name }}
-          REQUESTED_TARGET_VERSION: ${{ inputs.target_version }}
-          TARGET_VERSION: ${{ needs.prepare.outputs.target_version }}
-          FAILED_JOB: ${{ steps.ledger.outputs.failed_job }}
-        run: |
-          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          title='ci: live lifecycle smoke failure'
-          {
-            printf 'The protected lifecycle smoke failed.\n\n'
-            printf -- '- Run: %s\n' "$run_url"
-            printf -- '- Failed job: `%s`\n' "$FAILED_JOB"
-            printf -- '- Deployment: `%s`\n' "${DEPLOYMENT_NAME:-unknown}"
-            printf -- '- Target: `%s`\n\n' "${TARGET_VERSION:-${REQUESTED_TARGET_VERSION:-latest}}"
-            printf 'The ordered result ledger and available inventories are attached to the workflow run.\n'
-          } > "$RUNNER_TEMP/failure-report.md"
-          issue=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
-            --json number,title --jq '[.[] | select(.title == "ci: live lifecycle smoke failure")][0].number // empty')
-          if [[ -n "$issue" ]]; then
-            gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/failure-report.md"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
-              --body-file "$RUNNER_TEMP/failure-report.md"
-          fi
-      - name: Upload result ledger
+      - name: Upload inventories
         if: ${{ always() }}
         uses: actions/upload-artifact@v6
         with:
-          name: lifecycle-smoke-ledger-${{ github.run_id }}
-          path: ${{ runner.temp }}/lifecycle-smoke-ledger.md
-          if-no-files-found: error
+          name: lifecycle-smoke-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/baseline.json
+            ${{ runner.temp }}/final.json
+          if-no-files-found: warn
           retention-days: 30

@@ -25,6 +25,7 @@ concurrency:
 
 jobs:
   smoke:
+    if: vars.JITNEY_SMOKE_DEPLOYMENT != ''
     runs-on: ubuntu-latest
     timeout-minutes: 90
     environment: lifecycle-smoke

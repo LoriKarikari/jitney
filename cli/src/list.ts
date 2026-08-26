@@ -70,6 +70,7 @@ interface DeploymentStatus {
   readonly deploymentId: string;
   readonly phase: DeploymentReceipt["phase"];
   readonly version: string | null;
+  readonly previousVersion: string | null;
   readonly health: Exclude<ResourceClass, "orphan">;
   readonly repositoryCount: number;
   readonly appSlug: string | null;
@@ -405,6 +406,7 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
       deploymentId: receipt.id,
       phase: receipt.phase,
       version: receipt.versions.current,
+      previousVersion: receipt.versions.previous,
       health: statusFromFindings(actionableFindings),
       repositoryCount: receipt.github.installations.reduce(
         (count, installation) => count + installation.repositories.length,

@@ -32,6 +32,7 @@ function fixtureReceipt(overrides?: {
   name?: string;
   id?: string;
   version?: string;
+  previousVersion?: string;
 }): DeploymentReceipt {
   const name = overrides?.name ?? "jitney";
   const version = overrides?.version ?? "0.3.0";
@@ -58,7 +59,11 @@ function fixtureReceipt(overrides?: {
     },
     autoUpgrade: { enabled: true, channel: "patch" },
   });
-  return { ...base, phase: "active" };
+  return {
+    ...base,
+    phase: "active",
+    versions: { current: version, previous: overrides?.previousVersion ?? null },
+  };
 }
 
 const healthyApplications: LiveApplication[] = [
@@ -135,6 +140,7 @@ describe("list drift classification", () => {
       deploymentId: "01JVQ8B95TQZD1P6DE00DE0001",
       phase: "active",
       version: "0.3.0",
+      previousVersion: null,
       health: "ok",
       repositoryCount: 1,
       appSlug: "jitney-x7k2",
@@ -143,6 +149,15 @@ describe("list drift classification", () => {
     });
     expect(report.orphans).toEqual([]);
     expect(report.latestVersion).toBe("0.3.0");
+  });
+
+  it("exposes the previous version in the JSON report", async () => {
+    const report = await runList([fixtureReceipt({ previousVersion: "0.2.0" })], fakePlatform());
+
+    expect(report.deployments[0]).toMatchObject({
+      version: "0.3.0",
+      previousVersion: "0.2.0",
+    });
   });
 
   it("classifies an absent Worker as missing", async () => {

@@ -89,3 +89,12 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+
+  lifecycle_smoke:
+    needs: [release_please, publish_cli, publish_runner_image]
+    if: needs.release_please.outputs.release_created == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/lifecycle-smoke.yml
+    with:
+      target_version: ${{ needs.release_please.outputs.version }}

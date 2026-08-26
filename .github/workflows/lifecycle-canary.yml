@@ -1,0 +1,43 @@
+name: Lifecycle canary
+
+on:
+  workflow_call:
+    inputs:
+      stage:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: lifecycle-smoke
+    env:
+      CANARY_GH_TOKEN: ${{ secrets.JITNEY_SMOKE_GITHUB_TOKEN }}
+      CANARY_REPOSITORY: LoriKarikari/jitney-test
+      CANARY_WORKFLOW: jitney.yml
+      STAGE: ${{ inputs.stage }}
+    steps:
+      - name: Dispatch and wait for canary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$CANARY_GH_TOKEN" ]]
+          marker="$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$STAGE"
+          title="Jitney canary / $marker"
+          GH_TOKEN="$CANARY_GH_TOKEN" gh workflow run "$CANARY_WORKFLOW" \
+            --repo "$CANARY_REPOSITORY" --ref main -f correlation="$marker"
+          run_id=""
+          for _ in {1..30}; do
+            run_id=$(GH_TOKEN="$CANARY_GH_TOKEN" gh api \
+              "/repos/$CANARY_REPOSITORY/actions/workflows/$CANARY_WORKFLOW/runs?event=workflow_dispatch&per_page=20" \
+              --jq ".workflow_runs | map(select(.display_title == \"$title\")) | .[0].id // empty")
+            [[ -n "$run_id" ]] && break
+            sleep 2
+          done
+          [[ -n "$run_id" ]]
+          GH_TOKEN="$CANARY_GH_TOKEN" gh run watch "$run_id" \
+            --repo "$CANARY_REPOSITORY" --exit-status --interval 5

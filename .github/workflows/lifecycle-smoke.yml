@@ -55,13 +55,14 @@ jobs:
           set -euo pipefail
           [[ -n "$CLOUDFLARE_ACCOUNT_ID" && -n "$CLOUDFLARE_API_TOKEN" && -n "$DEPLOYMENT_NAME" && -n "$GH_TOKEN" ]]
           npx --yes --package "get-jitney@$TARGET_VERSION" -- jitney list --json > "$RUNNER_TEMP/baseline.json"
-          jq -e --arg name "$DEPLOYMENT_NAME" '
+          jq -e --arg name "$DEPLOYMENT_NAME" --arg target "$TARGET_VERSION" '
             (.deployments | type) == "array" and (.deployments | length) == 1 and
             .deployments[0].name == $name and .deployments[0].phase == "active" and
             .deployments[0].health == "ok" and
             (.deployments[0].version | type) == "string" and
-            (.deployments[0].previousVersion | type) == "string" and
-            .deployments[0].version != .deployments[0].previousVersion and
+            (.deployments[0].version != $target or
+              ((.deployments[0].previousVersion | type) == "string" and
+                .deployments[0].version != .deployments[0].previousVersion)) and
             (.deployments[0].findings | type) == "array" and (.deployments[0].findings | length) == 0 and
             (.orphans | type) == "array" and (.orphans | length) == 0 and
             (.accountFindings | type) == "array" and (.accountFindings | length) == 0

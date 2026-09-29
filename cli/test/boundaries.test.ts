@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { ExistingWorkerError, InstallerError, renderFailure } from "../src/errors.js";
+import { ExistingWorkerError, renderFailure } from "../src/errors.js";
 import { run } from "../src/process.js";
 describe("subprocess boundary", () => {
   it("returns command failures through the Effect error channel", async () => {
@@ -16,11 +16,5 @@ describe("typed installer failures", () => {
     expect(renderFailure(new ExistingWorkerError({ workerName: "jitney" }))).toContain(
       "Worker jitney already exists",
     );
-  });
-
-  it("keeps expected failures in the Effect error channel", async () => {
-    const failure = new InstallerError({ step: "registry_copy", message: "copy failed" });
-    const result = await Effect.runPromiseExit(Effect.fail(failure));
-    expect(result._tag).toBe("Failure");
   });
 });

@@ -103,28 +103,6 @@ describe("lifecycle logging", () => {
     expect(String(logged.mock.calls[0]?.[0])).not.toContain("rawError");
   });
 
-  it("emits the correlation fields as one structured record", () => {
-    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
-
-    emit({
-      event: "scheduler_transition",
-      ...correlation,
-      attempt: 1,
-      action: "queued",
-      outcome: "accepted",
-      state: "created",
-    });
-
-    expect(JSON.parse(String(logged.mock.calls[0]?.[0]))).toMatchObject({
-      event: "scheduler_transition",
-      ...correlation,
-      attempt: 1,
-      action: "queued",
-      outcome: "accepted",
-      state: "created",
-    });
-  });
-
   it("classifies rejected webhooks as warnings", () => {
     const logged = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 

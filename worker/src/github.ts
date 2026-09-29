@@ -20,6 +20,8 @@ type DiscoveryFailure = {
   repositoryId?: number;
 };
 
+const runStatuses = ["queued", "in_progress"] as const;
+
 export type DiscoveryResult = {
   candidates: QueuedJobCandidate[];
   failures: DiscoveryFailure[];
@@ -62,31 +64,35 @@ export const discoverQueuedJobs: (input: {
         const { id: repositoryId, name: repositoryName, private: repositoryPrivate } = repository;
         const repositoryOwner = repository.owner.login;
         const correlation = { installationId, repositoryId };
+        // A run turns in_progress once any job starts; its later jobs can still be queued.
         const runs = yield* Effect.result(
-          Effect.tryPromise({
-            try: () =>
-              installation.paginate(installation.rest.actions.listWorkflowRunsForRepo, {
-                owner: repositoryOwner,
-                repo: repositoryName,
-                status: "queued",
-                per_page: 100,
-              }),
-            catch: (cause) => new DiscoveryError({ step: "run_listing", cause }),
-          }),
+          Effect.forEach(runStatuses, (status) =>
+            Effect.tryPromise({
+              try: () =>
+                installation.paginate(installation.rest.actions.listWorkflowRunsForRepo, {
+                  owner: repositoryOwner,
+                  repo: repositoryName,
+                  status,
+                  per_page: 100,
+                }),
+              catch: (cause) => new DiscoveryError({ step: "run_listing", cause }),
+            }),
+          ),
         );
         if (Result.isFailure(runs)) {
           result.failures.push({ ...correlation, step: runs.failure.step });
           continue;
         }
 
-        for (const run of runs.success) {
+        const runIds = new Set(runs.success.flat().map((run) => run.id));
+        for (const runId of runIds) {
           const jobs = yield* Effect.result(
             Effect.tryPromise({
               try: () =>
                 installation.paginate(installation.rest.actions.listJobsForWorkflowRun, {
                   owner: repositoryOwner,
                   repo: repositoryName,
-                  run_id: run.id,
+                  run_id: runId,
                   per_page: 100,
                 }),
               catch: (cause) => new DiscoveryError({ step: "job_listing", cause }),

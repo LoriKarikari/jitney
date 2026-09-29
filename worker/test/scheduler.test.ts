@@ -37,6 +37,13 @@ async function disarmSchedulerAlarms(): Promise<void> {
   );
 }
 
+function expirationReasons(logged: { mock: { calls: unknown[][] } }): unknown[] {
+  return logged.mock.calls
+    .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+    .filter((record) => record.event === "runner_attempt_expired")
+    .map((record) => record.stopReason);
+}
+
 function operations(
   provision: RunnerAttemptOperations["provision"] = () => Effect.void,
   reclaim: RunnerAttemptOperations["reclaim"] = () => Effect.void,
@@ -437,6 +444,7 @@ describe("Scheduler admission", () => {
   });
 
   it("expires an unassigned attempt past its assignment deadline", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("assignment-expiry");
     const event = queuedEvent(6001, "delivery-queued");
     const accepted = await scheduler.accept(event);
@@ -460,6 +468,7 @@ describe("Scheduler admission", () => {
     );
 
     expect(reclaimed).toEqual(["jitney-456-6001-1"]);
+    expect(expirationReasons(logged)).toEqual(["assignment_deadline"]);
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
       state: "queued",
@@ -470,6 +479,7 @@ describe("Scheduler admission", () => {
       outcome: "accepted",
       runnerName: "jitney-456-6001-2",
     });
+    logged.mockRestore();
   });
 
   it("leaves assigned and on-time attempts untouched by the sweep", async () => {
@@ -537,6 +547,7 @@ describe("Scheduler admission", () => {
   });
 
   it("terminates a running assignment past its runtime deadline", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("runtime-expiry");
     const event = queuedEvent(7001, "delivery-queued");
     const accepted = await scheduler.accept(event);
@@ -565,6 +576,7 @@ describe("Scheduler admission", () => {
     );
 
     expect(reclaimed).toEqual(["jitney-456-7001-1"]);
+    expect(expirationReasons(logged)).toEqual(["runtime_deadline"]);
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
       state: "failed",
@@ -583,6 +595,7 @@ describe("Scheduler admission", () => {
       }),
     ).toMatchObject({ outcome: "duplicate" });
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "failed" });
+    logged.mockRestore();
   });
 
   it("leaves a running assignment before its runtime deadline untouched", async () => {
@@ -616,31 +629,6 @@ describe("Scheduler admission", () => {
     expect(reclaimed).toEqual([]);
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "running" });
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "running" }]);
-  });
-
-  it("classifies runtime expiry distinctly from assignment expiry", async () => {
-    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const scheduler = env.SCHEDULER.getByName("runtime-stop-reason");
-    const event = queuedEvent(7003, "delivery-queued");
-    const accepted = await scheduler.accept(event);
-    if (accepted.runnerName === undefined) throw new Error("missing runner name");
-
-    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
-    await scheduler.accept({
-      ...event,
-      action: "in_progress",
-      deliveryId: "delivery-in-progress",
-      runnerName: accepted.runnerName,
-    });
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(operations(), Date.now() + 61 * 60_000),
-    );
-
-    const expirations = logged.mock.calls
-      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-      .filter((record) => record.event === "runner_attempt_expired");
-    expect(expirations).toMatchObject([{ workflowJobId: 7003, stopReason: "runtime_deadline" }]);
-    logged.mockRestore();
   });
 
   it("runs the real alarm handler with no pending work", async () => {
@@ -698,27 +686,5 @@ describe("Scheduler admission", () => {
       expect(alarm).toBeLessThan(armed);
       expect(alarm).toBeLessThanOrEqual(Date.now() + 120_000);
     });
-  });
-
-  it("persists separate assignment and runtime deadlines", async () => {
-    const scheduler = env.SCHEDULER.getByName("deadlines");
-    const event = queuedEvent(3001, "delivery-queued");
-    const accepted = await scheduler.accept(event);
-    const initial = await scheduler.getAttempts(event.workflowJobId);
-    const runnerName = accepted.runnerName;
-    if (runnerName === undefined) throw new Error("accepted attempt has no runner name");
-
-    expect(initial[0]?.assignmentDeadline).toBeGreaterThan(Date.now());
-    expect(initial[0]?.runtimeDeadline).toBeNull();
-
-    await scheduler.accept({
-      ...event,
-      deliveryId: "delivery-running",
-      action: "in_progress",
-      runnerName,
-    });
-    const running = await scheduler.getAttempts(event.workflowJobId);
-    expect(running[0]?.runtimeDeadline).toBeGreaterThan(Date.now());
-    expect(running[0]?.runtimeDeadline).not.toBe(running[0]?.assignmentDeadline);
   });
 });

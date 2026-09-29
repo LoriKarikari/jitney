@@ -86,10 +86,28 @@ secrets.
 _Avoid_: worker, agent
 
 **Label**:
-A GitHub Actions `runs-on` label that routes a job to a runner. Jitney
-publishes four opaque canonical labels: `jitney`, `jitney-4cpu`,
-`jitney-docker`, `jitney-docker-4cpu`. Exactly one Jitney label per job.
+A GitHub Actions `runs-on` label that routes a job to Jitney. A job carries
+exactly one Jitney label.
 _Avoid_: tag, selector
+
+**Runner Size**:
+The vCPU, memory, and disk a Runner Container gets. Each Label selects one
+Runner Size.
+_Avoid_: instance type, machine type, flavor
+
+**Concurrency Budget**:
+The number of vCPUs a Deployment's Runner Containers may use at the same time.
+_Avoid_: max instances, runner limit
+
+**Dependency Cache**:
+A Deployment-wide store of public, immutable package and toolchain downloads
+that Runner Containers read in place of the internet.
+_Avoid_: mirror, proxy cache
+
+**Shard Plan**:
+A repository's assignment of test files to the jobs of one test matrix,
+balanced by the durations its earlier runs recorded.
+_Avoid_: split, test plan
 
 **Deployment**:
 One named Jitney installation: a Worker, its container application, and a
@@ -157,6 +175,13 @@ _Avoid_: admin endpoint, cleanup API
 - An **Assignment** binds one **Job** to one runner name, reported by
   `workflow_job.in_progress`.
 - A **Runner Container** executes at most one **Job**, then exits.
+- A **Runner Attempt** ends when its **Runner Container** exits. A **Job** ends
+  only when GitHub reports it.
+- Each **Label** selects exactly one **Runner Size**.
+- A **Deployment** has one **Concurrency Budget**. **Jobs** beyond it wait in
+  the **Scheduler** queue, which starts them round-robin across repositories.
+- The **Dependency Cache** holds only responses fetched without credentials.
+- A **Shard Plan** belongs to one repository.
 - The **Scheduler** owns all **Job** and **Runner Attempt** lifecycle state.
 - The **Ingress Worker** never touches GitHub APIs or container startup.
 - The **Control Plane** never enters the **Data Plane**.
@@ -198,20 +223,23 @@ Scheduler alarms
 - Installation tokens are restricted to the verified repository.
 - The runner receives only the JIT config. No App key, webhook secret,
   installation token, or Cloudflare credential enters the data plane.
+- Registry traffic to Dependency Cache hosts passes through the Deployment's
+  own Worker, which never logs headers or bodies.
 - Structured logs are secret-redacted and correlated by delivery, installation,
   repository, job, runner, container, transition, and stop reason.
 
 ## Product scope
 
-- Four opaque labels, not a composable grammar.
-- Two sizes: `jitney` (default, hardware decided by measurement) and
-  `jitney-4cpu` (4 vCPU / 12 GiB ceiling).
+- Three size labels, not a composable grammar: `jitney-lite` (1/4 vCPU,
+  1 GiB), `jitney` (2 vCPU, 8 GiB, the default), and `jitney-4cpu` (4 vCPU,
+  12 GiB).
 - Minimal glibc runner image on GitHub's maintained `actions-runner` base, with
   Node LTS and Python 3. No `ubuntu-latest` parity claim.
 - Docker labels conditional on a compatibility spike. Rootless Docker is the
   baseline; Podman is a possible alternative if it passes full workflow
   compatibility with a measured advantage.
-- Scheduler-owned controls: global concurrency, per-installation concurrency,
-  max pending jobs, assignment timeout, max runtime.
-- Out of v1: public repos, cache backend, sticky disks, dashboard, runner
-  groups, more sizes, arm64, GHES, Windows, GPU, >4 vCPU.
+- Scheduler-owned controls: the Concurrency Budget, the queue of waiting Jobs,
+  assignment timeout, max runtime.
+- Out of scope: public repos, an `actions/cache` backend, sticky disks,
+  per-repository egress lists, dashboard, runner groups, arm64, GHES, Windows,
+  GPU, >4 vCPU, and any compute outside Cloudflare.

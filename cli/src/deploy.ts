@@ -96,15 +96,14 @@ export function deploy(options: {
     });
   }).pipe(
     Effect.provide(cloudflareRuntime),
-    Effect.mapError(
-      (cause): InstallFailure =>
-        isInstallFailure(cause)
-          ? cause
-          : new InstallerError({
-              step: "cloudflare_authentication",
-              message: "Could not authenticate with Cloudflare",
-              cause,
-            }),
+    Effect.mapError((cause): InstallFailure =>
+      isInstallFailure(cause)
+        ? cause
+        : new InstallerError({
+            step: "cloudflare_authentication",
+            message: "Could not authenticate with Cloudflare",
+            cause,
+          }),
     ),
   );
 }

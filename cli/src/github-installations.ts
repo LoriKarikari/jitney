@@ -83,7 +83,7 @@ const listGitHubInstallations = Effect.fn(function* (credentials: GitHubAppCrede
         );
         repositories.push(
           ...repositoriesPage.data.repositories.map((repository) => ({
-            id: repository.id,
+            id: Number(repository.id),
             name: repository.name,
             fullName: repository.full_name,
           })),

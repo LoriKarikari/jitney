@@ -536,6 +536,87 @@ describe("Scheduler admission", () => {
     logged.mockRestore();
   });
 
+  it("spares an attempt assigned while the sweep reclaims another", async () => {
+    const scheduler = env.SCHEDULER.getByName("expiry-assignment-race");
+    const first = queuedEvent(6101, "delivery-first");
+    const second = queuedEvent(6102, "delivery-second");
+    await scheduler.accept(first);
+    const accepted = await scheduler.accept(second);
+    if (accepted.runnerName === undefined) throw new Error("missing runner name");
+    const runnerName = accepted.runnerName;
+    const reclaimed: string[] = [];
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.sweep(operations());
+        yield* lifecycle.sweep(operations());
+        yield* lifecycle.sweep(
+          operations(
+            () => Effect.void,
+            (request) => {
+              reclaimed.push(request.runnerName);
+              return lifecycle
+                .accept({
+                  ...second,
+                  action: "in_progress",
+                  deliveryId: "delivery-second-running",
+                  runnerName,
+                })
+                .pipe(Effect.orDie, Effect.asVoid);
+            },
+          ),
+          Date.now() + 6 * 60_000,
+        );
+      }),
+    );
+
+    expect(reclaimed).toEqual(["jitney-456-6101-1"]);
+    expect(await scheduler.getAttempts(second.workflowJobId)).toMatchObject([{ state: "running" }]);
+  });
+
+  it("keeps a job completed while the sweep reclaims another runtime expiry", async () => {
+    const scheduler = env.SCHEDULER.getByName("runtime-completion-race");
+    const first = queuedEvent(6201, "delivery-first");
+    const second = queuedEvent(6202, "delivery-second");
+    const reclaimed: string[] = [];
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      Effect.gen(function* () {
+        for (const event of [first, second]) {
+          const { runnerName } = yield* lifecycle.accept(event);
+          if (runnerName === undefined) throw new Error("missing runner name");
+          yield* lifecycle.sweep(operations());
+          yield* lifecycle.accept({
+            ...event,
+            action: "in_progress",
+            deliveryId: `${event.deliveryId}-running`,
+            runnerName,
+          });
+        }
+        yield* lifecycle.sweep(
+          operations(
+            () => Effect.void,
+            (request) => {
+              reclaimed.push(request.runnerName);
+              return lifecycle
+                .accept({
+                  ...second,
+                  action: "completed",
+                  conclusion: "success",
+                  deliveryId: "delivery-second-completed",
+                })
+                .pipe(Effect.orDie, Effect.asVoid);
+            },
+          ),
+          Date.now() + 61 * 60_000,
+        );
+      }),
+    );
+
+    expect(reclaimed).toEqual(["jitney-456-6201-1"]);
+    expect(await scheduler.getJob(second.workflowJobId)).toMatchObject({ state: "completed" });
+  });
+
   it("terminates a running assignment past its runtime deadline", async () => {
     const scheduler = env.SCHEDULER.getByName("runtime-expiry");
     const event = queuedEvent(7001, "delivery-queued");

@@ -249,6 +249,42 @@ describe("Scheduler admission", () => {
     expect(await scheduler.getAttempts(jobB.workflowJobId)).toMatchObject([{ state: "stopped" }]);
   });
 
+  it("reclaims a started runner left idle by a cross-assignment", async () => {
+    const scheduler = env.SCHEDULER.getByName("cross-assignment-idle");
+    const jobA = queuedEvent(4701, "delivery-a-queued");
+    const jobB = queuedEvent(4702, "delivery-b-queued");
+    const attemptA = await scheduler.accept(jobA);
+    await scheduler.accept(jobB);
+    const runnerName = attemptA.runnerName;
+    if (runnerName === undefined) throw new Error("accepted attempt has no runner name");
+    const reclaimed: string[] = [];
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.sweep(operations());
+        yield* lifecycle.sweep(operations());
+        yield* lifecycle.accept({
+          ...jobB,
+          action: "in_progress",
+          deliveryId: "delivery-b-running",
+          runnerName,
+        });
+        yield* lifecycle.sweep(
+          operations(
+            () => Effect.void,
+            (request) => {
+              reclaimed.push(request.runnerName);
+              return Effect.void;
+            },
+          ),
+          Date.now() + 6 * 60_000,
+        );
+      }),
+    );
+
+    expect(reclaimed).toEqual(["jitney-456-4702-1"]);
+  });
+
   it("classifies duplicate, conflicting, and unknown assignments", async () => {
     const scheduler = env.SCHEDULER.getByName("assignment-conflicts");
     const jobA = queuedEvent(4701, "delivery-a-queued");
@@ -435,6 +471,34 @@ describe("Scheduler admission", () => {
     expect(String(logged.mock.calls[0]?.[0])).not.toContain(canary);
     logged.mockRestore();
   });
+
+  it.each([
+    ["jit_config", []],
+    ["container_start", ["jitney-456-5102-1"]],
+  ] as const)(
+    "reclaims a runner minted before provisioning failed at %s",
+    async (step, expected) => {
+      const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      const scheduler = env.SCHEDULER.getByName(`provisioning-failure-${step}`);
+      await scheduler.accept(queuedEvent(5102, "delivery-queued"));
+      const reclaimed: string[] = [];
+
+      await withLifecycle(scheduler, (lifecycle) =>
+        lifecycle.sweep(
+          operations(
+            () => Effect.fail(new RunnerAttemptFailure({ step, cause: "boom" })),
+            (request) => {
+              reclaimed.push(request.runnerName);
+              return Effect.void;
+            },
+          ),
+        ),
+      );
+
+      expect(reclaimed).toEqual(expected);
+      logged.mockRestore();
+    },
+  );
 
   it("expires an unassigned attempt past its assignment deadline", async () => {
     const scheduler = env.SCHEDULER.getByName("assignment-expiry");

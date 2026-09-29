@@ -387,13 +387,15 @@ export class SchedulerLifecycle {
       .delete(pending)
       .where(inArray(pending.workflowJobId, [workflowJobId, triggeringWorkflowJobId]))
       .run();
+    // Started attempts stay viable: their runner can still claim another job,
+    // and the assignment deadline reclaims it if none does.
     this.#db
       .update(attempts)
       .set({ state: "stopped" })
       .where(
         and(
           eq(attempts.workflowJobId, workflowJobId),
-          inArray(attempts.state, viableAttemptStates),
+          eq(attempts.state, "created"),
           ne(attempts.runnerName, runnerName),
         ),
       )
@@ -626,25 +628,31 @@ export class SchedulerLifecycle {
       yield* Effect.sync(() =>
         emit({ event: "runner_attempt_expired", ...correlation, attempt, stopReason }),
       );
-
-      const { repositoryOwner, repositoryName } = row;
-      const result = yield* operations
-        .reclaim({
-          installationId,
-          repositoryId,
-          repositoryOwner,
-          repositoryName,
-          workflowJobId,
-          runnerName,
-          containerName,
-        })
-        .pipe(Effect.result);
-      if (Result.isFailure(result)) {
-        yield* Effect.sync(() =>
-          emit({ event: "runner_reclaim_failed", ...correlation, step: result.failure.step }),
-        );
-      }
+      yield* this.#reclaim(operations, row);
     });
+  }
+
+  #reclaim(
+    operations: RunnerAttemptOperations,
+    request: RunnerAttemptRequest,
+  ): Effect.Effect<void> {
+    const { installationId, repositoryId, workflowJobId, runnerName, containerName } = request;
+    return operations.reclaim(request).pipe(
+      Effect.catch((failure) =>
+        Effect.sync(() =>
+          emit({
+            event: "runner_reclaim_failed",
+            installationId,
+            repositoryId,
+            workflowJobId,
+            runnerName,
+            containerName,
+            deploymentId: this.deploymentId,
+            step: failure.step,
+          }),
+        ),
+      ),
+    );
   }
 
   #drainPending(
@@ -736,6 +744,9 @@ export class SchedulerLifecycle {
       });
       if (Result.isSuccess(result)) {
         yield* Effect.sync(() => emit({ event: "runner_provisioning_succeeded", ...correlation }));
+      } else if (result.failure.step === "container_start") {
+        // The JIT config is already registered and the Container may be running.
+        yield* this.#reclaim(operations, pendingRow);
       }
       const remaining = this.#db
         .select({ count: sql<number>`count(*)` })

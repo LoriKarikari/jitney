@@ -28,6 +28,10 @@ updates:
         update-types:
           - minor
           - patch
+  - package-ecosystem: docker
+    directory: /runner
+    schedule:
+      interval: weekly
   - package-ecosystem: github-actions
     directory: /
     schedule:

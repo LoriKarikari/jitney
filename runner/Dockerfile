@@ -8,7 +8,9 @@ COPY supervisor/cmd ./cmd
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags='-s -w' -o /out/jitney-supervisor ./cmd/supervisor
 
-FROM ghcr.io/actions/actions-runner@sha256:08c30b0a7105f64bddfc485d2487a22aa03932a791402393352fdf674bda2c29
+# GitHub stops queuing jobs to a runner 30 days after a newer release, and a
+# JIT runner never lives long enough to update itself. Keep this current.
+FROM ghcr.io/actions/actions-runner:2.337.0@sha256:e5496277be5d09bc968b3d64911b74e219ac4a3f2edce956a3ecf9271bea1ef4
 USER root
 RUN apt-get update \
     && apt-get install --no-install-recommends -y tini \

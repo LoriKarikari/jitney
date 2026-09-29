@@ -518,21 +518,16 @@ export class SchedulerLifecycle {
     now: number,
   ): Effect.Effect<void, SchedulerStorageError> {
     return Effect.gen({ self: this }, function* () {
-      const expired = this.#expiredAttempts(
-        and(
-          inArray(attempts.state, viableAttemptStates),
-          sql`${attempts.assignmentDeadline} <= ${now}`,
-        ),
+      const unassigned = and(
+        inArray(attempts.state, viableAttemptStates),
+        sql`${attempts.assignmentDeadline} <= ${now}`,
       );
+      const expired = this.#expiredAttempts(unassigned);
 
       for (const row of expired) {
         const { workflowJobId, runnerName } = row;
-        yield* this.#transaction(() => {
-          this.#db
-            .update(attempts)
-            .set({ state: "expired" })
-            .where(eq(attempts.runnerName, runnerName))
-            .run();
+        const stillExpired = yield* this.#transaction(() => {
+          if (!this.#markExpired(runnerName, unassigned)) return false;
           this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
           this.#db
             .update(jobs)
@@ -544,8 +539,9 @@ export class SchedulerLifecycle {
               ),
             )
             .run();
+          return true;
         });
-        yield* this.#reclaimExpired(operations, row, "assignment_deadline");
+        if (stillExpired) yield* this.#reclaimExpired(operations, row, "assignment_deadline");
       }
     });
   }
@@ -555,9 +551,11 @@ export class SchedulerLifecycle {
     now: number,
   ): Effect.Effect<void, SchedulerStorageError> {
     return Effect.gen({ self: this }, function* () {
-      const expired = this.#expiredAttempts(
-        and(eq(attempts.state, "running"), sql`${attempts.runtimeDeadline} <= ${now}`),
+      const overdue = and(
+        eq(attempts.state, "running"),
+        sql`${attempts.runtimeDeadline} <= ${now}`,
       );
+      const expired = this.#expiredAttempts(overdue);
 
       for (const row of expired) {
         const { runnerName } = row;
@@ -572,22 +570,32 @@ export class SchedulerLifecycle {
           )
           .all()[0];
         const assignedJobId = assignment?.workflowJobId ?? row.workflowJobId;
-        yield* this.#transaction(() => {
-          this.#db
-            .update(attempts)
-            .set({ state: "expired" })
-            .where(eq(attempts.runnerName, runnerName))
-            .run();
+        const stillExpired = yield* this.#transaction(() => {
+          if (!this.#markExpired(runnerName, overdue)) return false;
           this.#db
             .update(jobs)
             .set({ state: "failed", conclusion: "timed_out", updatedAt: now })
             .where(eq(jobs.workflowJobId, assignedJobId))
             .run();
           this.#db.delete(pending).where(eq(pending.workflowJobId, assignedJobId)).run();
+          return true;
         });
-        yield* this.#reclaimExpired(operations, row, "runtime_deadline");
+        if (stillExpired) yield* this.#reclaimExpired(operations, row, "runtime_deadline");
       }
     });
+  }
+
+  // Reclaiming one attempt yields to GitHub, so a webhook can assign or finish
+  // the next one before its turn. Expire it only if it still matches.
+  #markExpired(runnerName: string, condition: ReturnType<typeof and>): boolean {
+    return (
+      this.#db
+        .update(attempts)
+        .set({ state: "expired" })
+        .where(and(eq(attempts.runnerName, runnerName), condition))
+        .returning({ runnerName: attempts.runnerName })
+        .all().length === 1
+    );
   }
 
   #expiredAttempts(condition: ReturnType<typeof and>): ExpiredAttempt[] {

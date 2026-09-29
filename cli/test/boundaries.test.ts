@@ -12,7 +12,7 @@ describe("subprocess boundary", () => {
 });
 
 describe("typed installer failures", () => {
-  it("renders an existing Worker without exposing a cause", () => {
+  it("names the Worker that blocks the deploy", () => {
     expect(renderFailure(new ExistingWorkerError({ workerName: "jitney" }))).toContain(
       "Worker jitney already exists",
     );

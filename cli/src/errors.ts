@@ -104,7 +104,7 @@ export function trySync<A>(
 
 export function renderFailure(error: InstallFailure): string {
   if (error._tag === "ExistingWorkerError") {
-    return `Worker ${error.workerName} already exists. Choose another --name; upgrades are not supported yet.`;
+    return `Worker ${error.workerName} already exists. Choose another --name.`;
   }
   if (error._tag === "ExistingDeploymentError") {
     return `Deployment ${error.name} already exists (${error.deploymentId}, phase: ${error.phase}). Refusing to overwrite it.`;

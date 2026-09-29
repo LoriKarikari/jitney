@@ -1,5 +1,6 @@
 import { Container, type StopParams } from "@cloudflare/containers";
 import { Data, Effect } from "effect";
+import { runnerContainerBackstopSeconds } from "./lifecycle";
 import { emit, type RunnerCorrelation } from "./log";
 
 export type StartAttempt = RunnerCorrelation & { jitConfig: string };
@@ -17,8 +18,13 @@ class RunnerContainerError extends Data.TaggedError("RunnerContainerError")<{
 }> {}
 
 export class RunnerContainer extends Container<Env> {
-  override sleepAfter = "10m";
   override enableInternet = true;
+
+  constructor(ctx: RunnerContainer["ctx"], env: Env) {
+    super(ctx, env, {
+      sleepAfter: runnerContainerBackstopSeconds(Number(env.RUNTIME_TIMEOUT_MS) || undefined),
+    });
+  }
 
   startAttempt(request: StartAttempt): Promise<void> {
     const { jitConfig, ...correlation } = request;

@@ -15,9 +15,17 @@ const maxActiveAttempts = 25;
 const assignmentTimeout = 5 * 60_000;
 const defaultRuntimeTimeout = 60 * 60_000;
 const defaultSchedulerTick = 1_000;
+const reclaimSlack = 10 * 60_000;
 const viableAttemptStates = ["created", "starting", "waiting_for_assignment"];
 const activeAttemptStates = [...viableAttemptStates, "running"];
 const terminalJobStates = ["completed", "cancelled", "failed"];
+
+// Container activity only renews on proxied requests, which a runner never
+// makes. The Scheduler's deadlines own the runner's lifetime; this backstop
+// stops the Container only if every reclaim path has failed.
+export function runnerContainerBackstopSeconds(runtimeTimeout = defaultRuntimeTimeout): number {
+  return Math.ceil((assignmentTimeout + runtimeTimeout + reclaimSlack) / 1000);
+}
 
 export type AcceptResult = {
   outcome:

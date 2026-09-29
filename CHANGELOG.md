@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.3.0](https://github.com/LoriKarikari/jitney/compare/v0.2.0...v0.3.0) (2026-09-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** deployments created by Jitney 0.2.x must be removed and reinstalled before their names can be reused.
+
+### Features
+
+* adopt Alchemy for lifecycle resources ([#92](https://github.com/LoriKarikari/jitney/issues/92)) ([6e46277](https://github.com/LoriKarikari/jitney/commit/6e46277f2c88516f84c93bd8a93691c8abed2458)), closes [#77](https://github.com/LoriKarikari/jitney/issues/77)
+* **cli:** add deployment drift listing ([#95](https://github.com/LoriKarikari/jitney/issues/95)) ([cae6427](https://github.com/LoriKarikari/jitney/commit/cae6427fb20fef907a1aecfd38da36b67073f03e))
+* **cli:** add deployment receipt store and lease ([#93](https://github.com/LoriKarikari/jitney/issues/93)) ([21b2113](https://github.com/LoriKarikari/jitney/commit/21b2113c464159a19400e87a597fa43ba682c21d))
+* **cli:** add deployment repair ([#98](https://github.com/LoriKarikari/jitney/issues/98)) ([b1554be](https://github.com/LoriKarikari/jitney/commit/b1554be7ede29fc7cdf2d76ca2fd1298b831b5d1))
+* **cli:** add resumable deployment destroy ([#101](https://github.com/LoriKarikari/jitney/issues/101)) ([c5aca5a](https://github.com/LoriKarikari/jitney/commit/c5aca5a1bd30e9382dc914f0a9c3b0e7786bcc79))
+* **cli:** add upgrade and rollback lifecycle ([#122](https://github.com/LoriKarikari/jitney/issues/122)) ([2e791a6](https://github.com/LoriKarikari/jitney/commit/2e791a6651a979f5cca8e3de632bb72d92b5aed5))
+* **cli:** rewrite deploy around lifecycle receipts ([#94](https://github.com/LoriKarikari/jitney/issues/94)) ([adfc54f](https://github.com/LoriKarikari/jitney/commit/adfc54f438d3ae89b6923e99d44253058de5a1b0))
+* migrate Jitney to Effect 4 beta ([#90](https://github.com/LoriKarikari/jitney/issues/90)) ([adf3a60](https://github.com/LoriKarikari/jitney/commit/adf3a60336e9b293e6b7c6db868e86305f07a2f6)), closes [#87](https://github.com/LoriKarikari/jitney/issues/87) [#77](https://github.com/LoriKarikari/jitney/issues/77)
+
+
+### Bug Fixes
+
+* **ci:** allow first lifecycle upgrade ([#129](https://github.com/LoriKarikari/jitney/issues/129)) ([d2078ed](https://github.com/LoriKarikari/jitney/commit/d2078ed7d2e9b01a06fe4d4e5bee71add9233b76))
+* **ci:** remove the legacy Wrangler deploy ([#100](https://github.com/LoriKarikari/jitney/issues/100)) ([b1857e4](https://github.com/LoriKarikari/jitney/commit/b1857e44142c4ee9adfa3b266e8228c638ce7e35))
+* **ci:** skip unconfigured lifecycle smoke ([#128](https://github.com/LoriKarikari/jitney/issues/128)) ([0ffa316](https://github.com/LoriKarikari/jitney/commit/0ffa3160dad67201b89c2acf323a248ebc9e61d4))
+* **cli:** drop stale upgrade hint from ExistingWorkerError ([#138](https://github.com/LoriKarikari/jitney/issues/138)) ([e33dda5](https://github.com/LoriKarikari/jitney/commit/e33dda5e2d44630dcc2749391c52f179c1ba232e))
+* **cli:** keep Alchemy bootstrap non-interactive and name uninstall identity failures ([#103](https://github.com/LoriKarikari/jitney/issues/103)) ([a4aaa2c](https://github.com/LoriKarikari/jitney/commit/a4aaa2c936a36e65cb8358d309bce14934809460))
+* **cli:** preserve decoded Cloudflare receipt values ([#105](https://github.com/LoriKarikari/jitney/issues/105)) ([ea1bf2c](https://github.com/LoriKarikari/jitney/commit/ea1bf2c6a9bf84666c337bcd08cfbc8e4fdb9d3c))
+* **cli:** unblock live lifecycle cleanup ([#119](https://github.com/LoriKarikari/jitney/issues/119)) ([e144aab](https://github.com/LoriKarikari/jitney/commit/e144aab0f56b7d4542e86af255226c2404de33d4))
+* **image:** update the runner to 2.337.0 ([#139](https://github.com/LoriKarikari/jitney/issues/139)) ([421ef8c](https://github.com/LoriKarikari/jitney/commit/421ef8c452f78f5cdd62364ab12e4b3465b593e8))
+* **reconciliation:** discover queued jobs in in-progress runs ([#136](https://github.com/LoriKarikari/jitney/issues/136)) ([2d10582](https://github.com/LoriKarikari/jitney/commit/2d10582fa80a7291b9f992076eb77bfebf0f9947))
+* **runner:** derive RunnerContainer sleepAfter from the runtime deadline ([#135](https://github.com/LoriKarikari/jitney/issues/135)) ([6c0d52b](https://github.com/LoriKarikari/jitney/commit/6c0d52bb0c1016202a32cb5536efed6ef1f41186))
+* **scheduler:** expire only attempts that are still overdue ([#133](https://github.com/LoriKarikari/jitney/issues/133)) ([c76cabc](https://github.com/LoriKarikari/jitney/commit/c76cabcd6a332e196f0581965bee3f0ca9d9291a))
+* **scheduler:** reclaim runners no job will claim ([#134](https://github.com/LoriKarikari/jitney/issues/134)) ([0c84d53](https://github.com/LoriKarikari/jitney/commit/0c84d534074f2477433c3597bdb07d5362cb455a))
+
 ## [0.2.0](https://github.com/LoriKarikari/jitney/compare/v0.1.0...v0.2.0) (2026-07-16)
 
 

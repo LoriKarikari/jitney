@@ -102,7 +102,7 @@ Object Scheduler, which owns all lifecycle state in SQLite. The Scheduler
 mints a JIT runner config scoped to one repository, starts a container, and
 enforces two deadlines: one for GitHub to assign work to the runner, and one
 for the job to finish. See [CONTEXT.md](CONTEXT.md) for the design and
-[docs/operations/](docs/operations/) for records from live tests.
+[.agents/operations/](.agents/operations/) for records from live tests.
 
 ## Development
 
@@ -115,4 +115,4 @@ task test:race   # supervisor tests with the race detector
 The repo has two codebases: `worker/` (TypeScript control plane) and
 `supervisor/` (Go process supervisor that owns the runner session inside the
 container). Engineering conventions are in
-[docs/agents/engineering.md](docs/agents/engineering.md).
+[.agents/engineering.md](.agents/engineering.md).

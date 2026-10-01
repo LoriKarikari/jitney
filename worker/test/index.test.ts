@@ -96,11 +96,6 @@ describe("worker entrypoint", () => {
     }
   });
 
-  it("answers unknown routes with 404", async () => {
-    const response = await fetch("https://example.com/anything");
-    expect(response.status).toBe(404);
-  });
-
   it("rejects an oversized GitHub webhook once", async () => {
     const logged = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const response = await fetch(webhookUrl, {

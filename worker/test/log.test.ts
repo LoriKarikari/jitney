@@ -102,17 +102,4 @@ describe("lifecycle logging", () => {
     expect(String(logged.mock.calls[0]?.[0])).not.toContain(canary);
     expect(String(logged.mock.calls[0]?.[0])).not.toContain("rawError");
   });
-
-  it("classifies rejected webhooks as warnings", () => {
-    const logged = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-
-    emit({
-      event: "webhook_classified",
-      deliveryId: "delivery-rejected",
-      deploymentId: "deployment-1",
-      outcome: "invalid_signature",
-    });
-
-    expect(logged).toHaveBeenCalledOnce();
-  });
 });

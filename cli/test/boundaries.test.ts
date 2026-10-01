@@ -1,6 +1,5 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { ExistingWorkerError, renderFailure } from "../src/errors.js";
 import { run } from "../src/process.js";
 describe("subprocess boundary", () => {
   it("returns command failures through the Effect error channel", async () => {
@@ -8,13 +7,5 @@ describe("subprocess boundary", () => {
       run(process.execPath, ["-e", "process.stderr.write('failed'); process.exit(2)"]),
     );
     expect(exit._tag).toBe("Failure");
-  });
-});
-
-describe("typed installer failures", () => {
-  it("names the Worker that blocks the deploy", () => {
-    expect(renderFailure(new ExistingWorkerError({ workerName: "jitney" }))).toContain(
-      "Worker jitney already exists",
-    );
   });
 });

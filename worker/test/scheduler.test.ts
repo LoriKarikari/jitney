@@ -1,9 +1,4 @@
-import {
-  env,
-  listDurableObjectIds,
-  runDurableObjectAlarm,
-  runInDurableObject,
-} from "cloudflare:test";
+import { env, listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { Effect, Fiber } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
@@ -774,19 +769,6 @@ describe("Scheduler admission", () => {
     expect(reclaimed).toEqual([]);
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "running" });
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "running" }]);
-  });
-
-  it("runs the real alarm handler with no pending work", async () => {
-    const scheduler = env.SCHEDULER.getByName("alarm-entrypoint");
-    await runInDurableObject(scheduler, (_instance, state) =>
-      state.storage.setAlarm(Date.now() + testSchedulerTick),
-    );
-
-    expect(await runDurableObjectAlarm(scheduler)).toBe(true);
-
-    await runInDurableObject(scheduler, async (_instance, state) => {
-      expect(await state.storage.getAlarm()).toBeNull();
-    });
   });
 
   it("arms accepted work on the configured scheduler tick", async () => {

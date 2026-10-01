@@ -6,6 +6,7 @@ export const UNINSTALL_ACTIONS = [
   "resume_intake",
   "delete_ownership",
   "delete_installations",
+  "inventory",
 ] as const;
 export type UninstallAction = (typeof UNINSTALL_ACTIONS)[number];
 

@@ -3,6 +3,7 @@ import { Octokit } from "octokit";
 import { Context, Data, Effect, Predicate, Schema } from "effect";
 import { ownershipEnvironmentName } from "@jitney/shared/ownership-marker";
 import { isLiveSecret, UNINSTALL_ACTIONS } from "@jitney/shared/uninstall-protocol";
+import { makeLifecycleGitHub, type LifecycleInstallation } from "./lifecycle-status";
 
 export const UninstallAction = Schema.Literals([...UNINSTALL_ACTIONS]);
 export type UninstallAction = typeof UninstallAction.Type;
@@ -42,6 +43,7 @@ export class UninstallPlatform extends Context.Service<
       installations: UninstallReceipt["github"]["installations"],
     ) => Effect.Effect<void, unknown>;
     readonly deleteInstallations: (ids: readonly number[]) => Effect.Effect<void, unknown>;
+    readonly inventory: () => Effect.Effect<readonly LifecycleInstallation[], unknown>;
   }
 >()("Jitney.UninstallPlatform") {}
 
@@ -137,6 +139,7 @@ export const makeUninstallPlatform = (env: Env): UninstallPlatform["Service"] =>
           app.rest.apps.deleteInstallation({ installation_id: installationId }),
         ),
       ).pipe(Effect.asVoid),
+    inventory: () => makeLifecycleGitHub(env).inventory(),
   });
 };
 
@@ -194,5 +197,7 @@ export const executeUninstall = Effect.fn("GitHub.executeUninstall")(function* (
     case "delete_installations":
       yield* platform.deleteInstallations(installationIds);
       return { accepted: true } as const;
+    case "inventory":
+      return { accepted: true, installations: yield* platform.inventory() } as const;
   }
 });

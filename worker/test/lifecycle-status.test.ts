@@ -24,7 +24,15 @@ const receipt = {
   },
 };
 
-const inventory: LifecycleInstallation[] = receipt.github.installations;
+const inventory: LifecycleInstallation[] = receipt.github.installations.map((installation) => ({
+  ...installation,
+  accountLogin: "LoriKarikari",
+  accountType: "User",
+  repositories: installation.repositories.map((repository) => ({
+    ...repository,
+    name: repository.fullName.split("/")[1] ?? "",
+  })),
+}));
 
 function testEnv(value: unknown = receipt): Env {
   return {
@@ -158,7 +166,9 @@ describe("lifecycle status", () => {
               Effect.succeed([
                 {
                   id: 42,
-                  repositories: [{ id: 100, fullName: "LoriKarikari/renamed" }],
+                  accountLogin: "LoriKarikari",
+                  accountType: "User",
+                  repositories: [{ id: 100, name: "renamed", fullName: "LoriKarikari/renamed" }],
                 },
               ]),
             ownership: (_installationId, fullName) =>

@@ -212,6 +212,36 @@ describe("list drift classification", () => {
     );
   });
 
+  it("points a Deployment that has no receipt at adopt", async () => {
+    const report = await runList(
+      [fixtureReceipt()],
+      fakePlatform({
+        snapshot: () =>
+          Effect.succeed({
+            workers: [
+              { name: "jitney", jitneyTagged: true, deploymentId: null },
+              { name: "spike", jitneyTagged: false, deploymentId: null },
+              { name: "lost", jitneyTagged: true, deploymentId: null },
+            ],
+            applications: [
+              ...healthyApplications,
+              { id: "a03a65c5", name: "spike-runner", imageTag: "0.2.0" },
+            ],
+          }),
+      }),
+    );
+
+    const adoptCommands = report.orphans.flatMap((orphan) =>
+      (orphan.commands ?? [])
+        .filter((command) => command.label === "adopt")
+        .map(({ command }) => command),
+    );
+    expect(adoptCommands).toEqual([
+      "npx get-jitney adopt spike --app <github-app-slug>",
+      "npx get-jitney adopt lost --app <github-app-slug>",
+    ]);
+  });
+
   it("reports a Jitney-shaped application no receipt references as an orphan", async () => {
     const report = await runList(
       [fixtureReceipt()],

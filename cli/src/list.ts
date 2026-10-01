@@ -310,9 +310,18 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
   );
   const orphans: Finding[] = [];
   const accountFindings: Finding[] = [];
+  const adoptCommand = (workerName: string) => ({
+    label: "adopt" as const,
+    command: `npx get-jitney adopt ${workerName} --app <github-app-slug>`,
+  });
   for (const accountId of scannedAccounts) {
     const snapshot = HashMap.get(snapshots, accountId);
     if (Option.isSome(snapshot) && Result.isSuccess(snapshot.value)) {
+      const unreceiptedWorkers = new Set(
+        snapshot.value.success.workers
+          .map((worker) => worker.name)
+          .filter((name) => !HashSet.has(referencedWorkers, `${accountId}:${name}`)),
+      );
       for (const application of snapshot.value.success.applications) {
         if (
           !HashSet.has(referencedApplications, application.id) &&
@@ -321,6 +330,11 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
           const owner = deployments.find((receipt) =>
             application.name.startsWith(`${receipt.name}-runner`),
           );
+          const workerName = application.name.slice(0, -"-runner".length);
+          const adoptable =
+            owner === undefined &&
+            application.name.endsWith("-runner") &&
+            unreceiptedWorkers.has(workerName);
           orphans.push({
             class: "orphan",
             resource: "containerApplication",
@@ -335,6 +349,7 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
                       command: `npx get-jitney repair ${owner.name} --adopt application:${application.id}`,
                     },
                   ]),
+              ...(adoptable ? [adoptCommand(workerName)] : []),
               { label: "inspect", command: "npx get-jitney list --json" },
             ],
           });
@@ -347,7 +362,10 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
             resource: "worker",
             live: worker.name,
             message: `Worker ${worker.name} has no deployment receipt`,
-            commands: [{ label: "inspect", command: "npx get-jitney list --json" }],
+            commands: [
+              adoptCommand(worker.name),
+              { label: "inspect", command: "npx get-jitney list --json" },
+            ],
           });
         }
       }

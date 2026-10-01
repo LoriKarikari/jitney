@@ -2,6 +2,7 @@
 
 import { parseArgs } from "node:util";
 import { Cause, Effect, Exit, Option } from "effect";
+import { adoptCommand } from "./adopt-command.js";
 import { deploy } from "./deploy.js";
 import { destroyCommand } from "./destroy-command.js";
 import { InstallerError, isInstallFailure, renderFailure, trySync } from "./errors.js";
@@ -23,6 +24,7 @@ const program = Effect.gen(function* () {
           json: { type: "boolean" },
           yes: { type: "boolean", short: "y" },
           adopt: { type: "string", multiple: true },
+          app: { type: "string" },
           "dry-run": { type: "boolean" },
           now: { type: "boolean" },
           export: { type: "string" },
@@ -37,6 +39,7 @@ const program = Effect.gen(function* () {
 
 Commands:
   deploy                       Install a Jitney deployment
+  adopt <name> --app <slug>    Record a receipt for a Deployment that has none
   list                         Inspect deployments and report drift
   repair <name>                Reconcile a deployment with its receipt
   upgrade <name>               Upgrade to this CLI package version
@@ -50,6 +53,7 @@ Options:
   --json                       Print list output as JSON
   --yes, -y                    Apply the repair plan without confirming
   --adopt application:<id>     Adopt an unprovable container application (repeatable)
+  --app <slug>                 The GitHub App an adopted Deployment uses
   --dry-run                    Preview destroy without changing anything
   --now                        Skip draining active Runner Attempts
   --export <path>              Export the receipt and final verification
@@ -60,6 +64,16 @@ Options:
 
   if ((positionals[0] === "upgrade" || positionals[0] === "rollback") && positionals.length === 2) {
     return yield* upgradeCommand({ name: positionals[1]!, operation: positionals[0] });
+  }
+
+  if (positionals[0] === "adopt" && positionals.length === 2) {
+    if (values.app === undefined) {
+      return yield* new InstallerError({
+        step: "argument_parsing",
+        message: "adopt needs --app <slug>, the GitHub App the Deployment uses",
+      });
+    }
+    return yield* adoptCommand({ name: positionals[1]!, appSlug: values.app });
   }
 
   if (positionals[0] === "destroy" && positionals.length === 2) {

@@ -69,7 +69,6 @@ async function harness(overrides: Overrides = {}, seed: readonly DeploymentRecei
     deploy: () =>
       record("deploy").pipe(
         Effect.as({
-          workerUrl: "https://jitney.example.workers.dev",
           applicationId: "a03a65c5",
           registryTag: "0.4.0",
         }),
@@ -83,7 +82,6 @@ async function harness(overrides: Overrides = {}, seed: readonly DeploymentRecei
         ]),
       ),
     writeOwnership: (_receipt, fullNames) => record(`write-ownership:${fullNames.join(",")}`),
-    checkHealth: () => record("health"),
     ...overrides,
   });
   const run = () =>
@@ -152,7 +150,6 @@ describe("adopt", () => {
       "inventory",
       "ownership",
       "write-ownership:LoriKarikari/jitney-test",
-      "health",
     ]);
     expect(await adoption.stored()).toMatchObject({
       name: "jitney",
@@ -272,7 +269,7 @@ describe("adopt", () => {
     });
 
     expect(failureMessage(await adoption.run())).toContain("LoriKarikari/api");
-    expect(await adoption.events()).not.toContain("health");
+    expect(await adoption.events()).not.toContainEqual(expect.stringMatching(/^write-ownership/));
     expect(await adoption.stored()).toMatchObject({ phase: "installing", lease: null });
   });
 

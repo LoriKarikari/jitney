@@ -45,11 +45,11 @@ export class AdoptPlatform extends Context.Service<
   {
     readonly inspect: (input: AdoptInput) => Effect.Effect<AdoptionCandidate, InstallerError>;
     readonly resolveApp: (slug: string) => Effect.Effect<AdoptedApp, InstallerError>;
+    /** Deploy the receipt's stack over the existing resources and health-gate it. */
     readonly deploy: (
       receipt: DeploymentReceipt,
-      version: string,
     ) => Effect.Effect<
-      { readonly workerUrl: string; readonly applicationId: string; readonly registryTag: string },
+      { readonly applicationId: string; readonly registryTag: string },
       InstallerError
     >;
     readonly inventory: (
@@ -61,10 +61,6 @@ export class AdoptPlatform extends Context.Service<
     readonly writeOwnership: (
       receipt: DeploymentReceipt,
       fullNames: readonly string[],
-    ) => Effect.Effect<void, InstallerError>;
-    readonly checkHealth: (
-      workerUrl: string,
-      version: string,
     ) => Effect.Effect<void, InstallerError>;
   }
 >()("Jitney.AdoptPlatform") {}
@@ -155,7 +151,7 @@ export const adoptDeployment = Effect.fn(function* (input: AdoptInput) {
   const held = yield* beginAdoption(input);
 
   const operation = Effect.gen(function* () {
-    const deployed = yield* platform.deploy(yield* held.receipt(), input.version);
+    const deployed = yield* platform.deploy(yield* held.receipt());
     yield* held.record((current) => ({
       cloudflare: {
         ...current.cloudflare,
@@ -184,7 +180,6 @@ export const adoptDeployment = Effect.fn(function* (input: AdoptInput) {
       );
     }
 
-    yield* platform.checkHealth(deployed.workerUrl, input.version);
     return yield* held.finish({ phase: "active", outcome: "succeeded" });
   });
 

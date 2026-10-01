@@ -22,6 +22,8 @@ export interface JitneyStackInput {
   organization?: string;
   manageGitHubApp?: boolean;
   githubConfigured?: boolean;
+  /** Take over a Worker and container application that Alchemy did not create. */
+  adoptExisting?: boolean;
   uninstallSecret: Redacted.Redacted<string>;
   githubCredentials?: {
     appId: Redacted.Redacted<string>;
@@ -59,10 +61,11 @@ export function jitneyStack(
         maxInstances: 5,
         instanceType: "standard-2",
       } satisfies Cloudflare.Containers.RemoteContainerProps;
+      const adoptExisting = adopt(input.adoptExisting === true);
       const runnerApplication = yield* Cloudflare.Containers.ContainerPlatform(
         "RunnerApplication",
         runnerApplicationProps,
-      );
+      ).pipe(adoptExisting);
       const scheduler = Cloudflare.DurableObject("SCHEDULER", { className: "Scheduler" });
       const runnerContainers = Cloudflare.DurableObject("RUNNER_CONTAINERS", {
         className: "RunnerContainer",
@@ -103,7 +106,7 @@ export function jitneyStack(
                 GITHUB_WEBHOOK_SECRET: input.githubCredentials.webhookSecret,
               }),
         },
-      });
+      }).pipe(adoptExisting);
       yield* runnerApplication.bind("RUNNER_CONTAINERS", {
         durableObjects: {
           namespaceId: worker.durableObjectNamespaces.pipe(

@@ -1,23 +1,8 @@
-import { deploy as alchemyDeploy } from "alchemy/Deploy";
-import { randomBytes } from "node:crypto";
-import { Effect, Layer, Option, Redacted, Ref, Schedule, Schema } from "effect";
-import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
-import {
-  GitHubAppOperationError,
-  GitHubAppOperations,
-  type GitHubAppAttributes,
-} from "./alchemy/github-app.js";
-import { jitneyStack, type JitneyProviderLayer } from "./alchemy/jitney-stack.js";
-import { jitneyProviders } from "./alchemy/providers.js";
-import { withAlchemyWorkspace } from "./alchemy/workspace.js";
-import {
-  alchemyRuntime,
-  captureCloudflareServices,
-  ensureAlchemyStateStore,
-} from "./cloudflare-runtime.js";
+import { Effect, Option, Ref, Schedule, Schema } from "effect";
+import { captureCloudflareServices } from "./cloudflare-runtime.js";
 import { workerBundlePath } from "./config.js";
 import { InstallerError, orStepError } from "./errors.js";
-import { fetchLifecycleStatus } from "./lifecycle-status-client.js";
+import { deployReceiptStack, liveOperationSecret } from "./receipt-stack.js";
 import type { DeploymentReceipt } from "./receipts/schema.js";
 import {
   copyRunnerImage,
@@ -30,33 +15,10 @@ import { makeWorkerLifecycleClient } from "./worker-lifecycle-client.js";
 import { downloadWorkerBundle } from "./worker-artifact.js";
 
 const DrainResponse = Schema.Struct({ activeAttempts: Schema.Number });
-const secret = () =>
-  mintOperationSecret(Date.now() + 2 * 60 * 60_000, randomBytes(32).toString("base64url"));
-
-const appAttributes = (receipt: DeploymentReceipt): GitHubAppAttributes | null => {
-  if (
-    receipt.github.appId === null ||
-    receipt.github.appSlug === null ||
-    receipt.github.ownerLogin === null
-  ) {
-    return null;
-  }
-  const settingsUrl =
-    receipt.github.ownerType === "Organization"
-      ? `https://github.com/organizations/${receipt.github.ownerLogin}/settings/apps/${receipt.github.appSlug}`
-      : `https://github.com/settings/apps/${receipt.github.appSlug}`;
-  return {
-    appId: String(receipt.github.appId),
-    slug: receipt.github.appSlug,
-    settingsUrl,
-    ownerLogin: receipt.github.ownerLogin,
-    ownerType: receipt.github.ownerType,
-  };
-};
 
 export const makeUpgradePlatform = Effect.fn(function* (localVersion: string) {
   const cloudflare = yield* captureCloudflareServices;
-  const operationSecret = secret();
+  const operationSecret = liveOperationSecret();
   const lifecycle = yield* makeWorkerLifecycleClient(cloudflare, "upgrade", operationSecret);
   const bundles = yield* Ref.make(new Map([[localVersion, workerBundlePath()]]));
 
@@ -70,71 +32,12 @@ export const makeUpgradePlatform = Effect.fn(function* (localVersion: string) {
     });
 
   const deployVersion = (receipt: DeploymentReceipt, version: string) =>
-    Effect.gen(function* () {
-      const app = appAttributes(receipt);
-      const githubOperations = Layer.succeed(GitHubAppOperations, {
-        reconcile: ({ current }) =>
-          current !== undefined
-            ? Effect.succeed(current)
-            : app === null
-              ? Effect.fail(
-                  new GitHubAppOperationError({
-                    operation: "reconcile",
-                    cause: new Error("The deployment receipt has no GitHub App"),
-                  }),
-                )
-              : Effect.succeed(app),
-        delete: () => Effect.void,
-        list: () => Effect.succeed(app === null ? [] : [app]),
-      });
-      const providers = jitneyProviders(githubOperations) as unknown as JitneyProviderLayer;
-      const bundle = yield* bundleFor(version);
-      const stack = jitneyStack(
-        {
-          deploymentId: receipt.id,
-          workerName: receipt.cloudflare.workerName,
-          workerBundlePath: bundle,
-          version,
-          manageGitHubApp: app !== null,
-          githubConfigured: app !== null,
-          uninstallSecret: Redacted.make(operationSecret),
-          ...(receipt.github.ownerType === "Organization" && receipt.github.ownerLogin !== null
-            ? { organization: receipt.github.ownerLogin }
-            : {}),
-        },
-        { providers },
-      );
-      yield* withAlchemyWorkspace(
-        ensureAlchemyStateStore.pipe(Effect.andThen(alchemyDeploy({ stack, stage: receipt.name }))),
-      ).pipe(
-        Effect.provide(alchemyRuntime),
-        Effect.mapError(
-          (cause) =>
-            new InstallerError({
-              step: "worker_deployment",
-              message: `Could not deploy Jitney ${version}`,
-              cause,
-            }),
-        ),
-      );
-
-      const unhealthy = new InstallerError({
-        step: "health_check",
-        message: `Jitney ${version} did not pass the upgrade health gate`,
-      });
-      yield* cloudflare.provide(fetchLifecycleStatus(receipt)).pipe(
-        Effect.flatMap((status) =>
-          status.version === version &&
-          status.scheduler === "ok" &&
-          status.container === "ok" &&
-          status.app === "ok"
-            ? Effect.void
-            : Effect.fail(unhealthy),
-        ),
-        Effect.mapError(orStepError("health_check", `Jitney ${version} failed its health gate`)),
-        Effect.retry(Schedule.max([Schedule.spaced("1 second"), Schedule.recurs(29)])),
-      );
-    }) as unknown as Effect.Effect<void, InstallerError>;
+    bundleFor(version).pipe(
+      Effect.flatMap((bundlePath) =>
+        deployReceiptStack({ cloudflare, receipt, version, bundlePath, operationSecret }),
+      ),
+      Effect.asVoid,
+    );
 
   return UpgradePlatform.of({
     prepare: (receipt, operation, targetVersion, existingTag) =>

@@ -39,7 +39,13 @@ type Receipt = typeof Receipt.Type;
 
 export interface LifecycleInstallation {
   readonly id: number;
-  readonly repositories: readonly { readonly id: number; readonly fullName: string }[];
+  readonly accountLogin: string;
+  readonly accountType: "User" | "Organization";
+  readonly repositories: readonly {
+    readonly id: number;
+    readonly name: string;
+    readonly fullName: string;
+  }[];
 }
 
 export class LifecycleGitHubError extends Data.TaggedError("LifecycleGitHubError")<{
@@ -63,7 +69,7 @@ export class LifecycleGitHub extends Context.Service<
   }
 >()("Jitney.LifecycleGitHub") {}
 
-const inventoryKey = (installations: readonly LifecycleInstallation[]): string =>
+const inventoryKey = (installations: Receipt["github"]["installations"]): string =>
   Arr.flatMap(installations, (installation) =>
     Arr.map(
       installation.repositories,
@@ -102,7 +108,18 @@ export const makeLifecycleGitHub = (env: Env): LifecycleGitHub["Service"] => {
           catch: (cause) => new LifecycleGitHubError({ operation: "inventory", cause }),
         });
         const result: LifecycleInstallation[] = [];
-        for (const { id: installationId } of installations) {
+        for (const { id: installationId, account } of installations) {
+          const accountType = account !== null && "type" in account ? account.type : undefined;
+          if (
+            account === null ||
+            !("login" in account) ||
+            (accountType !== "User" && accountType !== "Organization")
+          ) {
+            return yield* new LifecycleGitHubError({
+              operation: "inventory",
+              cause: new Error(`Installation ${installationId} has an unsupported owner`),
+            });
+          }
           const installation = new Octokit({
             authStrategy: createAppAuth,
             auth: {
@@ -120,8 +137,11 @@ export const makeLifecycleGitHub = (env: Env): LifecycleGitHub["Service"] => {
           });
           result.push({
             id: installationId,
-            repositories: Arr.map(repositories, ({ id, full_name }) => ({
+            accountLogin: account.login,
+            accountType,
+            repositories: Arr.map(repositories, ({ id, name, full_name }) => ({
               id,
+              name,
               fullName: full_name,
             })),
           });

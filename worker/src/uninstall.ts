@@ -3,8 +3,16 @@ import { Octokit } from "octokit";
 import { Context, Data, Effect, Predicate, Schema } from "effect";
 import { ownershipEnvironmentName } from "@jitney/shared/ownership-marker";
 import { isLiveSecret, UNINSTALL_ACTIONS } from "@jitney/shared/uninstall-protocol";
+import { makeLifecycleGitHub, type LifecycleInstallation } from "./lifecycle-status";
 
 export const UninstallAction = Schema.Literals([...UNINSTALL_ACTIONS]);
+
+export interface AppIdentity {
+  readonly id: number;
+  readonly slug: string;
+  readonly ownerLogin: string;
+  readonly ownerType: "User" | "Organization";
+}
 export type UninstallAction = typeof UninstallAction.Type;
 export const UninstallRequest = Schema.Struct({ action: UninstallAction });
 
@@ -42,6 +50,10 @@ export class UninstallPlatform extends Context.Service<
       installations: UninstallReceipt["github"]["installations"],
     ) => Effect.Effect<void, unknown>;
     readonly deleteInstallations: (ids: readonly number[]) => Effect.Effect<void, unknown>;
+    readonly inventory: () => Effect.Effect<
+      { readonly app: AppIdentity; readonly installations: readonly LifecycleInstallation[] },
+      unknown
+    >;
   }
 >()("Jitney.UninstallPlatform") {}
 
@@ -137,6 +149,29 @@ export const makeUninstallPlatform = (env: Env): UninstallPlatform["Service"] =>
           app.rest.apps.deleteInstallation({ installation_id: installationId }),
         ),
       ).pipe(Effect.asVoid),
+    inventory: () =>
+      Effect.all({
+        app: Effect.tryPromise({
+          try: () => app.rest.apps.getAuthenticated(),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.flatMap(({ data }) => {
+            const owner = data?.owner;
+            const type = owner != null && "type" in owner ? owner.type : undefined;
+            const ownerType: AppIdentity["ownerType"] | undefined =
+              type === "User" || type === "Organization" ? type : undefined;
+            return data == null || owner == null || !("login" in owner) || ownerType === undefined
+              ? Effect.fail(new Error("The GitHub App has no user or organization owner"))
+              : Effect.succeed({
+                  id: data.id,
+                  slug: data.slug ?? "",
+                  ownerLogin: owner.login,
+                  ownerType,
+                });
+          }),
+        ),
+        installations: makeLifecycleGitHub(env).inventory(),
+      }),
   });
 };
 
@@ -194,5 +229,7 @@ export const executeUninstall = Effect.fn("GitHub.executeUninstall")(function* (
     case "delete_installations":
       yield* platform.deleteInstallations(installationIds);
       return { accepted: true } as const;
+    case "inventory":
+      return { accepted: true, inventory: yield* platform.inventory() } as const;
   }
 });

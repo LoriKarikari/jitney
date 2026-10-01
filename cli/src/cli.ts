@@ -2,6 +2,7 @@
 
 import { parseArgs } from "node:util";
 import { Cause, Effect, Exit, Option } from "effect";
+import { adoptCommand } from "./adopt-command.js";
 import { deploy } from "./deploy.js";
 import { destroyCommand } from "./destroy-command.js";
 import { InstallerError, isInstallFailure, renderFailure, trySync } from "./errors.js";
@@ -37,6 +38,7 @@ const program = Effect.gen(function* () {
 
 Commands:
   deploy                       Install a Jitney deployment
+  adopt <name>                 Record a receipt for a Deployment that has none
   list                         Inspect deployments and report drift
   repair <name>                Reconcile a deployment with its receipt
   upgrade <name>               Upgrade to this CLI package version
@@ -60,6 +62,10 @@ Options:
 
   if ((positionals[0] === "upgrade" || positionals[0] === "rollback") && positionals.length === 2) {
     return yield* upgradeCommand({ name: positionals[1]!, operation: positionals[0] });
+  }
+
+  if (positionals[0] === "adopt" && positionals.length === 2) {
+    return yield* adoptCommand({ name: positionals[1]! });
   }
 
   if (positionals[0] === "destroy" && positionals.length === 2) {

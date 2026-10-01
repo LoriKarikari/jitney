@@ -12,6 +12,7 @@ import {
   type InstallerStep,
 } from "./errors.js";
 import {
+  ensureCloudflareReceiptNamespace,
   findCloudflareReceiptNamespace,
   makeCloudflareReceiptBackend,
 } from "./receipts/cloudflare.js";
@@ -35,6 +36,7 @@ export function runLifecycleCommand<A, E extends InstallFailure>(
   step: InstallerStep,
   failureMessage: string,
   use: (context: LifecycleCommandContext) => Effect.Effect<A, E, LifecycleCommandServices>,
+  options: { readonly createReceiptNamespace?: boolean } = {},
 ): Effect.Effect<A, E | InstallerError> {
   const fail = stepError(step);
   return Effect.gen(function* () {
@@ -44,11 +46,18 @@ export function runLifecycleCommand<A, E extends InstallFailure>(
       () => `${userInfo().username}@${hostname()}`,
     );
     const { accountId } = yield* yield* Cloudflare.CloudflareEnvironment;
-    const scope = yield* findCloudflareReceiptNamespace(accountId);
-    if (Option.isNone(scope)) {
-      return yield* fail("No Jitney deployments exist on this Cloudflare account.");
-    }
-    const receipts = yield* makeCloudflareReceiptBackend(scope.value).pipe(
+    const scope =
+      options.createReceiptNamespace === true
+        ? yield* ensureCloudflareReceiptNamespace(accountId)
+        : yield* findCloudflareReceiptNamespace(accountId).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => fail("No Jitney deployments exist on this Cloudflare account."),
+                onSome: Effect.succeed,
+              }),
+            ),
+          );
+    const receipts = yield* makeCloudflareReceiptBackend(scope).pipe(
       Effect.map(makeReceiptStore),
       Effect.mapError((cause) => fail("Could not connect to the receipt store", cause)),
     );

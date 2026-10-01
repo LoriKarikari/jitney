@@ -1,6 +1,7 @@
 import { Data, Effect } from "effect";
 
 export type InstallerStep =
+  | "adopt"
   | "argument_parsing"
   | "cloudflare_authentication"
   | "cloudflare_account_selection"

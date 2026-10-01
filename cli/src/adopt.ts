@@ -164,6 +164,15 @@ export const adoptDeployment = Effect.fn(function* (input: AdoptInput) {
     }));
 
     const ownership = yield* platform.ownership(withInstallations);
+    const reported = new Set(ownership.map(({ fullName }) => fullName));
+    const unreported = installations
+      .flatMap((installation) => installation.repositories)
+      .filter(({ fullName }) => !reported.has(fullName));
+    if (unreported.length > 0) {
+      return yield* refuse(
+        `Could not read the Ownership Marker of ${unreported.map(({ fullName }) => fullName).join(", ")}`,
+      );
+    }
     const blocked = ownership.filter(({ status }) => status === "drifted" || status === "unknown");
     if (blocked.length > 0) {
       return yield* refuse(

@@ -247,11 +247,23 @@ describe("adopt", () => {
   it("refuses to claim a repository another Deployment's marker owns", async () => {
     const adoption = await harness({
       ownership: () =>
-        Effect.succeed([{ fullName: "LoriKarikari/api", status: "drifted" as const }]),
+        Effect.succeed([
+          { fullName: "LoriKarikari/jitney-test", status: "missing" as const },
+          { fullName: "LoriKarikari/api", status: "drifted" as const },
+        ]),
     });
 
     expect(failureMessage(await adoption.run())).toContain("LoriKarikari/api");
     expect(await adoption.events()).not.toContainEqual(expect.stringMatching(/^write-ownership/));
+    expect(await adoption.stored()).toMatchObject({ phase: "installing", lease: null });
+  });
+
+  it("does not finish while a recorded repository's marker is unaccounted for", async () => {
+    const adoption = await harness({
+      ownership: () => Effect.succeed([{ fullName: "LoriKarikari/api", status: "ok" as const }]),
+    });
+
+    expect(failureMessage(await adoption.run())).toContain("LoriKarikari/jitney-test");
     expect(await adoption.stored()).toMatchObject({ phase: "installing", lease: null });
   });
 

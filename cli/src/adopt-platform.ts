@@ -1,6 +1,6 @@
 import * as DurableObjects from "@distilled.cloud/cloudflare/durable-objects";
 import * as Workers from "@distilled.cloud/cloudflare/workers";
-import { Effect, Option, Predicate, Schema, Stream } from "effect";
+import { Data, Effect, Option, Predicate, Schedule, Schema, Stream } from "effect";
 import { AdoptPlatform } from "./adopt.js";
 import { observeAccount, runnerApplicationName } from "./cloudflare-inventory.js";
 import { captureCloudflareServices } from "./cloudflare-runtime.js";
@@ -20,6 +20,16 @@ const InventoryResponse = Schema.Struct({
   }),
   installations: Schema.Array(GitHubInstallation),
 });
+
+/** KV caches a read at the edge for up to 60 seconds. */
+const kvPropagation = Schedule.max([Schedule.spaced("5 seconds"), Schedule.recurs(23)]);
+
+class StaleReceipt extends Data.TaggedError("StaleReceipt")<{
+  entries: readonly {
+    readonly fullName: string;
+    readonly status: "ok" | "missing" | "drifted" | "unknown";
+  }[];
+}> {}
 
 export const makeAdoptPlatform = Effect.fn(function* (version: string) {
   const cloudflare = yield* captureCloudflareServices;
@@ -114,28 +124,40 @@ export const makeAdoptPlatform = Effect.fn(function* (version: string) {
           }),
         ),
       ),
-    ownership: (receipt) =>
-      cloudflare.provide(fetchLifecycleStatus(receipt)).pipe(
-        Effect.map((status) => {
-          const fullNames = new Map(
-            receipt.github.installations.flatMap((installation) =>
-              installation.repositories.map(
-                (repository) =>
-                  [`${installation.id}:${repository.id}`, repository.fullName] as const,
-              ),
-            ),
-          );
-          return status.ownership.flatMap((entry) => {
+    ownership: (receipt) => {
+      const fullNames = new Map(
+        receipt.github.installations.flatMap((installation) =>
+          installation.repositories.map(
+            (repository) => [`${installation.id}:${repository.id}`, repository.fullName] as const,
+          ),
+        ),
+      );
+      const read = cloudflare.provide(fetchLifecycleStatus(receipt)).pipe(
+        Effect.map((status) =>
+          status.ownership.flatMap((entry) => {
             const fullName = fullNames.get(`${entry.installationId}:${entry.repositoryId}`);
             return fullName === undefined ? [] : [{ fullName, status: entry.status }];
-          });
-        }),
+          }),
+        ),
         Effect.mapError(orStepError("repository_ownership", "Could not read Ownership Markers")),
-      ),
+      );
+      // The Worker reads the receipt from KV, which may serve a copy cached
+      // before the installations were recorded.
+      return read.pipe(
+        Effect.flatMap((entries) =>
+          entries.length < fullNames.size
+            ? Effect.fail(new StaleReceipt({ entries }))
+            : Effect.succeed(entries),
+        ),
+        Effect.retry({ while: (error) => error instanceof StaleReceipt, schedule: kvPropagation }),
+        Effect.catchTag("StaleReceipt", ({ entries }) => Effect.succeed(entries)),
+      );
+    },
     writeOwnership: (receipt, fullNames) =>
       cloudflare
         .provide(rewriteOwnershipMarkers(receipt, fullNames))
         .pipe(
+          Effect.retry({ schedule: kvPropagation }),
           Effect.mapError(orStepError("repository_ownership", "Could not write Ownership Markers")),
         ),
   });

@@ -15,7 +15,6 @@ export interface AdoptInput {
   readonly accountId: string;
   readonly version: string;
   readonly actor: string;
-  readonly appSlug: string;
 }
 
 /** What Cloudflare reports under a Deployment name before adoption. */
@@ -44,7 +43,6 @@ export class AdoptPlatform extends Context.Service<
   AdoptPlatform,
   {
     readonly inspect: (input: AdoptInput) => Effect.Effect<AdoptionCandidate, InstallerError>;
-    readonly resolveApp: (slug: string) => Effect.Effect<AdoptedApp, InstallerError>;
     /** Deploy the receipt's stack over the existing resources and health-gate it. */
     readonly deploy: (
       receipt: DeploymentReceipt,
@@ -52,9 +50,14 @@ export class AdoptPlatform extends Context.Service<
       { readonly applicationId: string; readonly registryTag: string },
       InstallerError
     >;
-    readonly inventory: (
-      receipt: DeploymentReceipt,
-    ) => Effect.Effect<readonly GitHubInstallation[], InstallerError>;
+    /** The Worker reports its own GitHub App, whose credentials only it holds. */
+    readonly inventory: (receipt: DeploymentReceipt) => Effect.Effect<
+      {
+        readonly app: AdoptedApp;
+        readonly installations: readonly GitHubInstallation[];
+      },
+      InstallerError
+    >;
     readonly ownership: (
       receipt: DeploymentReceipt,
     ) => Effect.Effect<readonly RepositoryOwnership[], InstallerError>;
@@ -103,7 +106,6 @@ const newReceipt = Effect.fn(function* (input: AdoptInput) {
     return yield* refuse(`Deployment ${claimant.name} already owns these resources`);
   }
 
-  const app = yield* platform.resolveApp(input.appSlug);
   const now = yield* DateTime.now;
   const receipt = createDeploymentReceipt({
     id: worker.deploymentId ?? (yield* generateDeploymentId),
@@ -119,7 +121,7 @@ const newReceipt = Effect.fn(function* (input: AdoptInput) {
       registryRepo: applicationName,
       tags: { current: input.version, previous: null },
     },
-    github: { ...app, installations: [] },
+    github: { appId: null, appSlug: null, ownerLogin: null, ownerType: "User", installations: [] },
     autoUpgrade: { enabled: false, channel: "patch" },
   });
   return yield* beginInstallOperation(receipts, receipt, input.actor, now);
@@ -132,11 +134,7 @@ const beginAdoption = Effect.fn(function* (input: AdoptInput) {
     .pipe(Effect.mapError(orStepError("receipt_store", "Could not read the deployment receipt")));
   if (Option.isNone(existing)) return yield* newReceipt(input);
   const receipt = existing.value;
-  const resumable =
-    receipt.phase === "installing" &&
-    receipt.lease === null &&
-    receipt.github.appSlug === input.appSlug;
-  if (!resumable) {
+  if (receipt.phase !== "installing" || receipt.lease !== null) {
     return yield* new ExistingDeploymentError({
       name: input.name,
       deploymentId: receipt.id,
@@ -160,9 +158,9 @@ export const adoptDeployment = Effect.fn(function* (input: AdoptInput) {
       },
     }));
 
-    const installations = yield* platform.inventory(yield* held.receipt());
-    const withInstallations = yield* held.record((current) => ({
-      github: { ...current.github, installations: [...installations] },
+    const { app, installations } = yield* platform.inventory(yield* held.receipt());
+    const withInstallations = yield* held.record(() => ({
+      github: { ...app, installations: [...installations] },
     }));
 
     const ownership = yield* platform.ownership(withInstallations);

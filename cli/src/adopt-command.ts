@@ -5,7 +5,7 @@ import { packageVersion } from "./deploy.js";
 import { DeploymentReceipts } from "./install.js";
 import { runLifecycleCommand } from "./lifecycle-command.js";
 
-export const adoptCommand = (input: { readonly name: string; readonly appSlug: string }) =>
+export const adoptCommand = (input: { readonly name: string }) =>
   runLifecycleCommand(
     "adopt",
     `Could not adopt ${input.name}`,
@@ -18,7 +18,6 @@ export const adoptCommand = (input: { readonly name: string; readonly appSlug: s
           accountId,
           version,
           actor,
-          appSlug: input.appSlug,
         }).pipe(
           Effect.provideService(DeploymentReceipts, receipts),
           Effect.provideService(AdoptPlatform, platform),

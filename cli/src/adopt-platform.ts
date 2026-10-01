@@ -1,18 +1,25 @@
 import * as DurableObjects from "@distilled.cloud/cloudflare/durable-objects";
 import * as Workers from "@distilled.cloud/cloudflare/workers";
-import { request } from "@octokit/request";
 import { Effect, Option, Predicate, Schema, Stream } from "effect";
 import { AdoptPlatform } from "./adopt.js";
 import { observeAccount, runnerApplicationName } from "./cloudflare-inventory.js";
 import { captureCloudflareServices } from "./cloudflare-runtime.js";
 import { workerBundlePath } from "./config.js";
-import { InstallerError, orStepError, tryPromise } from "./errors.js";
+import { InstallerError, orStepError } from "./errors.js";
 import { fetchLifecycleStatus, rewriteOwnershipMarkers } from "./lifecycle-status-client.js";
 import { deployReceiptStack, liveOperationSecret } from "./receipt-stack.js";
 import { GitHubInstallation } from "./receipts/schema.js";
 import { makeWorkerLifecycleClient } from "./worker-lifecycle-client.js";
 
-const InventoryResponse = Schema.Struct({ installations: Schema.Array(GitHubInstallation) });
+const InventoryResponse = Schema.Struct({
+  app: Schema.Struct({
+    id: Schema.Number,
+    slug: Schema.String,
+    ownerLogin: Schema.String,
+    ownerType: Schema.Literals(["User", "Organization"]),
+  }),
+  installations: Schema.Array(GitHubInstallation),
+});
 
 export const makeAdoptPlatform = Effect.fn(function* (version: string) {
   const cloudflare = yield* captureCloudflareServices;
@@ -58,38 +65,6 @@ export const makeAdoptPlatform = Effect.fn(function* (version: string) {
         .pipe(
           Effect.mapError(orStepError("adopt", `Could not inspect the resources named ${name}`)),
         ),
-    resolveApp: (slug) =>
-      tryPromise("adopt", `GitHub App ${slug} does not exist`, () =>
-        request("GET /apps/{app_slug}", { app_slug: slug }),
-      ).pipe(
-        Effect.flatMap(({ data }) => {
-          if (data === null) {
-            return Effect.fail(
-              new InstallerError({ step: "adopt", message: `GitHub App ${slug} does not exist` }),
-            );
-          }
-          const owner = data.owner;
-          const ownerType =
-            owner !== null &&
-            "type" in owner &&
-            (owner.type === "User" || owner.type === "Organization")
-              ? owner.type
-              : undefined;
-          return owner === null || !("login" in owner) || ownerType === undefined
-            ? Effect.fail(
-                new InstallerError({
-                  step: "adopt",
-                  message: `GitHub App ${slug} is not owned by a user or organization`,
-                }),
-              )
-            : Effect.succeed({
-                appId: data.id,
-                appSlug: data.slug ?? slug,
-                ownerLogin: owner.login,
-                ownerType,
-              });
-        }),
-      ),
     deploy: (receipt) =>
       Effect.gen(function* () {
         const output = yield* deployReceiptStack({
@@ -122,7 +97,18 @@ export const makeAdoptPlatform = Effect.fn(function* (version: string) {
               ),
             onSome: (body) =>
               Effect.try({
-                try: () => Schema.decodeUnknownSync(InventoryResponse)(body).installations,
+                try: () => {
+                  const { app, installations } = Schema.decodeUnknownSync(InventoryResponse)(body);
+                  return {
+                    app: {
+                      appId: app.id,
+                      appSlug: app.slug,
+                      ownerLogin: app.ownerLogin,
+                      ownerType: app.ownerType,
+                    },
+                    installations,
+                  };
+                },
                 catch: orStepError("adopt", "The Worker returned an invalid inventory"),
               }),
           }),

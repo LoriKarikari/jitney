@@ -312,7 +312,7 @@ export const listDeployments = Effect.fn(function* (accountIds: readonly string[
   const accountFindings: Finding[] = [];
   const adoptCommand = (workerName: string) => ({
     label: "adopt" as const,
-    command: `npx get-jitney adopt ${workerName} --app <github-app-slug>`,
+    command: `npx get-jitney adopt ${workerName}`,
   });
   for (const accountId of scannedAccounts) {
     const snapshot = HashMap.get(snapshots, accountId);

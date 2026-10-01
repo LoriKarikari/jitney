@@ -16,7 +16,13 @@ const input: AdoptInput = {
   accountId: "account-id",
   version: "0.4.0",
   actor: "lori@mbp",
-  appSlug: "jitney-lorikarikari",
+};
+
+const app = {
+  appId: 3000,
+  appSlug: "jitney-jitney-f7c3",
+  ownerLogin: "LoriKarikari",
+  ownerType: "User" as const,
 };
 
 const spike: AdoptionCandidate = {
@@ -62,10 +68,6 @@ async function harness(overrides: Overrides = {}, seed: readonly DeploymentRecei
   const record = (event: string) => Ref.update(events, (current) => [...current, event]);
   const platform = AdoptPlatform.of({
     inspect: () => record("inspect").pipe(Effect.as(overrides.candidate ?? spike)),
-    resolveApp: (slug) =>
-      record("resolve-app").pipe(
-        Effect.as({ appId: 3000, appSlug: slug, ownerLogin: "LoriKarikari", ownerType: "User" }),
-      ),
     deploy: () =>
       record("deploy").pipe(
         Effect.as({
@@ -73,7 +75,7 @@ async function harness(overrides: Overrides = {}, seed: readonly DeploymentRecei
           registryTag: "0.4.0",
         }),
       ),
-    inventory: () => record("inventory").pipe(Effect.as(installations)),
+    inventory: () => record("inventory").pipe(Effect.as({ app, installations })),
     ownership: () =>
       record("ownership").pipe(
         Effect.as([
@@ -102,7 +104,6 @@ async function harness(overrides: Overrides = {}, seed: readonly DeploymentRecei
 function receiptFor(
   overrides: { name: string; id: string; applicationId: string },
   phase: DeploymentReceipt["phase"] = "active",
-  appSlug: string | null = null,
 ): DeploymentReceipt {
   const base = createDeploymentReceipt({
     id: overrides.id,
@@ -118,13 +119,7 @@ function receiptFor(
       registryRepo: `${overrides.name}-runner`,
       tags: { current: "0.3.0", previous: null },
     },
-    github: {
-      appId: appSlug === null ? null : 3000,
-      appSlug,
-      ownerLogin: appSlug === null ? null : "LoriKarikari",
-      ownerType: "User",
-      installations: [],
-    },
+    github: { appId: null, appSlug: null, ownerLogin: null, ownerType: "User", installations: [] },
     autoUpgrade: { enabled: false, channel: "patch" },
   });
   return { ...base, phase };
@@ -145,7 +140,6 @@ describe("adopt", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(await adoption.events()).toEqual([
       "inspect",
-      "resolve-app",
       "deploy",
       "inventory",
       "ownership",
@@ -162,7 +156,7 @@ describe("adopt", () => {
         registryRepo: "jitney-runner",
         tags: { current: "0.4.0", previous: null },
       },
-      github: { appId: 3000, appSlug: input.appSlug, installations },
+      github: { ...app, installations },
     });
   });
 
@@ -239,18 +233,6 @@ describe("adopt", () => {
     expect(await adoption.events()).toEqual([]);
   });
 
-  it("refuses an unknown App before writing a receipt", async () => {
-    const adoption = await harness({
-      resolveApp: (slug) =>
-        Effect.fail(
-          new InstallerError({ step: "adopt", message: `GitHub App ${slug} does not exist` }),
-        ),
-    });
-
-    expect(failureMessage(await adoption.run())).toContain("does not exist");
-    expect(await adoption.stored()).toBeUndefined();
-  });
-
   it("keeps the Deployment and an installing receipt when a later step fails", async () => {
     const adoption = await harness({
       inventory: () =>
@@ -279,7 +261,7 @@ describe("adopt", () => {
       inventory: () =>
         failInventory
           ? Effect.fail(new InstallerError({ step: "adopt", message: "GitHub timed out" }))
-          : Effect.succeed(installations),
+          : Effect.succeed({ app, installations }),
     });
     await adoption.run();
     const firstId = (await adoption.stored())?.id;

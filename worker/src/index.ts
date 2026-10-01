@@ -68,8 +68,8 @@ const handleRequest = Effect.fn("IngressWorker.fetch")(function* (request: Reque
           ? new Response(null, { status: 409 })
           : "activeAttempts" in result
             ? Response.json({ activeAttempts: result.activeAttempts })
-            : "installations" in result
-              ? Response.json({ installations: result.installations })
+            : "inventory" in result
+              ? Response.json(result.inventory)
               : new Response(null, { status: 204 }),
       ),
       Effect.catch(() => Effect.succeed(new Response(null, { status: 503 }))),

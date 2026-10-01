@@ -236,10 +236,7 @@ describe("list drift classification", () => {
         .filter((command) => command.label === "adopt")
         .map(({ command }) => command),
     );
-    expect(adoptCommands).toEqual([
-      "npx get-jitney adopt spike --app <github-app-slug>",
-      "npx get-jitney adopt lost --app <github-app-slug>",
-    ]);
+    expect(adoptCommands).toEqual(["npx get-jitney adopt spike", "npx get-jitney adopt lost"]);
   });
 
   it("reports a Jitney-shaped application no receipt references as an orphan", async () => {

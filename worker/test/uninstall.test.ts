@@ -20,6 +20,13 @@ const receipt: UninstallReceipt = {
   },
 };
 
+const liveApp = {
+  id: 3000,
+  slug: "jitney-jitney-f7c3",
+  ownerLogin: "LoriKarikari",
+  ownerType: "User" as const,
+};
+
 const liveInstallations = [
   {
     id: 42,
@@ -50,7 +57,8 @@ async function fakePlatform(activeAttempts = 0) {
             .join(",")}`,
         ),
       deleteInstallations: (ids) => call(`delete_installations:${ids.join(",")}`),
-      inventory: () => call("inventory").pipe(Effect.as(liveInstallations)),
+      inventory: () =>
+        call("inventory").pipe(Effect.as({ app: liveApp, installations: liveInstallations })),
     }),
   };
 }
@@ -135,7 +143,7 @@ describe("uninstall", () => {
     expect(result).toEqual({ accepted: true, activeAttempts: 3 });
   });
 
-  it("reports the App's live installations to an adopting command", async () => {
+  it("reports the Worker's App and its live installations to an adopting command", async () => {
     const platform = await fakePlatform();
 
     const result = await Effect.runPromise(
@@ -144,7 +152,10 @@ describe("uninstall", () => {
       ),
     );
 
-    expect(result).toEqual({ accepted: true, installations: liveInstallations });
+    expect(result).toEqual({
+      accepted: true,
+      inventory: { app: liveApp, installations: liveInstallations },
+    });
   });
 
   it("deletes ownership only for receipt-listed repositories", async () => {

@@ -90,7 +90,9 @@ export const deployReceiptStack = (input: {
         workerBundlePath: input.bundlePath,
         version,
         manageGitHubApp: app !== null,
-        githubConfigured: app !== null,
+        // An adopted Worker already holds its App's secrets, though the receipt
+        // learns which App it is only after this deploy.
+        githubConfigured: app !== null || input.adoptExisting === true,
         uninstallSecret: Redacted.make(input.operationSecret),
         ...(input.adoptExisting === true ? { adoptExisting: true } : {}),
         ...(receipt.github.ownerType === "Organization" && receipt.github.ownerLogin !== null

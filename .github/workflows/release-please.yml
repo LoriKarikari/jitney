@@ -67,7 +67,7 @@ jobs:
 
   publish_cli:
     needs: plan
-    if: needs.plan.outputs.publish == 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -100,7 +100,7 @@ jobs:
 
   publish_runner_image:
     needs: plan
-    if: needs.plan.outputs.publish == 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

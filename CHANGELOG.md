@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/LoriKarikari/jitney/compare/v0.3.0...v0.4.0) (2026-10-03)
+
+
+### Features
+
+* **cli:** adopt a Deployment that has no receipt ([#165](https://github.com/LoriKarikari/jitney/issues/165)) ([f3df775](https://github.com/LoriKarikari/jitney/commit/f3df77598ef84643213d6024c2ef820111306948))
+
+
+### Bug Fixes
+
+* **ci:** run prerelease publishing when Release Please is skipped ([#170](https://github.com/LoriKarikari/jitney/issues/170)) ([77680fc](https://github.com/LoriKarikari/jitney/commit/77680fc4053906cc7b67881008c01cd825781ea3))
+
 ## [0.3.0](https://github.com/LoriKarikari/jitney/compare/v0.2.0...v0.3.0) (2026-09-29)
 
 

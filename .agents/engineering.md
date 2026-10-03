@@ -185,6 +185,25 @@ explicitly `0.1.0`. Its changelog includes the full releasable pre-release
 history. Before 1.0, breaking changes bump the minor version; features use the
 normal minor bump and fixes use a patch bump.
 
+### Prereleases
+
+To prove unreleased work on a live Deployment, run the Release Please
+workflow manually on `main`:
+
+```bash
+gh workflow run release-please.yml --ref main
+```
+
+The run publishes the current `main` as `get-jitney@<next patch>-dev.<run
+number>` under the npm `dev` dist-tag, plus the runner image under the same
+version tag. The npm `latest` tag and the image `latest` tag stay on the last
+release. Move the fixture Deployment to the prerelease, and back afterwards:
+
+```bash
+npx get-jitney@<prerelease> upgrade jitney
+npx get-jitney@<prerelease> rollback jitney
+```
+
 ## Issues
 
 Issues live on GitHub. Use `gh` CLI for all operations.

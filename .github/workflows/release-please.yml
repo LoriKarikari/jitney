@@ -3,6 +3,8 @@ name: Release Please
 on:
   push:
     branches: [main]
+  # Publishes the current main as a prerelease for the fixture Deployment.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -15,6 +17,7 @@ concurrency:
 
 jobs:
   release_please:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -28,9 +31,43 @@ jobs:
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
 
-  publish_cli:
+  plan:
     needs: release_please
-    if: needs.release_please.outputs.release_created == 'true'
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+      ref: ${{ steps.plan.outputs.ref }}
+      dist_tag: ${{ steps.plan.outputs.dist_tag }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: plan
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          RELEASED: ${{ needs.release_please.outputs.release_created }}
+          RELEASE_VERSION: ${{ needs.release_please.outputs.version }}
+          RELEASE_TAG: ${{ needs.release_please.outputs.tag_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" == push && "$RELEASED" == true ]]; then
+            printf 'publish=true\nversion=%s\nref=%s\ndist_tag=latest\n' "$RELEASE_VERSION" "$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          elif [[ "$EVENT" == workflow_dispatch && "$REF" == refs/heads/main ]]; then
+            IFS=. read -r major minor patch < version.txt
+            version="$major.$minor.$((patch + 1))-dev.$RUN_NUMBER"
+            printf 'publish=true\nversion=%s\nref=%s\ndist_tag=dev\n' "$version" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            echo publish=false >> "$GITHUB_OUTPUT"
+          fi
+
+  publish_cli:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -38,7 +75,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release_please.outputs.tag_name }}
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: pnpm/action-setup@v6
         with:
           version: 11.8.0
@@ -48,6 +85,8 @@ jobs:
           registry-url: https://registry.npmjs.org
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+      - run: npm pkg set version=${{ needs.plan.outputs.version }}
+        working-directory: cli
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm --filter get-jitney check
@@ -55,13 +94,13 @@ jobs:
         run: pnpm --config.ignore-scripts=true pack --pack-destination "$RUNNER_TEMP"
         working-directory: cli
       - name: Publish with trusted publishing
-        run: npm publish "$RUNNER_TEMP/get-jitney-${{ needs.release_please.outputs.version }}.tgz" --ignore-scripts --access public --provenance
+        run: npm publish "$RUNNER_TEMP/get-jitney-${{ needs.plan.outputs.version }}.tgz" --ignore-scripts --access public --provenance --tag ${{ needs.plan.outputs.dist_tag }}
         env:
           NODE_AUTH_TOKEN: ""
 
   publish_runner_image:
-    needs: release_please
-    if: needs.release_please.outputs.release_created == 'true'
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -69,7 +108,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.release_please.outputs.tag_name }}
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -83,15 +122,15 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: |
-            ghcr.io/lorikarikari/jitney:${{ needs.release_please.outputs.version }}
-            ghcr.io/lorikarikari/jitney:latest
+            ghcr.io/lorikarikari/jitney:${{ needs.plan.outputs.version }}
+            ${{ needs.plan.outputs.dist_tag == 'latest' && 'ghcr.io/lorikarikari/jitney:latest' || '' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
 
   lifecycle_smoke:
-    needs: [release_please, publish_cli, publish_runner_image]
+    needs: [release_please, plan, publish_cli, publish_runner_image]
     if: needs.release_please.outputs.release_created == 'true'
     permissions:
       contents: read

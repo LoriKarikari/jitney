@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/LoriKarikari/jitney/compare/v0.4.1...v0.4.2) (2026-10-04)
+
+
+### Bug Fixes
+
+* **cli:** fail the confirmation prompt when stdin closes without an answer ([#176](https://github.com/LoriKarikari/jitney/issues/176)) ([eb239de](https://github.com/LoriKarikari/jitney/commit/eb239de7a08671b7e3692e0b0348a758a9705c1c))
+
 ## [0.4.1](https://github.com/LoriKarikari/jitney/compare/v0.4.0...v0.4.1) (2026-10-04)
 
 

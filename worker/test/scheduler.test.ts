@@ -43,8 +43,10 @@ function operations(
   provision: RunnerAttemptOperations["provision"] = () => Effect.void,
   reclaim: RunnerAttemptOperations["reclaim"] = () => Effect.void,
   isRunning: RunnerAttemptOperations["isRunning"] = () => Effect.succeed(true),
+  jobStatus: RunnerAttemptOperations["jobStatus"] = () =>
+    Effect.succeed({ status: "in_progress", conclusion: null, runnerName: null }),
 ): RunnerAttemptOperations {
-  return { provision, reclaim, isRunning };
+  return { provision, reclaim, isRunning, jobStatus };
 }
 
 function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
@@ -687,7 +689,7 @@ describe("Scheduler admission", () => {
     expect(await scheduler.getJob(second.workflowJobId)).toMatchObject({ state: "completed" });
   });
 
-  it("terminates a running assignment past its runtime deadline", async () => {
+  it("stops a running assignment past its runtime deadline and leaves its Job to GitHub", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("runtime-expiry");
     const event = queuedEvent(7001, "delivery-queued");
@@ -720,7 +722,7 @@ describe("Scheduler admission", () => {
     expect(expirationReasons(logged)).toEqual(["runtime_deadline"]);
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
-      state: "failed",
+      state: "running",
       pending: false,
     });
 
@@ -734,8 +736,11 @@ describe("Scheduler admission", () => {
         conclusion: "success",
         deliveryId: "delivery-late-completed",
       }),
-    ).toMatchObject({ outcome: "duplicate" });
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "failed" });
+    ).toMatchObject({ outcome: "recorded" });
+    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+      state: "completed",
+      conclusion: "success",
+    });
     logged.mockRestore();
   });
 
@@ -852,6 +857,7 @@ describe("Runner Container exits", () => {
           () => Effect.void,
           () => Effect.void,
           () => Effect.succeed(false),
+          () => Effect.succeed({ status: "queued", conclusion: null, runnerName: null }),
         ),
       ),
     );
@@ -860,6 +866,314 @@ describe("Runner Container exits", () => {
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
       state: "queued",
       pending: false,
+    });
+    logged.mockRestore();
+  });
+});
+
+describe("Job conclusions from GitHub", () => {
+  afterEach(disarmSchedulerAlarms);
+
+  async function runningJob(name: string, workflowJobId: number) {
+    const scheduler = env.SCHEDULER.getByName(name);
+    const event = queuedEvent(workflowJobId, "delivery-queued");
+    const { runnerName } = await scheduler.accept(event);
+    if (runnerName === undefined) throw new Error("missing runner name");
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
+    await scheduler.accept({
+      ...event,
+      action: "in_progress",
+      deliveryId: "delivery-in-progress",
+      runnerName,
+    });
+    return scheduler;
+  }
+
+  it("records the conclusion GitHub reports for a Job whose attempt ended without a completed delivery", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = await runningJob("conclusion-read", 9001);
+    const reads: unknown[] = [];
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        operations(
+          () => Effect.void,
+          () => Effect.void,
+          () => Effect.succeed(false),
+          (check) => {
+            reads.push(check);
+            return Effect.succeed({
+              status: "completed",
+              conclusion: "success",
+              runnerName: "jitney-456-9001-1",
+            });
+          },
+        ),
+      ),
+    );
+
+    expect(reads).toMatchObject([
+      { workflowJobId: 9001, repositoryOwner: "LoriKarikari", repositoryName: "jitney-test" },
+    ]);
+    expect(await scheduler.getJob(9001)).toMatchObject({
+      state: "completed",
+      conclusion: "success",
+    });
+    logged.mockRestore();
+  });
+
+  it("keeps a Job GitHub still reports in progress open and reads it again on a later sweep", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = await runningJob("conclusion-in-progress", 9002);
+    const statuses = ["in_progress", "completed"];
+    let reads = 0;
+    const checking = operations(
+      () => Effect.void,
+      () => Effect.void,
+      () => Effect.succeed(false),
+      () => {
+        const status = statuses[reads++] ?? "completed";
+        return Effect.succeed({
+          status,
+          conclusion: status === "completed" ? "failure" : null,
+          runnerName: "jitney-456-9002-1",
+        });
+      },
+    );
+    const now = Date.now();
+    await runInDurableObject(scheduler, (_instance, state) => state.storage.deleteAlarm());
+
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now));
+    expect(reads).toBe(1);
+    expect(await scheduler.getJob(9002)).toMatchObject({ state: "running" });
+    await runInDurableObject(scheduler, async (_instance, state) => {
+      const alarm = await state.storage.getAlarm();
+      expect(alarm).not.toBeNull();
+      expect(alarm).toBeLessThanOrEqual(now + testSchedulerTick);
+    });
+
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now + 1_000));
+    expect(reads).toBe(1);
+
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now + 31_000));
+    expect(reads).toBe(2);
+    expect(await scheduler.getJob(9002)).toMatchObject({
+      state: "failed",
+      conclusion: "failure",
+    });
+    logged.mockRestore();
+  });
+
+  function exitedWith(jobStatus: RunnerAttemptOperations["jobStatus"]): RunnerAttemptOperations {
+    return operations(
+      () => Effect.void,
+      () => Effect.void,
+      () => Effect.succeed(false),
+      jobStatus,
+    );
+  }
+
+  it.each([
+    ["success", "completed"],
+    ["cancelled", "cancelled"],
+    ["failure", "failed"],
+    ["timed_out", "failed"],
+    ["skipped", "failed"],
+    ["neutral", "failed"],
+    ["action_required", "failed"],
+    ["startup_failure", "failed"],
+    ["stale", "failed"],
+  ])("records GitHub's %s conclusion as a %s Job", async (conclusion, state) => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const workflowJobId = 9100 + conclusion.length;
+    const scheduler = await runningJob(`conclusion-${conclusion}`, workflowJobId);
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        exitedWith(() => Effect.succeed({ status: "completed", conclusion, runnerName: null })),
+      ),
+    );
+
+    expect(await scheduler.getJob(workflowJobId)).toMatchObject({ state, conclusion });
+    logged.mockRestore();
+  });
+
+  it("keeps the conclusion a completed delivery records while a read is in flight", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = await runningJob("conclusion-race", 9201);
+    let reads = 0;
+    const now = Date.now();
+
+    await withLifecycle(scheduler, (lifecycle) => {
+      const racing = exitedWith(() => {
+        reads++;
+        return lifecycle
+          .accept({
+            ...queuedEvent(9201, "delivery-completed"),
+            action: "completed",
+            conclusion: "failure",
+          })
+          .pipe(
+            Effect.orDie,
+            Effect.as({ status: "completed", conclusion: "success", runnerName: null }),
+          );
+      });
+      return Effect.gen(function* () {
+        yield* lifecycle.sweep(racing, now);
+        yield* lifecycle.sweep(racing, now + 31_000);
+      });
+    });
+
+    expect(reads).toBe(1);
+    expect(await scheduler.getJob(9201)).toMatchObject({ state: "failed", conclusion: "failure" });
+    logged.mockRestore();
+  });
+
+  it("reads the Job a cross-assigned runner ran, not the Job that triggered it", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("conclusion-cross-assignment");
+    const jobA = queuedEvent(9301, "delivery-a");
+    const jobB = queuedEvent(9302, "delivery-b");
+    const { runnerName } = await scheduler.accept(jobA);
+    if (runnerName === undefined) throw new Error("missing runner name");
+    await scheduler.accept(jobB);
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
+    await scheduler.accept({ ...jobB, action: "in_progress", deliveryId: "b-running", runnerName });
+    const reads: number[] = [];
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        exitedWith((check) => {
+          reads.push(check.workflowJobId);
+          return Effect.succeed({ status: "completed", conclusion: "success", runnerName });
+        }),
+      ),
+    );
+
+    expect(reads).toContain(9302);
+    expect(reads).not.toContain(9301);
+    expect(await scheduler.getJob(9302)).toMatchObject({ state: "completed" });
+    logged.mockRestore();
+  });
+
+  it("records the conclusion of a Job whose in_progress delivery was lost", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("conclusion-lost-in-progress");
+    const { runnerName } = await scheduler.accept(queuedEvent(9401, "delivery-queued"));
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        exitedWith(() =>
+          Effect.succeed({
+            status: "completed",
+            conclusion: "success",
+            runnerName: runnerName ?? null,
+          }),
+        ),
+      ),
+    );
+
+    expect(await scheduler.getAttempts(9401)).toMatchObject([{ state: "stopped" }]);
+    expect(await scheduler.getJob(9401)).toMatchObject({
+      state: "completed",
+      conclusion: "success",
+    });
+    logged.mockRestore();
+  });
+
+  it("keeps a runner GitHub says is running its Job past the assignment deadline", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("conclusion-assignment-deadline");
+    const { runnerName } = await scheduler.accept(queuedEvent(9501, "delivery-queued"));
+    if (runnerName === undefined) throw new Error("missing runner name");
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
+    const reclaimed: string[] = [];
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        operations(
+          () => Effect.void,
+          (request) => {
+            reclaimed.push(request.runnerName);
+            return Effect.void;
+          },
+          () => Effect.succeed(true),
+          () => Effect.succeed({ status: "in_progress", conclusion: null, runnerName }),
+        ),
+        Date.now() + 6 * 60_000,
+      ),
+    );
+
+    expect(reclaimed).toEqual([]);
+    expect(await scheduler.getAttempts(9501)).toMatchObject([{ state: "running" }]);
+    expect(await scheduler.getJob(9501)).toMatchObject({ state: "running", runnerName });
+    logged.mockRestore();
+  });
+
+  it("keeps the check and reads again later when a read fails", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const failed = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const scheduler = await runningJob("conclusion-read-fails", 9601);
+    let reads = 0;
+    const checking = exitedWith(() => {
+      reads++;
+      return reads === 1
+        ? Effect.fail(new RunnerAttemptFailure({ step: "job_status", cause: "rate limited" }))
+        : Effect.succeed({ status: "completed", conclusion: "success", runnerName: null });
+    });
+    const now = Date.now();
+
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now));
+    expect(await scheduler.getJob(9601)).toMatchObject({ state: "running" });
+    expect(failed.mock.calls.map(([line]) => JSON.parse(String(line)).event)).toContain(
+      "job_status_failed",
+    );
+
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now + 31_000));
+    expect(reads).toBe(2);
+    expect(await scheduler.getJob(9601)).toMatchObject({ state: "completed" });
+    logged.mockRestore();
+    failed.mockRestore();
+  });
+
+  it("ends a Job GitHub no longer has as failed with an unknown conclusion and stops reading", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = await runningJob("conclusion-not-found", 9701);
+    let reads = 0;
+    const checking = exitedWith(() => {
+      reads++;
+      return Effect.succeed({ status: "not_found", conclusion: null, runnerName: null });
+    });
+    const now = Date.now();
+
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now));
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now + 31_000));
+
+    expect(reads).toBe(1);
+    expect(await scheduler.getJob(9701)).toMatchObject({ state: "failed", conclusion: "unknown" });
+    logged.mockRestore();
+  });
+
+  it("reads a Job whose runtime deadline passed", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = await runningJob("conclusion-runtime-deadline", 9801);
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        operations(
+          () => Effect.void,
+          () => Effect.void,
+          () => Effect.succeed(true),
+          () => Effect.succeed({ status: "completed", conclusion: "cancelled", runnerName: null }),
+        ),
+        Date.now() + 61 * 60_000,
+      ),
+    );
+
+    expect(await scheduler.getJob(9801)).toMatchObject({
+      state: "cancelled",
+      conclusion: "cancelled",
     });
     logged.mockRestore();
   });

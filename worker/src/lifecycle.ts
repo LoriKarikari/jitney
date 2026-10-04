@@ -1,9 +1,10 @@
 import { and, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { Data, Effect, Result } from "effect";
-import { assignments, attempts, deliveries, jobs, pending } from "./schema";
+import { assignments, attempts, conclusionChecks, deliveries, jobs, pending } from "./schema";
 import { isAdmissible, type QueuedJobCandidate, type WorkflowEvent } from "./domain";
 import type {
+  JobStatus,
   RunnerAttemptFailure,
   RunnerAttemptOperations,
   RunnerAttemptRequest,
@@ -47,6 +48,7 @@ export type JobSnapshot = {
   workflowJobId: number;
   state: string;
   repositoryId: number;
+  conclusion: string | null;
   runnerName?: string;
   pending: boolean;
 };
@@ -85,7 +87,9 @@ export class SchedulerLifecycle {
     private readonly runtimeTimeout = defaultRuntimeTimeout,
     private readonly schedulerTick = defaultSchedulerTick,
   ) {
-    this.#db = drizzle(storage, { schema: { deliveries, jobs, attempts, assignments, pending } });
+    this.#db = drizzle(storage, {
+      schema: { deliveries, jobs, attempts, assignments, pending, conclusionChecks },
+    });
   }
 
   accept(event: WorkflowEvent): Effect.Effect<AcceptResult, SchedulerStorageError> {
@@ -332,8 +336,12 @@ export class SchedulerLifecycle {
     return runnerName;
   }
 
-  #recordAssignment(event: WorkflowEvent, runnerName: string, now: number): AcceptResult {
-    const { workflowJobId, repositoryId } = event;
+  #recordAssignment(
+    job: { workflowJobId: number; repositoryId: number },
+    runnerName: string,
+    now: number,
+  ): AcceptResult {
+    const { workflowJobId, repositoryId } = job;
     const attempt = this.#db
       .select()
       .from(attempts)
@@ -419,13 +427,7 @@ export class SchedulerLifecycle {
 
   #recordCompletion(event: WorkflowEvent, now: number): void {
     const { workflowJobId, conclusion } = event;
-    const state =
-      conclusion === "cancelled" ? "cancelled" : conclusion === "success" ? "completed" : "failed";
-    this.#db
-      .update(jobs)
-      .set({ state, conclusion: conclusion ?? "unknown", updatedAt: now })
-      .where(eq(jobs.workflowJobId, workflowJobId))
-      .run();
+    this.#conclude(workflowJobId, conclusion ?? null, now);
 
     const assignment = this.getAssignment(workflowJobId);
     if (assignment !== undefined) {
@@ -447,11 +449,12 @@ export class SchedulerLifecycle {
       .where(eq(pending.workflowJobId, workflowJobId))
       .all()[0];
     const runnerName = this.getAssignment(workflowJobId)?.runnerName;
-    const { state, repositoryId } = row;
+    const { state, repositoryId, conclusion } = row;
     return {
       workflowJobId,
       state,
       repositoryId,
+      conclusion,
       pending: pendingRow !== undefined,
       ...(runnerName && { runnerName }),
     };
@@ -500,6 +503,7 @@ export class SchedulerLifecycle {
       yield* this.#expireUnassignedAttempts(operations, now);
       yield* this.#expireRunningAttempts(operations, now);
       yield* this.#endExitedAttempts(operations, now);
+      yield* this.#readConclusions(operations, now);
 
       const wakeAt = morePending ? now + this.schedulerTick : this.#nextWake(now);
       if (wakeAt !== undefined) {
@@ -511,10 +515,14 @@ export class SchedulerLifecycle {
   // Neither GitHub nor the runner reports an exit reliably, so the sweep checks
   // every live Runner Container until its attempt ends.
   #nextWake(now: number): number | undefined {
-    const deadline = this.#nextDeadline();
+    const check = this.#db
+      .select({ checkAt: sql<number | null>`min(${conclusionChecks.checkAt})` })
+      .from(conclusionChecks)
+      .all()[0]?.checkAt;
     const live = this.#attemptsWhere(inArray(attempts.state, liveContainerStates)).length > 0;
-    if (!live) return deadline;
-    return Math.min(deadline ?? Infinity, now + containerCheckInterval);
+    const wakes = [this.#nextDeadline(), check, live ? now + containerCheckInterval : undefined];
+    const due = wakes.filter((value) => value != null);
+    return due.length > 0 ? Math.min(...due) : undefined;
   }
 
   #nextDeadline(): number | undefined {
@@ -544,7 +552,23 @@ export class SchedulerLifecycle {
       const expired = this.#attemptsWhere(unassigned);
 
       for (const row of expired) {
-        const { workflowJobId, runnerName } = row;
+        const { workflowJobId, repositoryId, runnerName } = row;
+        // A lost in_progress delivery leaves a busy runner looking unassigned.
+        // Ask GitHub before reclaiming it.
+        const status = yield* this.#readJob(operations, this.#checkFor(row, workflowJobId, now));
+        if (status?.runnerName === runnerName && status.status !== "queued") {
+          yield* this.#transaction(() => {
+            const current = this.#db
+              .select({ runnerName: attempts.runnerName })
+              .from(attempts)
+              .where(and(eq(attempts.runnerName, runnerName), unassigned))
+              .all()[0];
+            if (current !== undefined) {
+              this.#recordAssignment({ workflowJobId, repositoryId }, runnerName, now);
+            }
+          });
+          continue;
+        }
         const stillExpired = yield* this.#transaction(() => {
           if (!this.#markExpired(runnerName, unassigned)) return false;
           this.#requeueUnassigned(workflowJobId, now);
@@ -553,6 +577,132 @@ export class SchedulerLifecycle {
         if (stillExpired) yield* this.#reclaimExpired(operations, row, "assignment_deadline");
       }
     });
+  }
+
+  // GitHub owns a Job's end state. When a Runner Attempt ends without a
+  // completed delivery, read the Job until GitHub reports how it ended.
+  #readConclusions(
+    operations: RunnerAttemptOperations,
+    now: number,
+  ): Effect.Effect<void, SchedulerStorageError> {
+    return Effect.gen({ self: this }, function* () {
+      const due = this.#db
+        .select()
+        .from(conclusionChecks)
+        .where(sql`${conclusionChecks.checkAt} <= ${now}`)
+        .all();
+      for (const check of due) {
+        const status = yield* this.#readJob(operations, check);
+        yield* this.#transaction(() => {
+          const open = this.#db
+            .select({ workflowJobId: conclusionChecks.workflowJobId })
+            .from(conclusionChecks)
+            .where(eq(conclusionChecks.workflowJobId, check.workflowJobId))
+            .all()[0];
+          if (open === undefined) return;
+          if (status?.status === "completed" || status?.status === "not_found") {
+            this.#conclude(check.workflowJobId, status.conclusion ?? "unknown", now);
+          } else if (status?.status === "queued") {
+            this.#requeueUnassigned(check.workflowJobId, now);
+            this.#db
+              .delete(conclusionChecks)
+              .where(eq(conclusionChecks.workflowJobId, check.workflowJobId))
+              .run();
+          } else {
+            this.#db
+              .update(conclusionChecks)
+              .set({ checkAt: now + containerCheckInterval })
+              .where(eq(conclusionChecks.workflowJobId, check.workflowJobId))
+              .run();
+          }
+        });
+      }
+    });
+  }
+
+  #readJob(
+    operations: RunnerAttemptOperations,
+    check: ConclusionCheck,
+  ): Effect.Effect<JobStatus | undefined> {
+    const { workflowJobId, installationId, repositoryId } = check;
+    const correlation = {
+      workflowJobId,
+      installationId,
+      repositoryId,
+      deploymentId: this.deploymentId,
+    };
+    return operations.jobStatus(check).pipe(
+      Effect.tap((status) =>
+        Effect.sync(() =>
+          emit({
+            event: "job_status_read",
+            ...correlation,
+            state: status.status,
+            conclusion: status.conclusion ?? undefined,
+            runnerName: status.runnerName ?? undefined,
+          }),
+        ),
+      ),
+      Effect.catch((failure) =>
+        Effect.sync(() => {
+          emit({ event: "job_status_failed", ...correlation, step: failure.step });
+          return undefined;
+        }),
+      ),
+    );
+  }
+
+  #checkFor(row: AttemptRow, workflowJobId: number, now: number): ConclusionCheck {
+    const { installationId, repositoryId, repositoryOwner, repositoryName } = row;
+    return {
+      workflowJobId,
+      installationId,
+      repositoryId,
+      repositoryOwner,
+      repositoryName,
+      checkAt: now,
+    };
+  }
+
+  #scheduleConclusionCheck(check: ConclusionCheck): void {
+    this.#db
+      .insert(conclusionChecks)
+      .values(check)
+      .onConflictDoUpdate({
+        target: conclusionChecks.workflowJobId,
+        set: { checkAt: check.checkAt },
+      })
+      .run();
+  }
+
+  // The Job a Runner Attempt ran. A cross-assigned runner runs another Job than
+  // the one that triggered it.
+  #assignedJobId(row: AttemptRow): number {
+    const assignment = this.#db
+      .select({ workflowJobId: assignments.workflowJobId })
+      .from(assignments)
+      .where(
+        and(
+          eq(assignments.triggeringWorkflowJobId, row.workflowJobId),
+          eq(assignments.attempt, row.attempt),
+        ),
+      )
+      .all()[0];
+    return assignment?.workflowJobId ?? row.workflowJobId;
+  }
+
+  #conclude(workflowJobId: number, conclusion: string | null, now: number): void {
+    const state =
+      conclusion === "cancelled" ? "cancelled" : conclusion === "success" ? "completed" : "failed";
+    this.#db
+      .update(jobs)
+      .set({ state, conclusion: conclusion ?? "unknown", updatedAt: now })
+      .where(eq(jobs.workflowJobId, workflowJobId))
+      .run();
+    this.#db
+      .delete(conclusionChecks)
+      .where(eq(conclusionChecks.workflowJobId, workflowJobId))
+      .run();
   }
 
   #requeueUnassigned(workflowJobId: number, now: number): void {
@@ -592,9 +742,9 @@ export class SchedulerLifecycle {
             .set({ state: "stopped" })
             .where(eq(attempts.runnerName, row.runnerName))
             .run();
-          if (current.state === "waiting_for_assignment") {
-            this.#requeueUnassigned(row.workflowJobId, now);
-          }
+          // A JIT runner exits only after it ran a Job, so an attempt still
+          // waiting lost its in_progress delivery. GitHub says which way it went.
+          this.#scheduleConclusionCheck(this.#checkFor(row, this.#assignedJobId(row), now));
           return true;
         });
         if (!ended) continue;
@@ -630,26 +780,11 @@ export class SchedulerLifecycle {
       const expired = this.#attemptsWhere(overdue);
 
       for (const row of expired) {
-        const { runnerName } = row;
-        const assignment = this.#db
-          .select()
-          .from(assignments)
-          .where(
-            and(
-              eq(assignments.triggeringWorkflowJobId, row.workflowJobId),
-              eq(assignments.attempt, row.attempt),
-            ),
-          )
-          .all()[0];
-        const assignedJobId = assignment?.workflowJobId ?? row.workflowJobId;
+        const assignedJobId = this.#assignedJobId(row);
         const stillExpired = yield* this.#transaction(() => {
-          if (!this.#markExpired(runnerName, overdue)) return false;
-          this.#db
-            .update(jobs)
-            .set({ state: "failed", conclusion: "timed_out", updatedAt: now })
-            .where(eq(jobs.workflowJobId, assignedJobId))
-            .run();
+          if (!this.#markExpired(row.runnerName, overdue)) return false;
           this.#db.delete(pending).where(eq(pending.workflowJobId, assignedJobId)).run();
+          this.#scheduleConclusionCheck(this.#checkFor(row, assignedJobId, now));
           return true;
         });
         if (stillExpired) yield* this.#reclaimExpired(operations, row, "runtime_deadline");
@@ -901,7 +1036,10 @@ type SchedulerSchema = {
   attempts: typeof attempts;
   assignments: typeof assignments;
   pending: typeof pending;
+  conclusionChecks: typeof conclusionChecks;
 };
+
+type ConclusionCheck = typeof conclusionChecks.$inferSelect;
 
 type PendingRow = RunnerAttemptRequest & {
   attempt: number;

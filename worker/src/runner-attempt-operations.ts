@@ -13,7 +13,24 @@ export type RunnerAttemptRequest = {
   containerName: string;
 };
 
+export type ConclusionCheck = {
+  workflowJobId: number;
+  installationId: number;
+  repositoryId: number;
+  repositoryOwner: string;
+  repositoryName: string;
+};
+
+// `not_found` stands in for GitHub's 404. Other statuses pass through as GitHub
+// reports them, such as `queued`, `in_progress`, and `completed`.
+export type JobStatus = {
+  status: string;
+  conclusion: string | null;
+  runnerName: string | null;
+};
+
 export type RunnerAttemptFailureStep =
+  | "job_status"
   | "installation_verification"
   | "installation_mismatch"
   | "installation_token"
@@ -33,6 +50,7 @@ export type RunnerAttemptOperations = {
   provision(request: RunnerAttemptRequest): Effect.Effect<void, RunnerAttemptFailure>;
   reclaim(request: RunnerAttemptRequest): Effect.Effect<void, RunnerAttemptFailure>;
   isRunning(request: RunnerAttemptRequest): Effect.Effect<boolean, RunnerAttemptFailure>;
+  jobStatus(check: ConclusionCheck): Effect.Effect<JobStatus, RunnerAttemptFailure>;
 };
 
 export function createRunnerAttemptOperations(env: Env): RunnerAttemptOperations {
@@ -149,5 +167,36 @@ export function createRunnerAttemptOperations(env: Env): RunnerAttemptOperations
       catch: (cause) => new RunnerAttemptFailure({ step: "container_probe", cause }),
     });
 
-  return { provision, reclaim, isRunning };
+  const jobStatus = Effect.fn("GitHub.jobStatus")(function* (check: ConclusionCheck) {
+    const { token } = yield* Effect.tryPromise({
+      try: () =>
+        auth({
+          type: "installation",
+          installationId: check.installationId,
+          repositoryIds: [check.repositoryId],
+          permissions: { actions: "read" },
+        }),
+      catch: (cause) => new RunnerAttemptFailure({ step: "installation_token", cause }),
+    });
+    return yield* Effect.tryPromise({
+      try: async (): Promise<JobStatus> => {
+        try {
+          const { data } = await new Octokit({ auth: token }).rest.actions.getJobForWorkflowRun({
+            owner: check.repositoryOwner,
+            repo: check.repositoryName,
+            job_id: check.workflowJobId,
+          });
+          return { status: data.status, conclusion: data.conclusion, runnerName: data.runner_name };
+        } catch (error) {
+          if ((error as { status?: unknown }).status === 404) {
+            return { status: "not_found", conclusion: null, runnerName: null };
+          }
+          throw error;
+        }
+      },
+      catch: (cause) => new RunnerAttemptFailure({ step: "job_status", cause }),
+    });
+  });
+
+  return { provision, reclaim, isRunning, jobStatus };
 }

@@ -236,6 +236,6 @@ describe("worker entrypoint", () => {
       },
     ]);
     const job = await env.SCHEDULER.getByName("global-v3").getJob(789);
-    expect(job).toEqual({ workflowJobId: 789, state: "queued", repositoryId: 456, pending: true });
+    expect(job).toMatchObject({ workflowJobId: 789, state: "queued", pending: true });
   });
 });

@@ -78,3 +78,16 @@ export const pending = sqliteTable(
     }).onDelete("cascade"),
   ],
 );
+
+// Jobs whose Runner Attempt ended without a completed delivery. The Scheduler
+// reads their end state from GitHub.
+export const conclusionChecks = sqliteTable("conclusion_checks", {
+  workflowJobId: integer("workflow_job_id")
+    .primaryKey()
+    .references(() => jobs.workflowJobId, { onDelete: "cascade" }),
+  installationId: integer("installation_id").notNull(),
+  repositoryId: integer("repository_id").notNull(),
+  repositoryOwner: text("repository_owner").notNull(),
+  repositoryName: text("repository_name").notNull(),
+  checkAt: integer("check_at").notNull(),
+});

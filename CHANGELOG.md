@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/LoriKarikari/jitney/compare/v0.4.0...v0.4.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **cli:** wait out stale KV reads before checking the receipt lease ([#173](https://github.com/LoriKarikari/jitney/issues/173)) ([422d553](https://github.com/LoriKarikari/jitney/commit/422d5530041a2ca7b17661643b97dab4faa0d906))
+
 ## [0.4.0](https://github.com/LoriKarikari/jitney/compare/v0.3.0...v0.4.0) (2026-10-04)
 
 

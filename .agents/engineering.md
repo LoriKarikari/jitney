@@ -249,14 +249,21 @@ The project uses five triage labels:
 
 ## Testing
 
-- Test external behavior, not implementation details. A good test verifies
-  what the module does, not how it does it.
-- Prefer the highest seam possible. If you can test through a public API, do
-  that instead of testing internal functions.
-- Every PR that changes behavior must include tests that would fail without
-  the change.
-- Run the full test suite before opening a PR. If tests are slow, filter to
-  the relevant package, but run the full suite before requesting review.
+- Prove behavior end to end first. The live checks in `e2e/` run against the
+  fixture Deployment and leave a `result=PASS` or `result=FAIL` artifact in
+  `e2e/results/`. A change that a live run can show gets a live run, extended
+  or added in `e2e/` when none covers it.
+- Write a unit test only for a failure mode a live run cannot reach cheaply,
+  such as a race, a security boundary, a failure path, or an input edge case.
+- Before writing a unit test or the code it covers, list every way the change
+  could fail. Each unit test file opens with that list. Then write the failing
+  tests, then the code. Never add a unit test after the code it covers.
+- Delete a unit test when a live check proves the same behavior, or when it
+  guards no listed failure mode.
+- Test external behavior, not implementation details, through the highest seam
+  available.
+- Run the full unit suite before opening a PR, and the matching `e2e/` script
+  on a prerelease before closing the issue.
 
 ## Tooling
 

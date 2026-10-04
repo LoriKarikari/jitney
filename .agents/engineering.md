@@ -335,6 +335,15 @@ apart. The current compatibility set is
 `@distilled.cloud/cloudflare@0.30.2`, and
 `@distilled.cloud/cloudflare-runtime@0.13.10`.
 
+The published CLI also pins `@effect/platform-node-shared`, `@effect/sql-d1`,
+and `@effect/vitest` to the Effect version, although no Jitney code imports
+them. Their dependents ask for ranges such as `>=4.0.0-beta.100 || >=4.0.0`,
+which npm satisfies with the newest stable Effect release, and that release
+does not load beside the beta. A direct pin puts the tested version at the top
+of an npm install, where npm reuses it. `.github/scripts/cli-install-smoke`
+fails CI and every publish when any `effect` or `@effect/*` package installs
+at a second version. Move these pins with the rest of the set.
+
 - Avoid async/await and raw Promise workflows unless an external boundary
   makes them unavoidable; isolate such code in the owning adapter.
 - Check the Effect source and examples before departing from native patterns.

@@ -83,3 +83,8 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter get-jitney check
+      - name: Pack the CLI
+        run: pnpm --config.ignore-scripts=true pack --pack-destination "$RUNNER_TEMP"
+        working-directory: cli
+      - name: Run the CLI from a clean npm install
+        run: .github/scripts/cli-install-smoke "$RUNNER_TEMP"/get-jitney-*.tgz

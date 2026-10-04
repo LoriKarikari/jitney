@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Installs a packed get-jitney tarball into an empty project the way npx does
+# and runs it. Every effect and @effect/* package must resolve to one version:
+# their prerelease ranges also admit newer stable releases that break them.
+set -Eeuo pipefail
+
+tarball=$(realpath "${1:?usage: cli-install-smoke <get-jitney tarball>}")
+project=$(mktemp -d)
+trap 'rm -rf "$project"' EXIT
+
+cd "$project"
+npm init -y >/dev/null
+npm install --no-audit --no-fund --loglevel=error "$tarball" >/dev/null
+
+mapfile -t copies < <(
+  find . -regex '.*/node_modules/\(effect\|@effect/[^/]*\)/package\.json' \
+    -exec jq -r '"\(.name)@\(.version)"' {} \; | sort -u
+)
+mapfile -t versions < <(printf '%s\n' "${copies[@]}" | sed 's/.*@//' | sort -u)
+if (( ${#versions[@]} != 1 )); then
+  echo "::error::get-jitney installed mixed Effect versions: ${copies[*]}"
+  exit 1
+fi
+
+output=$(npx --no-install jitney --help 2>&1) || {
+  printf '%s\n' "$output" | tail -20
+  echo "::error::The installed get-jitney CLI does not start"
+  exit 1
+}
+grep -q '^Usage: jitney' <<<"$output"
+echo "get-jitney starts from a clean install with ${copies[*]}"

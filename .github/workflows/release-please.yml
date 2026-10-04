@@ -93,6 +93,8 @@ jobs:
       - name: Pack the tested CLI
         run: pnpm --config.ignore-scripts=true pack --pack-destination "$RUNNER_TEMP"
         working-directory: cli
+      - name: Run the packed CLI from a clean npm install
+        run: .github/scripts/cli-install-smoke "$RUNNER_TEMP/get-jitney-${{ needs.plan.outputs.version }}.tgz"
       - name: Publish with trusted publishing
         run: npm publish "$RUNNER_TEMP/get-jitney-${{ needs.plan.outputs.version }}.tgz" --ignore-scripts --access public --provenance --tag ${{ needs.plan.outputs.dist_tag }}
         env:

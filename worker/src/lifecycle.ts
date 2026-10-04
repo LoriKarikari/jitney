@@ -22,11 +22,13 @@ const activeAttemptStates = [...viableAttemptStates, "running"];
 const liveContainerStates = ["waiting_for_assignment", "running"];
 const terminalJobStates = ["completed", "cancelled", "failed"];
 
-// Container activity only renews on proxied requests, which a runner never
-// makes. The Scheduler's deadlines own the runner's lifetime; this backstop
-// stops the Container only if every reclaim path has failed.
-export function runnerContainerBackstopSeconds(runtimeTimeout = defaultRuntimeTimeout): number {
-  return Math.ceil((assignmentTimeout + runtimeTimeout + reclaimSlack) / 1000);
+const maxInactivityTimeout = 6 * 60 * 60_000;
+
+// The Scheduler's deadlines own a runner's lifetime. The inactivity timeout
+// outlasts both and stops the Runner Container only if every reclaim path fails.
+// Cloudflare rejects a timeout above 6 hours.
+export function runnerContainerInactivityTimeoutMs(runtimeTimeout = defaultRuntimeTimeout): number {
+  return Math.min(assignmentTimeout + runtimeTimeout + reclaimSlack, maxInactivityTimeout);
 }
 
 export type AcceptResult = {

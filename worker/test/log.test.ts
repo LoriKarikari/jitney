@@ -60,16 +60,14 @@ describe("lifecycle logging", () => {
         failures: 1,
       },
       {
-        event: "runner_container_stopped",
+        event: "runner_container_exited",
         installationId: 123,
         repositoryId: 456,
         workflowJobId: 789,
+        attempt: 1,
         runnerName: "jitney-456-789-1",
         containerName: "attempt-456-789-1",
-        containerId: "container-id",
         deploymentId: "deployment-1",
-        exitCode: 0,
-        stopReason: "exited",
       },
       {
         event: "runner_provisioning_failed",

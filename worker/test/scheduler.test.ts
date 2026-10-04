@@ -2,7 +2,7 @@ import { env, listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { Effect, Fiber } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkflowEvent } from "../src/domain";
-import { SchedulerLifecycle } from "../src/lifecycle";
+import { runnerContainerInactivityTimeoutMs, SchedulerLifecycle } from "../src/lifecycle";
 import {
   RunnerAttemptFailure,
   type RunnerAttemptOperations,
@@ -862,5 +862,13 @@ describe("Runner Container exits", () => {
       pending: false,
     });
     logged.mockRestore();
+  });
+});
+
+describe("Runner Container inactivity timeout", () => {
+  it("outlasts the assignment and runtime deadlines and never exceeds 6 hours", () => {
+    expect(runnerContainerInactivityTimeoutMs(60 * 60_000)).toBe(75 * 60_000);
+    expect(runnerContainerInactivityTimeoutMs(2 * 60 * 60_000)).toBe(135 * 60_000);
+    expect(runnerContainerInactivityTimeoutMs(6 * 60 * 60_000)).toBe(6 * 60 * 60_000);
   });
 });

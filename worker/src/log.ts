@@ -88,13 +88,7 @@ export type LifecycleRecord =
       ignored: number;
       failures: number;
     }
-  | (ContainerCorrelation & { event: "runner_container_started" })
-  | (ContainerCorrelation & {
-      event: "runner_container_stopped";
-      exitCode: number;
-      stopReason: string;
-    })
-  | (ContainerCorrelation & { event: "runner_container_failed"; outcome: string });
+  | (ContainerCorrelation & { event: "runner_container_started" });
 
 type KeysOfUnion<Record> = Record extends unknown ? keyof Record : never;
 type LifecycleFieldName = KeysOfUnion<LifecycleRecord>;
@@ -119,7 +113,6 @@ const lifecycleFieldPolicy = {
   step: "allow",
   conclusion: "allow",
   stopReason: "allow",
-  exitCode: "allow",
   discovered: "allow",
   submitted: "allow",
   suppressed: "allow",

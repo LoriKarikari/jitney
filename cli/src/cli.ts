@@ -50,7 +50,7 @@ Options:
   --organization <login>       Register the GitHub App under an organization
   --keep-partial               Keep an installing receipt instead of rolling back
   --json                       Print list output as JSON
-  --yes, -y                    Apply the repair plan without confirming
+  --yes, -y                    Apply the repair or destroy plan without confirming
   --adopt application:<id>     Adopt an unprovable container application (repeatable)
   --dry-run                    Preview destroy without changing anything
   --now                        Skip draining active Runner Attempts

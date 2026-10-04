@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/LoriKarikari/jitney/compare/v0.3.0...v0.4.0) (2026-10-04)
+
+
+### Features
+
+* **cli:** adopt a Deployment that has no receipt ([#165](https://github.com/LoriKarikari/jitney/issues/165)) ([f3df775](https://github.com/LoriKarikari/jitney/commit/f3df77598ef84643213d6024c2ef820111306948))
+
+
+### Bug Fixes
+
+* **ci:** run prerelease publishing when Release Please is skipped ([#170](https://github.com/LoriKarikari/jitney/issues/170)) ([77680fc](https://github.com/LoriKarikari/jitney/commit/77680fc4053906cc7b67881008c01cd825781ea3))
+* **cli:** copy upgrade images with pull and push credentials ([#172](https://github.com/LoriKarikari/jitney/issues/172)) ([ef5536b](https://github.com/LoriKarikari/jitney/commit/ef5536bd004a7b51ad4be9a78356ce42ab0823cf))
+* **cli:** pin the Effect family so npx installs one version ([#171](https://github.com/LoriKarikari/jitney/issues/171)) ([96c14d5](https://github.com/LoriKarikari/jitney/commit/96c14d5af91cc5e9ae8aa2833246988ecda5b8fb))
+
 ## [0.3.0](https://github.com/LoriKarikari/jitney/compare/v0.2.0...v0.3.0) (2026-09-29)
 
 

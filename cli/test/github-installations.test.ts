@@ -1,8 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. Markers are written before every repository is checked, so a foreign Deployment's
-//    repository is half claimed.
-// 2. A written marker is not read back, so a lost write goes unnoticed.
-// 3. Removal deletes markers another Deployment owns.
 import { Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import {

@@ -1,6 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. The lease lapses while a long lifecycle operation runs.
-// 2. A command keeps writing the receipt after it lost its lease.
 import { DateTime, Duration, Effect, Fiber, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";

@@ -79,8 +79,6 @@ export const pending = sqliteTable(
   ],
 );
 
-// Jobs whose Runner Attempt ended without a completed delivery. The Scheduler
-// reads their end state from GitHub.
 export const conclusionChecks = sqliteTable("conclusion_checks", {
   workflowJobId: integer("workflow_job_id")
     .primaryKey()

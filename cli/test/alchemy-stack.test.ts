@@ -1,6 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. The resource graph fails to create, update, or destroy cleanly. No live check runs
-//    deploy or destroy.
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import { deploy } from "alchemy/Deploy";

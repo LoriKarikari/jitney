@@ -1,5 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. An invalid Worker name reaches Cloudflare, or a valid one is refused.
 import { describe, expect, it } from "vitest";
 import { validateWorkerName } from "../src/config.js";
 

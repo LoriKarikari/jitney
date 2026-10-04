@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Queued-to-start time of the jitney-test canary. Dispatches it RUNS times in a
-# row against get-jitney VERSION and prints the median wait.
-# Usage: start-latency.sh LABEL [RUNS] [VERSION]. Writes results/start-latency-LABEL.log.
 source "$(dirname "$0")/lib.sh"
 label=$1 runs=${2:-5} version=${3:-latest}
 log=$results/start-latency-$label.log

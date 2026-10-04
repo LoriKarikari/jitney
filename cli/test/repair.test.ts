@@ -1,14 +1,3 @@
-// Failure modes this file guards. The fixture is healthy, so live runs rarely need repair.
-// 1. Releasing an expired lease touches anything else, or a live lease is released.
-// 2. An interrupted install is not redirected to deploy.
-// 3. A lost application id is not re-derived from the Worker's deployment tag.
-// 4. An unprovable application is adopted without being named, or one Cloudflare does
-//    not report is adopted.
-// 5. Repair rewrites a foreign ownership marker.
-// 6. A declined plan changes something.
-// 7. A missing Worker is recreated instead of pointed at deploy.
-// 8. An unreachable GitHub probe is guessed instead of blocking.
-// 9. The rendered plan drops an action, blocker, or fix command.
 import { DateTime, Duration, Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import type { AccountSnapshot } from "../src/cloudflare-inventory.js";

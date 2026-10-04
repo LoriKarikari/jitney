@@ -21,8 +21,7 @@ export type ConclusionCheck = {
   repositoryName: string;
 };
 
-// `not_found` stands in for GitHub's 404. Other statuses pass through as GitHub
-// reports them, such as `queued`, `in_progress`, and `completed`.
+// `not_found` stands in for GitHub's 404.
 export type JobStatus = {
   status: string;
   conclusion: string | null;

@@ -1,28 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// Admission
-// 1. A drain still creates attempts, or a replayed or redelivered queued job gets a second runner.
-// 2. A job whose attempts all failed never gets a new one, or a finished job moves backwards.
-// 3. Capacity limits are exceeded or not recorded durably.
-// 4. A cross-assignment binds the wrong job, or its idle runner is never reclaimed.
-// 5. Duplicate, conflicting, and unknown assignments are misclassified.
-// 6. An assignment recorded while provisioning finishes is lost.
-// 7. A provisioning failure logs its cause, or leaks a runner minted before it.
-// Deadlines
-// 8. An unassigned attempt never expires, or a failed reclaim blocks the expiry.
-// 9. The sweep expires a runner assigned mid-sweep, or overwrites a job completed mid-sweep.
-// 10. The runtime deadline decides the Job's end state instead of GitHub.
-// Runner Container exits (#147)
-// 11. An exited runner keeps holding capacity, or a failed probe reclaims a live runner.
-// Job end state from GitHub (#148)
-// 12. An attempt that ends without a completed delivery leaves its Job open forever.
-// 13. GitHub's conclusion maps to the wrong state.
-// 14. A read overwrites the conclusion a completed delivery just recorded.
-// 15. A cross-assigned runner's triggering Job is read instead of the Job it ran.
-// 16. A lost in_progress delivery requeues a Job that ran, or reclaims its busy runner.
-// 17. A Job GitHub still runs is closed, a failed read drops the check, a 404 is read
-//     forever, or reads run more than once per 30 seconds.
-// Inactivity timeout
-// 18. The timeout undercuts the Scheduler's deadlines or exceeds Cloudflare's 6 hours.
 import { env, listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { Effect, Fiber } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";

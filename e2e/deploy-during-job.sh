@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# A Worker deployed while a 15-minute job runs does not stop its runner (#147).
-# Deploys by setting a throwaway secret five minutes in, then deletes it.
-# Passes when the job succeeds and its runner started on a different Worker
-# version than the one that saw it finish. Writes results/deploy-during-job.result.
 source "$(dirname "$0")/lib.sh"
 
 start_tail "$results/deploy-during-job.tail.jsonl"
@@ -12,6 +8,7 @@ until [[ -n $(gh run view "$run" -R "$fixture_repo" --json jobs --jq '.jobs[0] |
   sleep 5
 done
 sleep 300
+# Setting a secret deploys a new Worker version.
 echo "$(date -u +%FT%TZ) deploying a new Worker version"
 printf '%s' "$run" | wrangler secret put JITNEY_E2E_DEPLOY --name "$worker_name" 2>&1 | grep -E "Success|rror"
 gh run watch "$run" -R "$fixture_repo" --interval 30 >/dev/null 2>&1

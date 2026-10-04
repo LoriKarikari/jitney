@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# The repair and destroy confirmation prompt with every kind of standard input.
-# Needs no fixture. Writes results/confirm-prompt.result.
 source "$(dirname "$0")/lib.sh"
 probe=$root/cli/.confirm-prompt-probe.ts
 trap 'rm -f "$probe"' EXIT

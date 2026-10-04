@@ -1,6 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. The GitHub App manifest asks for more permissions or events than Jitney needs.
-// 2. A manifest callback with the wrong state is accepted.
 import { describe, expect, it } from "vitest";
 import { githubAppManifest, listenForManifestCode } from "../src/github-app.js";
 

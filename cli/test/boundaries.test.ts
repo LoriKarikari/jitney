@@ -1,6 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. A failed subprocess escapes the Effect error channel and crashes the CLI instead of
-//    reporting the step that failed.
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { run } from "../src/process.js";

@@ -1,8 +1,3 @@
-// Failure modes this file guards. GitHub sends only well-formed deliveries live.
-// 1. A delivery with a bad signature, oversized or non-UTF-8 body, or unreadable request
-//    is accepted.
-// 2. A body exactly at the 1 MB limit is refused.
-// 3. An accepted delivery decodes into the wrong Workflow Event.
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import { classifyDelivery } from "../src/delivery-classification";

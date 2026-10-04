@@ -1,10 +1,3 @@
-// Failure modes this file guards. Live traffic is always signed and well-formed.
-// 1. Uninstall or lifecycle status answers a caller without the deployment identity or
-//    the fresh operation secret, or trusts a receipt for another Deployment.
-// 2. An oversized, unsigned, or mis-signed webhook is accepted.
-// 3. An unrelated event, a public repository, or unsupported labels create work.
-// 4. A malformed workflow job is processed instead of rejected.
-// 5. Suspended intake still provisions runners.
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import handler from "../src";

@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# A runner no job claims stops at the 5-minute assignment deadline (#147).
-# Cancels the job six seconds after dispatch, before the new runner can take it.
-# Passes when the attempt expires with `assignment_deadline` and no self-hosted
-# runner is left. Writes results/unclaimed-runner.result.
 source "$(dirname "$0")/lib.sh"
 
 start_tail "$results/unclaimed-runner.tail.jsonl"
 trap stop_tail EXIT
 dispatched_at=$(date +%s)
 run=$(dispatch long-job.yml "e2e-unclaimed-$dispatched_at" -f seconds=600)
+# Cancel before the new runner can claim the job.
 while (( $(date +%s) < dispatched_at + 6 )); do sleep 0.2; done
 gh api -X POST "repos/$fixture_repo/actions/runs/$run/cancel" >/dev/null
 sleep 360

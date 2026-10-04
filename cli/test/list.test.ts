@@ -1,13 +1,3 @@
-// Failure modes this file guards. The live fixture is healthy, so live runs see only `ok`.
-// 1. A healthy Deployment is reported unhealthy.
-// 2. A missing Worker and an unreachable version endpoint are conflated.
-// 3. A drifted image tag goes unreported.
-// 4. A Deployment without a receipt is not pointed at adopt.
-// 5. An orphaned container application goes unreported.
-// 6. An unreachable plane is guessed as ok or missing.
-// 7. Ownership variables are misclassified.
-// 8. An update is reported wrongly, including for a Deployment newer than the release.
-// 9. The human summary drops a finding or its fix command.
 import { DateTime, Effect, Option, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import type { AccountSnapshot, LiveApplication } from "../src/cloudflare-inventory.js";

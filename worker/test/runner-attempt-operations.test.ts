@@ -1,10 +1,3 @@
-// Failure modes this file guards. Over-broad tokens and lost failure steps pass live.
-// 1. A token reaches beyond one repository or the permissions the step needs.
-// 2. A runner starts in a repository whose installation does not match.
-// 3. The runner registration is deleted before the paid Container is destroyed.
-// 4. Reclaim fails when GitHub already removed the runner.
-// 5. A Job GitHub no longer has is not reported as not found.
-// 6. A failure is not classified by the step that failed.
 import { Cause, Effect, Option } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

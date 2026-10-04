@@ -1,8 +1,3 @@
-// Failure modes this file guards. The webhook-down E2E proves the backfill itself.
-// 1. Reconciliation starts a second runner for a job with a viable attempt.
-// 2. It resurrects a finished job or requeues a running one.
-// 3. It admits a public repository or unsupported labels.
-// 4. It submits jobs after discovery failed.
 import { env } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";

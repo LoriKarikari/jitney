@@ -1,9 +1,3 @@
-// Failure modes this file guards. No live check runs deploy.
-// 1. Resources are created before intent is recorded, or activated before ownership is
-//    verified.
-// 2. The lease lapses during a long deploy step.
-// 3. A failed step or a defect leaves resources without a receipt.
-// 4. --keep-partial still rolls back.
 import { Duration, Effect, Fiber, Option, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";

@@ -25,9 +25,6 @@ const terminalJobStates = ["completed", "cancelled", "failed"];
 
 const maxInactivityTimeout = 6 * 60 * 60_000;
 
-// The Scheduler's deadlines own a runner's lifetime. The inactivity timeout
-// outlasts both and stops the Runner Container only if every reclaim path fails.
-// Cloudflare rejects a timeout above 6 hours.
 export function runnerContainerInactivityTimeoutMs(runtimeTimeout = defaultRuntimeTimeout): number {
   return Math.min(assignmentTimeout + runtimeTimeout + reclaimSlack, maxInactivityTimeout);
 }
@@ -512,8 +509,6 @@ export class SchedulerLifecycle {
     });
   }
 
-  // Neither GitHub nor the runner reports an exit reliably, so the sweep checks
-  // every live Runner Container until its attempt ends.
   #nextWake(now: number): number | undefined {
     const check = this.#db
       .select({ checkAt: sql<number | null>`min(${conclusionChecks.checkAt})` })
@@ -553,8 +548,7 @@ export class SchedulerLifecycle {
 
       for (const row of expired) {
         const { workflowJobId, repositoryId, runnerName } = row;
-        // A lost in_progress delivery leaves a busy runner looking unassigned.
-        // Ask GitHub before reclaiming it.
+        // A lost in_progress delivery makes a busy runner look unassigned.
         const status = yield* this.#readJob(operations, this.#checkFor(row, workflowJobId, now));
         if (status?.runnerName === runnerName && status.status !== "queued") {
           yield* this.#transaction(() => {
@@ -579,8 +573,6 @@ export class SchedulerLifecycle {
     });
   }
 
-  // GitHub owns a Job's end state. When a Runner Attempt ends without a
-  // completed delivery, read the Job until GitHub reports how it ended.
   #readConclusions(
     operations: RunnerAttemptOperations,
     now: number,
@@ -675,8 +667,6 @@ export class SchedulerLifecycle {
       .run();
   }
 
-  // The Job a Runner Attempt ran. A cross-assigned runner runs another Job than
-  // the one that triggered it.
   #assignedJobId(row: AttemptRow): number {
     const assignment = this.#db
       .select({ workflowJobId: assignments.workflowJobId })
@@ -742,8 +732,7 @@ export class SchedulerLifecycle {
             .set({ state: "stopped" })
             .where(eq(attempts.runnerName, row.runnerName))
             .run();
-          // A JIT runner exits only after it ran a Job, so an attempt still
-          // waiting lost its in_progress delivery. GitHub says which way it went.
+          // A JIT runner exits only after running a Job, so a waiting attempt lost its in_progress.
           this.#scheduleConclusionCheck(this.#checkFor(row, this.#assignedJobId(row), now));
           return true;
         });

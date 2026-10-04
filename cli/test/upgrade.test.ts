@@ -1,9 +1,3 @@
-// Failure modes this file guards. The canary upgrades live but cannot see drain order or
-// a failed health gate.
-// 1. Upgrade activates before draining, skips the health gate, or prunes before rotating.
-// 2. A failed health gate leaves the new version active.
-// 3. A failed rollback resumes provisioning or drops the receipt.
-// 4. An explicit rollback prunes the image it may need again.
 import { DateTime, Duration, Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import { InstallerError, UpgradeRollbackError } from "../src/errors.js";

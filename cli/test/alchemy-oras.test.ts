@@ -1,6 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. Copying a remote runner image needs a local Docker daemon. The canary's runner has
-//    Docker, so a live run would not notice.
 import { Effect, Layer, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import {

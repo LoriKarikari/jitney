@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# With no webhook reaching the fixture, a 30-second job and a 7-minute job still
-# finish, and the Scheduler takes each Job's end state from GitHub (#147, #148).
-# Passes when GitHub reports both jobs successful, the Scheduler reads `completed`
-# and `success` for each, and the 7-minute job's runner is not reclaimed at the
-# 5-minute assignment deadline. Writes results/webhook-down.{jsonl,result}.
 source "$(dirname "$0")/lib.sh"
 stamp=$(date +%s)
 

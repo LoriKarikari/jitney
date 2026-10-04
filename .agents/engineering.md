@@ -256,8 +256,9 @@ The project uses five triage labels:
 - Write a unit test only for a failure mode a live run cannot reach cheaply,
   such as a race, a security boundary, a failure path, or an input edge case.
 - Before writing a unit test or the code it covers, list every way the change
-  could fail. Each unit test file opens with that list. Then write the failing
-  tests, then the code. Never add a unit test after the code it covers.
+  could fail, in the issue or PR. Then write the failing tests, named after
+  those failure modes, then the code. Never add a unit test after the code it
+  covers.
 - Delete a unit test when a live check proves the same behavior, or when it
   guards no listed failure mode.
 - Test external behavior, not implementation details, through the highest seam

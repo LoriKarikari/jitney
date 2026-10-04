@@ -1,8 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. Ownership is written to a repository the receipt does not list.
-// 2. A receipt for another Deployment is honored, or makes the Worker call GitHub.
-// 3. Status leaks inventory beyond the receipt.
-// 4. Installation, missing ownership, and unreachable ownership are conflated.
 import { Effect, Option } from "effect";
 import { describe, expect, it } from "vitest";
 import {

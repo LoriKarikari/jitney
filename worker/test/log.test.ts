@@ -1,7 +1,3 @@
-// Failure modes this file guards. A leaked secret would not fail any live check.
-// 1. A private key, JWT, installation token, webhook signature, or JIT configuration
-//    reaches the logs.
-// 2. A field outside the allowlist reaches the logs.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { emit } from "../src/log";
 

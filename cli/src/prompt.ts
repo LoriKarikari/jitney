@@ -5,7 +5,6 @@ import { InstallerError, type InstallerStep } from "./errors.js";
 /**
  * Print a rendered plan, ask one question on the terminal, and interpret the
  * answer. `accept` decides what counts as consent (a `y`, a typed name, ...).
- * Fails when standard input ends before an answer, as it does in CI.
  */
 export function confirmInTerminal(options: {
   readonly step: InstallerStep;

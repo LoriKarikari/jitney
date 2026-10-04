@@ -104,7 +104,6 @@ export interface LeaseContext {
   readonly name: string;
   readonly lease: OperationLease;
   readonly now: DateTime.Utc;
-  /** When the holder last wrote the receipt. A read older than this is stale. */
   readonly updatedAt: DateTime.Utc;
 }
 
@@ -130,13 +129,7 @@ export interface ReceiptStoreOptions {
    * @default 1 minute
    */
   readonly namespaceRemovalDelay?: Duration.Input;
-  /**
-   * Wait between reads while KV still serves a receipt older than the
-   * caller's own last write. KV can lag a write for about a minute, so reads
-   * repeat 45 times before the caller acts on what it sees.
-   *
-   * @default 2 seconds
-   */
+  /** @default 2 seconds */
   readonly propagationPoll?: Duration.Input;
 }
 
@@ -266,9 +259,7 @@ export function makeReceiptStore(
 
   const getRequired = (name: string) => get(name).pipe(required(name));
 
-  // KV may keep serving the value from before a write. Read until the receipt
-  // is at least as new as the caller's own last write, then return whatever
-  // is there so the caller's ownership checks decide.
+  // KV can serve the value from before a write for up to a minute.
   const getSince = (name: string, since: DateTime.Utc) =>
     get(name).pipe(
       Effect.flatMap((observed) =>

@@ -1,11 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. Adopt records a receipt that misses a resource, or rewrites markers that already exist.
-// 2. A Worker whose receipt was lost gets a new ULID, orphaning its markers.
-// 3. Adopt takes a resource, Worker, or name another receipt owns.
-// 4. A failed step loses the Deployment or its installing receipt.
-// 5. Adopt claims a repository another Deployment's marker owns.
-// 6. Adopt finishes while a recorded repository's marker is unaccounted for.
-// 7. A resumed adoption mints a second ULID.
 import { Cause, DateTime, Duration, Effect, Exit, Option, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import {

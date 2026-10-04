@@ -1,6 +1,3 @@
-// Failure modes this file guards. Code paths never write these rows live.
-// 1. A Runner Attempt exists without its Job.
-// 2. An Assignment points at no Runner Attempt, or one attempt gets two Assignments.
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { Scheduler } from "../src/scheduler";

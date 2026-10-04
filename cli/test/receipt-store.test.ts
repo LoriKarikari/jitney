@@ -1,15 +1,3 @@
-// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
-// 1. JSON the Cloudflare client auto-decodes, or an empty list cursor, breaks reads.
-// 2. An installing receipt and its lease land in two writes.
-// 3. An older receipt fails to decode.
-// 4. Fields outside the receipt schema are persisted.
-// 5. A second deploy replaces a Deployment, or a lost creation race goes unnoticed.
-// 6. A stale KV read after the command's own write is taken as a lost lease.
-// 7. Lease timing is wrong: not 15 minutes, renewed from the old expiry, or revived after it.
-// 8. Finishing leaves the lease set or takes two writes.
-// 9. A caller that does not own the lease renews it, or repair releases a live one.
-// 10. The shared namespace is deleted while a receipt still exists.
-// 11. A lost KV lease race goes unnoticed.
 import { DateTime, Duration, Effect, Option, Ref, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { collectNamespaceKeyNames, receiptValueText } from "../src/receipts/cloudflare.js";
@@ -561,7 +549,6 @@ async function makeMemoryBackend(options?: {
   const removals = await Effect.runPromise(Ref.make(0));
   const puts = await Effect.runPromise(Ref.make(0));
   const listCalls = await Effect.runPromise(Ref.make(0));
-  // Cloudflare KV can serve the value from before a write for a while after it.
   let staleReadsPerWrite = 0;
   const stale = new Map<string, { value: string | undefined; reads: number }>();
   const service: ReceiptBackend = {

@@ -1,12 +1,3 @@
-// Failure modes this file guards. No live check runs destroy, and upgrades never fail
-// these checks.
-// 1. The inert secret installed at deploy time, or a stale or wrong secret, authorizes
-//    uninstall.
-// 2. Installations are suspended before intake, or during an upgrade.
-// 3. The active attempt count used for draining is wrong.
-// 4. The adopt report misses the Worker's App or its installations.
-// 5. Ownership or installations outside the receipt are deleted.
-// 6. A receipt for another Deployment is honored.
 import { Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";

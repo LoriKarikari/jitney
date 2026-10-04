@@ -197,12 +197,20 @@ gh workflow run release-please.yml --ref main
 The run publishes the current `main` as `get-jitney@<next patch>-dev.<run
 number>` under the npm `dev` dist-tag, plus the runner image under the same
 version tag. The npm `latest` tag and the image `latest` tag stay on the last
-release. Move the fixture Deployment to the prerelease, and back afterwards:
+release.
+
+The live check is the canary in `LoriKarikari/jitney-test`. It upgrades the
+fixture Deployment `jitney` from a GitHub-hosted runner, waits for the runner
+image rollout, then fails unless a job starts on its first Runner Attempt
+within 60 seconds. Dispatch it with the prerelease:
 
 ```bash
-npx get-jitney@<prerelease> upgrade jitney
-npx get-jitney@<prerelease> rollback jitney
+gh workflow run jitney.yml -R LoriKarikari/jitney-test \
+  -f version=<prerelease>
 ```
+
+It also runs every Monday with `latest`, which returns the fixture to the last
+release.
 
 ## Issues
 

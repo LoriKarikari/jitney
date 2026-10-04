@@ -48,13 +48,27 @@ export class LeaseHeldError extends Data.TaggedError("LeaseHeldError")<{
   name: string;
   lease: OperationLease;
   expired: boolean;
-}> {}
+}> {
+  override get message() {
+    const holder = `${this.lease.operation} by ${this.lease.actor}`;
+    const until = DateTime.formatIso(this.lease.expiresAt);
+    return this.expired
+      ? `${holder} held the lease until ${until} and never released it. Run get-jitney repair ${this.name}.`
+      : `${holder} holds the lease until ${until}.`;
+  }
+}
 
 export class LeaseRaceError extends Data.TaggedError("LeaseRaceError")<{
   name: string;
   attempted: OperationLease;
   observed: OperationLease | null;
-}> {}
+}> {
+  override get message() {
+    return this.observed === null
+      ? "Another command changed the receipt and dropped this lease."
+      : `${this.observed.operation} by ${this.observed.actor} took the lease first.`;
+  }
+}
 
 export class LeaseOwnershipError extends Data.TaggedError("LeaseOwnershipError")<{
   name: string;

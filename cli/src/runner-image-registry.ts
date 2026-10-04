@@ -58,7 +58,7 @@ export const copyRunnerImage = (
   Effect.gen(function* () {
     const source = `ghcr.io/lorikarikari/jitney:${version}`;
     const tag = (yield* sha256Object({ image: source })).slice(0, 16);
-    const credentials = yield* scratchCredentials(accountId, ["push"], "registry_copy");
+    const credentials = yield* scratchCredentials(accountId, ["pull", "push"], "registry_copy");
     yield* copyImage({
       source,
       destination: `${REGISTRY_HOST}/${accountId}/${repository}:${tag}`,

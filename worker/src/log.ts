@@ -55,6 +55,11 @@ export type LifecycleRecord =
       deploymentId?: string | undefined;
     })
   | (RunnerCorrelation & {
+      event: "runner_container_exited";
+      attempt: number;
+      deploymentId?: string | undefined;
+    })
+  | (RunnerCorrelation & {
       event: "runner_reclaim_failed";
       step: string;
       deploymentId?: string | undefined;

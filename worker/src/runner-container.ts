@@ -42,6 +42,10 @@ export class RunnerContainer extends Container<Env> {
     );
   }
 
+  isRunning(): boolean {
+    return this.ctx.container?.running === true;
+  }
+
   override onStart(): Promise<void> {
     return Effect.runPromise(
       this.#correlation().pipe(

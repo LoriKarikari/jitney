@@ -42,8 +42,9 @@ function expirationReasons(logged: { mock: { calls: unknown[][] } }): unknown[] 
 function operations(
   provision: RunnerAttemptOperations["provision"] = () => Effect.void,
   reclaim: RunnerAttemptOperations["reclaim"] = () => Effect.void,
+  isRunning: RunnerAttemptOperations["isRunning"] = () => Effect.succeed(true),
 ): RunnerAttemptOperations {
-  return { provision, reclaim };
+  return { provision, reclaim, isRunning };
 }
 
 function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
@@ -782,36 +783,84 @@ describe("Scheduler admission", () => {
     });
   });
 
-  it("pulls the alarm earlier when the runtime deadline precedes it", async () => {
-    const scheduler = env.SCHEDULER.getByName("runtime-alarm");
-    const event = queuedEvent(7004, "delivery-queued");
+  it("sweeps again within one scheduler tick while a Runner Container lives", async () => {
+    const scheduler = env.SCHEDULER.getByName("live-container-alarm");
+
+    await scheduler.accept(queuedEvent(7004, "delivery-queued"));
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
 
     await runInDurableObject(scheduler, async (_instance, state) => {
-      const lifecycle = new SchedulerLifecycle(
-        state.storage,
-        "deployment-test",
-        120_000,
-        testSchedulerTick,
-      );
-      const accepted = await Effect.runPromise(lifecycle.accept(event));
-      if (accepted.runnerName === undefined) throw new Error("missing runner name");
-      await Effect.runPromise(lifecycle.sweep(operations()));
-      const armed = await state.storage.getAlarm();
-      if (armed === null) throw new Error("expected an assignment alarm");
-
-      await Effect.runPromise(
-        lifecycle.accept({
-          ...event,
-          action: "in_progress",
-          deliveryId: "delivery-in-progress",
-          runnerName: accepted.runnerName,
-        }),
-      );
-
-      const alarm = await state.storage.getAlarm();
-      if (alarm === null) throw new Error("expected a runtime alarm");
-      expect(alarm).toBeLessThan(armed);
-      expect(alarm).toBeLessThanOrEqual(Date.now() + 120_000);
+      expect(await state.storage.getAlarm()).toBeLessThanOrEqual(Date.now() + testSchedulerTick);
     });
+  });
+});
+
+describe("Runner Container exits", () => {
+  afterEach(disarmSchedulerAlarms);
+
+  it("ends the attempt of an exited Runner Container on the next sweep and frees its capacity", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("container-exit");
+    for (let job = 1; job <= 25; job++) {
+      await scheduler.accept(queuedEvent(8000 + job, `delivery-${job}`));
+      await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
+    }
+    await scheduler.accept({
+      ...queuedEvent(8001, "delivery-in-progress"),
+      action: "in_progress",
+      runnerName: "jitney-456-8001-1",
+    });
+    const waiting = queuedEvent(8026, "delivery-26");
+    expect(await scheduler.accept(waiting)).toEqual({ outcome: "capacity_limited" });
+
+    const reclaimed: string[] = [];
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        operations(
+          () => Effect.void,
+          (request) => {
+            reclaimed.push(request.runnerName);
+            return Effect.void;
+          },
+          (request) =>
+            request.runnerName === "jitney-456-8002-1"
+              ? Effect.fail(new RunnerAttemptFailure({ step: "container_probe", cause: "down" }))
+              : Effect.succeed(request.runnerName !== "jitney-456-8001-1"),
+        ),
+      ),
+    );
+
+    expect(reclaimed).toEqual(["jitney-456-8001-1"]);
+    expect(await scheduler.getAttempts(8001)).toMatchObject([{ state: "stopped" }]);
+    expect(await scheduler.getAttempts(8002)).toMatchObject([{ state: "waiting_for_assignment" }]);
+    expect(await scheduler.activeAttemptCount()).toBe(24);
+    const { action: _action, deliveryId: _deliveryId, ...candidate } = waiting;
+    expect(await scheduler.reconcile(candidate)).toMatchObject({ outcome: "accepted" });
+    logged.mockRestore();
+  });
+
+  it("requeues the job of a runner that exits before any job claims it", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("container-exit-unassigned");
+    const event = queuedEvent(8101, "delivery-queued");
+    await scheduler.accept(event);
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        operations(
+          () => Effect.void,
+          () => Effect.void,
+          () => Effect.succeed(false),
+        ),
+      ),
+    );
+
+    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "stopped" }]);
+    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+      state: "queued",
+      pending: false,
+    });
+    logged.mockRestore();
   });
 });

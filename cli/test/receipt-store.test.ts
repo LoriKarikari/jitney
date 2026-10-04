@@ -153,6 +153,47 @@ describe("deployment receipt store", () => {
     });
   });
 
+  it("runs a whole leased operation while KV serves reads older than its own writes", async () => {
+    const backend = await makeMemoryBackend();
+    const store = makeReceiptStore(backend.service, { propagationPoll: Duration.zero });
+    await Effect.runPromise(store.create({ ...fixtureReceipt(), phase: "active" }));
+    backend.serveStaleReads(2);
+    const at = (minute: number) => DateTime.makeUnsafe(`2026-07-20T13:0${minute}:00.000Z`);
+
+    const finished = await Effect.runPromise(
+      Effect.gen(function* () {
+        const acquired = yield* store.acquireLease("staging", "upgrade", "lori@mbp", at(0));
+        const context = (receipt: DeploymentReceipt, minute: number) => ({
+          name: "staging",
+          lease: receipt.lease!,
+          now: at(minute),
+          updatedAt: receipt.updatedAt,
+        });
+        const versioned = yield* store.updateOperation(context(acquired, 1), {
+          versions: { current: "0.4.0", previous: "0.3.0" },
+        });
+        const tagged = yield* store.updateOperation(context(versioned, 2), {
+          cloudflare: {
+            ...versioned.cloudflare,
+            tags: { current: "0.4.0", previous: "0.3.0" },
+          },
+        });
+        return yield* store.finishOperation(context(tagged, 3), {
+          phase: "active",
+          outcome: "succeeded",
+        });
+      }),
+    );
+
+    expect(finished).toMatchObject({
+      phase: "active",
+      lease: null,
+      versions: { current: "0.4.0", previous: "0.3.0" },
+      cloudflare: { tags: { current: "0.4.0", previous: "0.3.0" } },
+    });
+    expect(finished.history.at(-1)).toMatchObject({ operation: "upgrade", outcome: "succeeded" });
+  });
+
   it("acquires a 15-minute lease and moves the receipt into the operation phase", async () => {
     const backend = await makeMemoryBackend();
     const store = makeReceiptStore(backend.service);
@@ -216,7 +257,12 @@ describe("deployment receipt store", () => {
       Effect.gen(function* () {
         yield* store.create({ ...fixtureReceipt(), phase: "active" });
         const acquired = yield* store.acquireLease("staging", "upgrade", "lori@mbp", acquiredAt);
-        return yield* store.renewLease({ name: "staging", lease: acquired.lease!, now: renewedAt });
+        return yield* store.renewLease({
+          name: "staging",
+          lease: acquired.lease!,
+          now: renewedAt,
+          updatedAt: acquired.updatedAt,
+        });
       }),
     );
 
@@ -241,7 +287,12 @@ describe("deployment receipt store", () => {
           DateTime.makeUnsafe("2026-07-20T13:00:00.000Z"),
         );
         return yield* store.updateOperation(
-          { name: "staging", lease: acquired.lease!, now: updatedAt },
+          {
+            name: "staging",
+            lease: acquired.lease!,
+            now: updatedAt,
+            updatedAt: acquired.updatedAt,
+          },
           {
             cloudflare: {
               ...acquired.cloudflare,
@@ -274,6 +325,7 @@ describe("deployment receipt store", () => {
         return yield* store.renewLease({
           name: "staging",
           lease: acquired.lease!,
+          updatedAt: acquired.updatedAt,
           now: DateTime.makeUnsafe("2026-07-20T13:20:00.000Z"),
         });
       }).pipe(Effect.flip),
@@ -297,7 +349,12 @@ describe("deployment receipt store", () => {
           DateTime.makeUnsafe("2026-07-20T13:00:00.000Z"),
         );
         return yield* store.finishOperation(
-          { name: "staging", lease: acquired.lease!, now: finishedAt },
+          {
+            name: "staging",
+            lease: acquired.lease!,
+            now: finishedAt,
+            updatedAt: acquired.updatedAt,
+          },
           {
             phase: "active",
             outcome: "succeeded",
@@ -334,6 +391,7 @@ describe("deployment receipt store", () => {
         return yield* store.renewLease({
           name: "staging",
           lease: { ...acquired.lease!, actor: "other@host" },
+          updatedAt: acquired.updatedAt,
           now: DateTime.makeUnsafe("2026-07-20T13:05:00.000Z"),
         });
       }).pipe(Effect.flip),
@@ -397,11 +455,16 @@ describe("deployment receipt store", () => {
         const production = yield* store.acquireLease("production", "destroy", "lori@mbp", now);
         const deleteAt = DateTime.makeUnsafe("2026-07-20T13:01:00.000Z");
         const first = yield* store.deleteReceipt(
-          { name: "staging", lease: staging.lease!, now: deleteAt },
+          { name: "staging", lease: staging.lease!, now: deleteAt, updatedAt: staging.updatedAt },
           fixtureReceipt().id,
         );
         const second = yield* store.deleteReceipt(
-          { name: "production", lease: production.lease!, now: deleteAt },
+          {
+            name: "production",
+            lease: production.lease!,
+            now: deleteAt,
+            updatedAt: production.updatedAt,
+          },
           other.id,
         );
         return { first, second };
@@ -436,6 +499,7 @@ describe("deployment receipt store", () => {
           {
             name: "staging",
             lease: held.lease!,
+            updatedAt: held.updatedAt,
             now: DateTime.makeUnsafe("2026-07-20T13:01:00.000Z"),
           },
           fixtureReceipt().id,
@@ -513,12 +577,24 @@ async function makeMemoryBackend(options?: {
   const removals = await Effect.runPromise(Ref.make(0));
   const puts = await Effect.runPromise(Ref.make(0));
   const listCalls = await Effect.runPromise(Ref.make(0));
+  // Cloudflare KV can serve the value from before a write for a while after it.
+  let staleReadsPerWrite = 0;
+  const stale = new Map<string, { value: string | undefined; reads: number }>();
   const service: ReceiptBackend = {
-    get: (name) => Effect.map(Ref.get(data), (values) => values.get(name)),
+    get: (name) =>
+      Effect.map(Ref.get(data), (values) => {
+        const lagging = stale.get(name);
+        if (lagging === undefined || lagging.reads === 0) return values.get(name);
+        lagging.reads -= 1;
+        return lagging.value;
+      }),
     put: (name, value) =>
       Ref.update(puts, (count) => count + 1).pipe(
         Effect.andThen(
           Ref.update(data, (values) => {
+            if (staleReadsPerWrite > 0) {
+              stale.set(name, { value: values.get(name), reads: staleReadsPerWrite });
+            }
             const next = new Map(values).set(name, value);
             options?.afterPut?.(name, value, next);
             return next;
@@ -542,6 +618,9 @@ async function makeMemoryBackend(options?: {
   };
   return {
     service,
+    serveStaleReads: (reads: number) => {
+      staleReadsPerWrite = reads;
+    },
     values: () => Effect.runPromise(Effect.map(Ref.get(data), (values) => [...values])),
     putCount: () => Effect.runPromise(Ref.get(puts)),
     namespaceRemovals: () => Effect.runPromise(Ref.get(removals)),

@@ -1,3 +1,28 @@
+// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
+// Admission
+// 1. A drain still creates attempts, or a replayed or redelivered queued job gets a second runner.
+// 2. A job whose attempts all failed never gets a new one, or a finished job moves backwards.
+// 3. Capacity limits are exceeded or not recorded durably.
+// 4. A cross-assignment binds the wrong job, or its idle runner is never reclaimed.
+// 5. Duplicate, conflicting, and unknown assignments are misclassified.
+// 6. An assignment recorded while provisioning finishes is lost.
+// 7. A provisioning failure logs its cause, or leaks a runner minted before it.
+// Deadlines
+// 8. An unassigned attempt never expires, or a failed reclaim blocks the expiry.
+// 9. The sweep expires a runner assigned mid-sweep, or overwrites a job completed mid-sweep.
+// 10. The runtime deadline decides the Job's end state instead of GitHub.
+// Runner Container exits (#147)
+// 11. An exited runner keeps holding capacity, or a failed probe reclaims a live runner.
+// Job end state from GitHub (#148)
+// 12. An attempt that ends without a completed delivery leaves its Job open forever.
+// 13. GitHub's conclusion maps to the wrong state.
+// 14. A read overwrites the conclusion a completed delivery just recorded.
+// 15. A cross-assigned runner's triggering Job is read instead of the Job it ran.
+// 16. A lost in_progress delivery requeues a Job that ran, or reclaims its busy runner.
+// 17. A Job GitHub still runs is closed, a failed read drops the check, a 404 is read
+//     forever, or reads run more than once per 30 seconds.
+// Inactivity timeout
+// 18. The timeout undercuts the Scheduler's deadlines or exceeds Cloudflare's 6 hours.
 import { env, listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { Effect, Fiber } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -6,7 +31,6 @@ import { runnerContainerInactivityTimeoutMs, SchedulerLifecycle } from "../src/l
 import {
   RunnerAttemptFailure,
   type RunnerAttemptOperations,
-  type RunnerAttemptRequest,
 } from "../src/runner-attempt-operations";
 import { Scheduler } from "../src/scheduler";
 
@@ -192,30 +216,6 @@ describe("Scheduler admission", () => {
     expect(privilegedCalls).toBe(0);
   });
 
-  it("binds a job to its assigned Runner Attempt", async () => {
-    const scheduler = env.SCHEDULER.getByName("same-job-assignment");
-    const event = queuedEvent(4501, "delivery-queued");
-    const accepted = await scheduler.accept(event);
-    const runnerName = accepted.runnerName;
-    if (runnerName === undefined) throw new Error("accepted attempt has no runner name");
-
-    expect(
-      await scheduler.accept({
-        ...event,
-        action: "in_progress",
-        deliveryId: "delivery-running",
-        runnerName,
-      }),
-    ).toEqual({ outcome: "recorded", runnerName });
-    expect(await scheduler.getAssignment(event.workflowJobId)).toMatchObject({
-      workflowJobId: 4501,
-      triggeringWorkflowJobId: 4501,
-      attempt: 1,
-      runnerName,
-      containerName: "attempt-456-4501-1",
-    });
-  });
-
   it("binds a job to a Runner Attempt triggered by another job", async () => {
     const scheduler = env.SCHEDULER.getByName("cross-assignment");
     const jobA = queuedEvent(4601, "delivery-a-queued");
@@ -323,44 +323,6 @@ describe("Scheduler admission", () => {
     ).toEqual({ outcome: "unknown_assignment", runnerName: "unknown-runner" });
   });
 
-  it("drains pending work through one privileged provisioning seam", async () => {
-    const scheduler = env.SCHEDULER.getByName("provisioning-seam");
-    const event = queuedEvent(5001, "delivery-queued");
-    await scheduler.accept(event);
-    const requests: RunnerAttemptRequest[] = [];
-
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        operations(
-          (request) => {
-            requests.push(request);
-            return Effect.void;
-          },
-          () => Effect.void,
-        ),
-      ),
-    );
-
-    expect(requests).toEqual([
-      {
-        installationId: 123,
-        repositoryId: 456,
-        repositoryOwner: "LoriKarikari",
-        repositoryName: "jitney-test",
-        workflowJobId: 5001,
-        runnerName: "jitney-456-5001-1",
-        containerName: "attempt-456-5001-1",
-      },
-    ]);
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
-      state: "waiting_for_assignment",
-      pending: false,
-    });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([
-      { state: "waiting_for_assignment" },
-    ]);
-  });
-
   it("preserves an assignment recorded while provisioning finishes", async () => {
     const scheduler = env.SCHEDULER.getByName("assignment-during-provisioning");
     const event = queuedEvent(5004, "delivery-queued");
@@ -403,53 +365,6 @@ describe("Scheduler admission", () => {
 
     expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "running" });
     expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "running" }]);
-  });
-
-  it("reconstructs one lifecycle from correlated structured events", async () => {
-    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const scheduler = env.SCHEDULER.getByName("observable-lifecycle");
-    const event = queuedEvent(5003, "delivery-observable");
-    const accepted = await scheduler.accept(event);
-    if (accepted.runnerName === undefined) throw new Error("accepted attempt has no runner name");
-
-    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
-    await scheduler.accept({
-      ...event,
-      action: "in_progress",
-      deliveryId: "delivery-in-progress",
-      runnerName: accepted.runnerName,
-    });
-    await scheduler.accept({
-      ...event,
-      action: "completed",
-      deliveryId: "delivery-completed",
-      conclusion: "success",
-    });
-
-    const records = logged.mock.calls
-      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-      .filter((record) => record.workflowJobId === event.workflowJobId);
-    expect(records.map(({ event: name, action, outcome }) => ({ name, action, outcome }))).toEqual([
-      { name: "scheduler_transition", action: "queued", outcome: "accepted" },
-      { name: "runner_provisioning_started", action: undefined, outcome: undefined },
-      { name: "runner_provisioning_succeeded", action: undefined, outcome: undefined },
-      { name: "scheduler_transition", action: "in_progress", outcome: "recorded" },
-      { name: "scheduler_transition", action: "completed", outcome: "recorded" },
-    ]);
-    expect(records).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          deliveryId: "delivery-observable",
-          deploymentId: "deployment-test",
-          installationId: 123,
-          repositoryId: 456,
-          workflowJobId: 5003,
-          runnerName: "jitney-456-5003-1",
-          containerName: "attempt-456-5003-1",
-        }),
-      ]),
-    );
-    logged.mockRestore();
   });
 
   it("records a typed provisioning failure without rendering its cause", async () => {
@@ -542,43 +457,6 @@ describe("Scheduler admission", () => {
       runnerName: "jitney-456-6001-2",
     });
     logged.mockRestore();
-  });
-
-  it("leaves assigned and on-time attempts untouched by the sweep", async () => {
-    const scheduler = env.SCHEDULER.getByName("expiry-boundaries");
-    const onTime = queuedEvent(6002, "delivery-on-time");
-    const assigned = queuedEvent(6003, "delivery-assigned");
-    await scheduler.accept(onTime);
-    const acceptedAssigned = await scheduler.accept(assigned);
-    if (acceptedAssigned.runnerName === undefined) throw new Error("missing runner name");
-
-    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
-    await scheduler.accept({
-      ...assigned,
-      action: "in_progress",
-      deliveryId: "delivery-in-progress",
-      runnerName: acceptedAssigned.runnerName,
-    });
-
-    const reclaimed: string[] = [];
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        operations(
-          () => Effect.void,
-          (request) => {
-            reclaimed.push(request.runnerName);
-            return Effect.void;
-          },
-        ),
-        Date.now() + 6 * 60_000,
-      ),
-    );
-
-    expect(reclaimed).toEqual(["jitney-456-6002-1"]);
-    expect(await scheduler.getAttempts(assigned.workflowJobId)).toMatchObject([
-      { state: "running" },
-    ]);
-    expect(await scheduler.getJob(assigned.workflowJobId)).toMatchObject({ state: "running" });
   });
 
   it("expires the attempt even when reclaiming fails", async () => {
@@ -742,61 +620,6 @@ describe("Scheduler admission", () => {
       conclusion: "success",
     });
     logged.mockRestore();
-  });
-
-  it("leaves a running assignment before its runtime deadline untouched", async () => {
-    const scheduler = env.SCHEDULER.getByName("runtime-on-time");
-    const event = queuedEvent(7002, "delivery-queued");
-    const accepted = await scheduler.accept(event);
-    if (accepted.runnerName === undefined) throw new Error("missing runner name");
-
-    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
-    await scheduler.accept({
-      ...event,
-      action: "in_progress",
-      deliveryId: "delivery-in-progress",
-      runnerName: accepted.runnerName,
-    });
-
-    const reclaimed: string[] = [];
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        operations(
-          () => Effect.void,
-          (request) => {
-            reclaimed.push(request.runnerName);
-            return Effect.void;
-          },
-        ),
-        Date.now() + 30 * 60_000,
-      ),
-    );
-
-    expect(reclaimed).toEqual([]);
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "running" });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "running" }]);
-  });
-
-  it("arms accepted work on the configured scheduler tick", async () => {
-    const scheduler = env.SCHEDULER.getByName("configured-scheduler-tick");
-    const before = Date.now();
-
-    await scheduler.accept(queuedEvent(7005, "delivery-queued"));
-
-    await runInDurableObject(scheduler, async (_instance, state) => {
-      expect(await state.storage.getAlarm()).toBeGreaterThanOrEqual(before + testSchedulerTick);
-    });
-  });
-
-  it("sweeps again within one scheduler tick while a Runner Container lives", async () => {
-    const scheduler = env.SCHEDULER.getByName("live-container-alarm");
-
-    await scheduler.accept(queuedEvent(7004, "delivery-queued"));
-    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
-
-    await runInDurableObject(scheduler, async (_instance, state) => {
-      expect(await state.storage.getAlarm()).toBeLessThanOrEqual(Date.now() + testSchedulerTick);
-    });
   });
 });
 

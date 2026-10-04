@@ -1,3 +1,6 @@
+// Failure modes this file guards. The fixture has too few runs to page live.
+// 1. Discovery drops a page of queued or in-progress runs.
+// 2. One installation's failure aborts discovery for the others.
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
 

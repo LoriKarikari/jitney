@@ -1,3 +1,13 @@
+// Failure modes this file guards. The live fixture is healthy, so live runs see only `ok`.
+// 1. A healthy Deployment is reported unhealthy.
+// 2. A missing Worker and an unreachable version endpoint are conflated.
+// 3. A drifted image tag goes unreported.
+// 4. A Deployment without a receipt is not pointed at adopt.
+// 5. An orphaned container application goes unreported.
+// 6. An unreachable plane is guessed as ok or missing.
+// 7. Ownership variables are misclassified.
+// 8. An update is reported wrongly, including for a Deployment newer than the release.
+// 9. The human summary drops a finding or its fix command.
 import { DateTime, Effect, Option, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import type { AccountSnapshot, LiveApplication } from "../src/cloudflare-inventory.js";
@@ -149,15 +159,6 @@ describe("list drift classification", () => {
     });
     expect(report.orphans).toEqual([]);
     expect(report.latestVersion).toBe("0.3.0");
-  });
-
-  it("exposes the previous version in the JSON report", async () => {
-    const report = await runList([fixtureReceipt({ previousVersion: "0.2.0" })], fakePlatform());
-
-    expect(report.deployments[0]).toMatchObject({
-      version: "0.3.0",
-      previousVersion: "0.2.0",
-    });
   });
 
   it("classifies an absent Worker as missing", async () => {
@@ -417,13 +418,6 @@ describe("list drift classification", () => {
     expect(output).toContain("worker.version");
     expect(output).toContain("orphan");
     expect(output).toContain("npx get-jitney list --json");
-  });
-
-  it("mirrors the report 1:1 as JSON", async () => {
-    const report = await runList([fixtureReceipt()], fakePlatform());
-
-    const roundTripped: unknown = JSON.parse(JSON.stringify(report));
-    expect(roundTripped).toEqual(report);
   });
 });
 

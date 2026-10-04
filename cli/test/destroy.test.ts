@@ -1,3 +1,11 @@
+// Failure modes this file guards. No live check runs destroy.
+// 1. A preview takes a lease or changes something.
+// 2. A refused confirmation still destroys.
+// 3. Teardown deletes an image another receipt shares, or leaves the final receipt behind.
+// 4. --now still drains.
+// 5. The receipt export happens after the resources are gone.
+// 6. An interrupted destroy cannot resume.
+// 7. A destroy with residue drops the receipt and loses track of what is left.
 import { DateTime, Duration, Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
 import {

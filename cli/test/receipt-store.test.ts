@@ -1,11 +1,19 @@
+// Failure modes this file guards. The live checks in e2e/ cannot reach them cheaply.
+// 1. JSON the Cloudflare client auto-decodes, or an empty list cursor, breaks reads.
+// 2. An installing receipt and its lease land in two writes.
+// 3. An older receipt fails to decode.
+// 4. Fields outside the receipt schema are persisted.
+// 5. A second deploy replaces a Deployment, or a lost creation race goes unnoticed.
+// 6. A stale KV read after the command's own write is taken as a lost lease.
+// 7. Lease timing is wrong: not 15 minutes, renewed from the old expiry, or revived after it.
+// 8. Finishing leaves the lease set or takes two writes.
+// 9. A caller that does not own the lease renews it, or repair releases a live one.
+// 10. The shared namespace is deleted while a receipt still exists.
+// 11. A lost KV lease race goes unnoticed.
 import { DateTime, Duration, Effect, Option, Ref, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { collectNamespaceKeyNames, receiptValueText } from "../src/receipts/cloudflare.js";
-import {
-  createDeploymentReceipt,
-  generateDeploymentId,
-  type DeploymentReceipt,
-} from "../src/receipts/schema.js";
+import { createDeploymentReceipt, type DeploymentReceipt } from "../src/receipts/schema.js";
 import {
   LeaseExpiredError,
   LeaseHeldError,
@@ -40,30 +48,6 @@ describe("Cloudflare receipt values", () => {
 });
 
 describe("deployment receipt store", () => {
-  it("mints a ULID deployment identity", async () => {
-    const id = await Effect.runPromise(generateDeploymentId);
-
-    expect(id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
-  });
-
-  it("creates and reads a schema-v1 receipt", async () => {
-    const backend = await makeMemoryBackend();
-    const store = makeReceiptStore(backend.service);
-    const receipt = fixtureReceipt();
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* store.create(receipt);
-        return yield* store.get(receipt.name);
-      }),
-    );
-
-    expect(Option.getOrThrow(result)).toEqual(receipt);
-    expect(await backend.values()).toEqual([
-      ["staging", expect.stringContaining('"schemaVersion":1')],
-    ]);
-  });
-
   it("creates an installing receipt with its lease in one write", async () => {
     const backend = await makeMemoryBackend();
     const store = makeReceiptStore(backend.service);

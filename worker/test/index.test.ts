@@ -1,3 +1,10 @@
+// Failure modes this file guards. Live traffic is always signed and well-formed.
+// 1. Uninstall or lifecycle status answers a caller without the deployment identity or
+//    the fresh operation secret, or trusts a receipt for another Deployment.
+// 2. An oversized, unsigned, or mis-signed webhook is accepted.
+// 3. An unrelated event, a public repository, or unsupported labels create work.
+// 4. A malformed workflow job is processed instead of rejected.
+// 5. Suspended intake still provisions runners.
 import { env } from "cloudflare:workers";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import handler from "../src";
@@ -41,13 +48,6 @@ async function fetch(url: string, init?: RequestInit): Promise<Response> {
 
 describe("worker entrypoint", () => {
   afterEach(() => vi.restoreAllMocks());
-
-  it("reports the deployed Jitney version", async () => {
-    const response = await fetch("https://example.com/health");
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ status: "ok", version: "dev" });
-  });
 
   it("hides uninstall from callers without the deployment identity", async () => {
     const response = await fetch("https://example.com/lifecycle/uninstall", {
@@ -204,38 +204,5 @@ describe("worker entrypoint", () => {
     } finally {
       await scheduler.resumeIntake();
     }
-  });
-
-  it("durably accepts a signed private queued job before returning 202", async () => {
-    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const body = queuedPayload();
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: {
-        "X-Hub-Signature-256": await signature(body),
-        "X-GitHub-Event": "workflow_job",
-        "X-GitHub-Delivery": "delivery-accepted",
-      },
-      body,
-    });
-
-    expect(response.status).toBe(202);
-    const classifications = logged.mock.calls
-      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
-      .filter((record) => record.event === "webhook_classified");
-    expect(classifications).toHaveLength(1);
-    expect(classifications).toMatchObject([
-      {
-        deliveryId: "delivery-accepted",
-        installationId: 123,
-        repositoryId: 456,
-        workflowJobId: 789,
-        runnerName: "jitney-456-789-1",
-        action: "queued",
-        outcome: "accepted",
-      },
-    ]);
-    const job = await env.SCHEDULER.getByName("global-v3").getJob(789);
-    expect(job).toMatchObject({ workflowJobId: 789, state: "queued", pending: true });
   });
 });

@@ -1,3 +1,8 @@
+// Failure modes this file guards. The webhook-down E2E proves the backfill itself.
+// 1. Reconciliation starts a second runner for a job with a viable attempt.
+// 2. It resurrects a finished job or requeues a running one.
+// 3. It admits a public repository or unsupported labels.
+// 4. It submits jobs after discovery failed.
 import { env } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
@@ -27,30 +32,6 @@ function completedRecords(logged: { mock: { calls: unknown[][] } }) {
 }
 
 describe("reconciliation", () => {
-  it("backfills a queued job the scheduler does not track", async () => {
-    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const scheduler = env.SCHEDULER.getByName("reconciliation-backfill");
-    const submit: Submit = (candidate) => Effect.promise(() => scheduler.reconcile(candidate));
-
-    await Effect.runPromise(
-      reconcile(
-        Effect.succeed({
-          candidates: [candidate(8001)],
-          failures: [{ installationId: 999, step: "repository_listing" }],
-        }),
-        submit,
-        "deployment-test",
-      ),
-    );
-
-    expect(await scheduler.getJob(8001)).toMatchObject({ state: "queued", pending: true });
-    expect(await scheduler.getAttempts(8001)).toHaveLength(1);
-    expect(completedRecords(logged)).toMatchObject([
-      { discovered: 1, submitted: 1, suppressed: 0, ignored: 0, failures: 1 },
-    ]);
-    logged.mockRestore();
-  });
-
   it("does not resubmit a job with a viable attempt", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("reconciliation-duplicate");

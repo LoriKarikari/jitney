@@ -54,6 +54,24 @@ export type LifecycleRecord =
       stopReason: string;
       deploymentId?: string | undefined;
     })
+  | {
+      event: "job_status_read";
+      installationId: number;
+      repositoryId: number;
+      workflowJobId: number;
+      state: string;
+      conclusion?: string | undefined;
+      runnerName?: string | undefined;
+      deploymentId?: string | undefined;
+    }
+  | {
+      event: "job_status_failed";
+      installationId: number;
+      repositoryId: number;
+      workflowJobId: number;
+      step: string;
+      deploymentId?: string | undefined;
+    }
   | (RunnerCorrelation & {
       event: "runner_container_exited";
       attempt: number;

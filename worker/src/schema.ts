@@ -78,3 +78,14 @@ export const pending = sqliteTable(
     }).onDelete("cascade"),
   ],
 );
+
+export const conclusionChecks = sqliteTable("conclusion_checks", {
+  workflowJobId: integer("workflow_job_id")
+    .primaryKey()
+    .references(() => jobs.workflowJobId, { onDelete: "cascade" }),
+  installationId: integer("installation_id").notNull(),
+  repositoryId: integer("repository_id").notNull(),
+  repositoryOwner: text("repository_owner").notNull(),
+  repositoryName: text("repository_name").notNull(),
+  checkAt: integer("check_at").notNull(),
+});

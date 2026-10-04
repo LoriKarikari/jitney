@@ -12,8 +12,7 @@ class RunnerContainerError extends Data.TaggedError("RunnerContainerError")<{
 export class RunnerContainer extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    // A restarted instance, after a deploy or an eviction, starts without the
-    // inactivity timeout, and Cloudflare then stops the container within minutes.
+    // A restarted instance loses the inactivity timeout, and Cloudflare then stops the container.
     const container = ctx.container;
     if (container?.running) void ctx.blockConcurrencyWhile(() => this.#keepAlive(container));
   }

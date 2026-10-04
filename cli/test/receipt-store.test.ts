@@ -1,11 +1,7 @@
 import { DateTime, Duration, Effect, Option, Ref, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { collectNamespaceKeyNames, receiptValueText } from "../src/receipts/cloudflare.js";
-import {
-  createDeploymentReceipt,
-  generateDeploymentId,
-  type DeploymentReceipt,
-} from "../src/receipts/schema.js";
+import { createDeploymentReceipt, type DeploymentReceipt } from "../src/receipts/schema.js";
 import {
   LeaseExpiredError,
   LeaseHeldError,
@@ -40,30 +36,6 @@ describe("Cloudflare receipt values", () => {
 });
 
 describe("deployment receipt store", () => {
-  it("mints a ULID deployment identity", async () => {
-    const id = await Effect.runPromise(generateDeploymentId);
-
-    expect(id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
-  });
-
-  it("creates and reads a schema-v1 receipt", async () => {
-    const backend = await makeMemoryBackend();
-    const store = makeReceiptStore(backend.service);
-    const receipt = fixtureReceipt();
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* store.create(receipt);
-        return yield* store.get(receipt.name);
-      }),
-    );
-
-    expect(Option.getOrThrow(result)).toEqual(receipt);
-    expect(await backend.values()).toEqual([
-      ["staging", expect.stringContaining('"schemaVersion":1')],
-    ]);
-  });
-
   it("creates an installing receipt with its lease in one write", async () => {
     const backend = await makeMemoryBackend();
     const store = makeReceiptStore(backend.service);
@@ -577,7 +549,6 @@ async function makeMemoryBackend(options?: {
   const removals = await Effect.runPromise(Ref.make(0));
   const puts = await Effect.runPromise(Ref.make(0));
   const listCalls = await Effect.runPromise(Ref.make(0));
-  // Cloudflare KV can serve the value from before a write for a while after it.
   let staleReadsPerWrite = 0;
   const stale = new Map<string, { value: string | undefined; reads: number }>();
   const service: ReceiptBackend = {

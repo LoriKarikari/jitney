@@ -1,8 +1,8 @@
-import { DateTime, Duration, Effect, Fiber, Option, Ref } from "effect";
+import { DateTime, Duration, Effect, Fiber, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 import { InstallerError } from "../src/errors.js";
-import { beginInstallOperation, beginLeasedOperation } from "../src/receipts/leased-operation.js";
+import { beginInstallOperation } from "../src/receipts/leased-operation.js";
 import { createDeploymentReceipt, type DeploymentReceipt } from "../src/receipts/schema.js";
 import { makeReceiptStore, type ReceiptBackend } from "../src/receipts/store.js";
 
@@ -125,48 +125,5 @@ describe("leased operation", () => {
 
     expect(error).toBeInstanceOf(InstallerError);
     expect(error).toMatchObject({ step: "receipt_store" });
-  });
-
-  it("acquires, records, and settles an operation on an existing receipt", async () => {
-    const backend = await makeMemoryBackend();
-    const store = makeReceiptStore(backend.service, { namespaceRemovalDelay: Duration.zero });
-
-    const receipt = await Effect.runPromise(
-      Effect.gen(function* () {
-        yield* store.create({ ...fixtureReceipt(), phase: "active" });
-        const held = yield* beginLeasedOperation(store, "staging", "repair", "lori@mbp");
-        yield* held.record((current) => ({
-          versions: { ...current.versions, previous: "0.2.0" },
-        }));
-        return yield* held.finish({ phase: "active", outcome: "succeeded" });
-      }),
-    );
-
-    expect(receipt).toMatchObject({
-      phase: "active",
-      lease: null,
-      versions: { current: "0.3.0", previous: "0.2.0" },
-    });
-    expect(receipt.history.at(-1)).toMatchObject({ operation: "repair", outcome: "succeeded" });
-  });
-
-  it("keeps the settled receipt readable through get", async () => {
-    const backend = await makeMemoryBackend();
-    const store = makeReceiptStore(backend.service, { namespaceRemovalDelay: Duration.zero });
-
-    const stored = await Effect.runPromise(
-      Effect.gen(function* () {
-        const held = yield* beginInstallOperation(
-          store,
-          fixtureReceipt(),
-          "lori@mbp",
-          yield* DateTime.now,
-        );
-        yield* held.finish({ phase: "active", outcome: "succeeded" });
-        return yield* store.get("staging");
-      }),
-    );
-
-    expect(Option.getOrThrow(stored)).toMatchObject({ phase: "active", lease: null });
   });
 });

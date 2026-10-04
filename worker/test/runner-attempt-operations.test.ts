@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => {
     failAt: undefined as string | undefined,
     installationId: 123,
     runners: [{ id: 7, name: "jitney-456-789-1" }],
+    jobStatus: 200 as number,
   };
   function step<Result>(name: string, result: Result): Result {
     state.calls.push(name);
@@ -42,6 +43,18 @@ vi.mock("octokit", () => ({
           deleteSelfHostedRunnerFromRepo: vi.fn(async () =>
             mocks.step("runner_deletion", { status: 204 }),
           ),
+          getJobForWorkflowRun: vi.fn(async (params: unknown) => {
+            mocks.state.calls.push("job_status");
+            if (mocks.state.failAt === "job_status" || mocks.state.jobStatus !== 200) {
+              throw Object.assign(new Error("job lookup failed"), {
+                status: mocks.state.failAt === "job_status" ? 500 : mocks.state.jobStatus,
+                params,
+              });
+            }
+            return {
+              data: { status: "completed", conclusion: "success", runner_name: "jitney-456-789-1" },
+            };
+          }),
         },
       };
     }
@@ -51,6 +64,7 @@ vi.mock("octokit", () => ({
 import {
   createRunnerAttemptOperations,
   RunnerAttemptFailure,
+  type ConclusionCheck,
   type RunnerAttemptRequest,
 } from "../src/runner-attempt-operations";
 
@@ -62,6 +76,14 @@ const request: RunnerAttemptRequest = {
   workflowJobId: 789,
   runnerName: "jitney-456-789-1",
   containerName: "attempt-456-789-1",
+};
+
+const check: ConclusionCheck = {
+  workflowJobId: 789,
+  installationId: 123,
+  repositoryId: 456,
+  repositoryOwner: "LoriKarikari",
+  repositoryName: "jitney-test",
 };
 
 function environment(): Env {
@@ -85,6 +107,7 @@ beforeEach(() => {
   mocks.state.failAt = undefined;
   mocks.state.installationId = 123;
   mocks.state.runners = [{ id: 7, name: request.runnerName }];
+  mocks.state.jobStatus = 200;
   mocks.auth.mockClear();
   mocks.createAppAuth.mockClear();
   mocks.constructors.length = 0;
@@ -135,6 +158,44 @@ describe("Runner Attempt Operations", () => {
     await Effect.runPromise(createRunnerAttemptOperations(environment()).reclaim(request));
 
     expect(mocks.state.calls).toEqual(["container_destroy", "installation_token", "runner_lookup"]);
+  });
+
+  it("reads a Job's status with a read-only token for its repository", async () => {
+    const status = await Effect.runPromise(
+      createRunnerAttemptOperations(environment()).jobStatus(check),
+    );
+
+    expect(status).toEqual({
+      status: "completed",
+      conclusion: "success",
+      runnerName: "jitney-456-789-1",
+    });
+    expect(mocks.auth).toHaveBeenCalledWith({
+      type: "installation",
+      installationId: 123,
+      repositoryIds: [456],
+      permissions: { actions: "read" },
+    });
+  });
+
+  it("reports a Job GitHub no longer has as not found", async () => {
+    mocks.state.jobStatus = 404;
+
+    const status = await Effect.runPromise(
+      createRunnerAttemptOperations(environment()).jobStatus(check),
+    );
+
+    expect(status).toEqual({ status: "not_found", conclusion: null, runnerName: null });
+  });
+
+  it("classifies a Job status read that fails", async () => {
+    mocks.state.failAt = "job_status";
+
+    const result = await Effect.runPromiseExit(
+      createRunnerAttemptOperations(environment()).jobStatus(check),
+    );
+
+    expectFailure(result, "job_status");
   });
 
   it("classifies a repository installation mismatch before minting credentials", async () => {

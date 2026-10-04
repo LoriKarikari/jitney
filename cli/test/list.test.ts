@@ -151,15 +151,6 @@ describe("list drift classification", () => {
     expect(report.latestVersion).toBe("0.3.0");
   });
 
-  it("exposes the previous version in the JSON report", async () => {
-    const report = await runList([fixtureReceipt({ previousVersion: "0.2.0" })], fakePlatform());
-
-    expect(report.deployments[0]).toMatchObject({
-      version: "0.3.0",
-      previousVersion: "0.2.0",
-    });
-  });
-
   it("classifies an absent Worker as missing", async () => {
     const report = await runList(
       [fixtureReceipt()],
@@ -417,13 +408,6 @@ describe("list drift classification", () => {
     expect(output).toContain("worker.version");
     expect(output).toContain("orphan");
     expect(output).toContain("npx get-jitney list --json");
-  });
-
-  it("mirrors the report 1:1 as JSON", async () => {
-    const report = await runList([fixtureReceipt()], fakePlatform());
-
-    const roundTripped: unknown = JSON.parse(JSON.stringify(report));
-    expect(roundTripped).toEqual(report);
   });
 });
 

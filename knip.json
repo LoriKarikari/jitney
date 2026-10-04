@@ -9,6 +9,11 @@
       "project": [
         "src/**/*.ts",
         "test/**/*.ts"
+      ],
+      "ignoreDependencies": [
+        "@effect/platform-node-shared",
+        "@effect/sql-d1",
+        "@effect/vitest"
       ]
     },
     "worker": {

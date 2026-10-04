@@ -19,6 +19,7 @@ export type RunnerAttemptFailureStep =
   | "installation_token"
   | "jit_config"
   | "container_start"
+  | "container_probe"
   | "container_destroy"
   | "runner_lookup"
   | "runner_deletion";
@@ -31,6 +32,7 @@ export class RunnerAttemptFailure extends Data.TaggedError("RunnerAttemptFailure
 export type RunnerAttemptOperations = {
   provision(request: RunnerAttemptRequest): Effect.Effect<void, RunnerAttemptFailure>;
   reclaim(request: RunnerAttemptRequest): Effect.Effect<void, RunnerAttemptFailure>;
+  isRunning(request: RunnerAttemptRequest): Effect.Effect<boolean, RunnerAttemptFailure>;
 };
 
 export function createRunnerAttemptOperations(env: Env): RunnerAttemptOperations {
@@ -136,5 +138,16 @@ export function createRunnerAttemptOperations(env: Env): RunnerAttemptOperations
     });
   });
 
-  return { provision, reclaim };
+  const isRunning = (request: RunnerAttemptRequest) =>
+    Effect.tryPromise({
+      try: () =>
+        (
+          env.RUNNER_CONTAINERS.getByName(
+            request.containerName,
+          ) as DurableObjectStub<RunnerContainer>
+        ).isRunning(),
+      catch: (cause) => new RunnerAttemptFailure({ step: "container_probe", cause }),
+    });
+
+  return { provision, reclaim, isRunning };
 }

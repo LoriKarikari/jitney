@@ -16,15 +16,19 @@ const assignmentTimeout = 5 * 60_000;
 const defaultRuntimeTimeout = 60 * 60_000;
 const defaultSchedulerTick = 1_000;
 const reclaimSlack = 10 * 60_000;
+const containerCheckInterval = 30_000;
 const viableAttemptStates = ["created", "starting", "waiting_for_assignment"];
 const activeAttemptStates = [...viableAttemptStates, "running"];
+const liveContainerStates = ["waiting_for_assignment", "running"];
 const terminalJobStates = ["completed", "cancelled", "failed"];
 
-// Container activity only renews on proxied requests, which a runner never
-// makes. The Scheduler's deadlines own the runner's lifetime; this backstop
-// stops the Container only if every reclaim path has failed.
-export function runnerContainerBackstopSeconds(runtimeTimeout = defaultRuntimeTimeout): number {
-  return Math.ceil((assignmentTimeout + runtimeTimeout + reclaimSlack) / 1000);
+const maxInactivityTimeout = 6 * 60 * 60_000;
+
+// The Scheduler's deadlines own a runner's lifetime. The inactivity timeout
+// outlasts both and stops the Runner Container only if every reclaim path fails.
+// Cloudflare rejects a timeout above 6 hours.
+export function runnerContainerInactivityTimeoutMs(runtimeTimeout = defaultRuntimeTimeout): number {
+  return Math.min(assignmentTimeout + runtimeTimeout + reclaimSlack, maxInactivityTimeout);
 }
 
 export type AcceptResult = {
@@ -61,7 +65,7 @@ export type AssignmentSnapshot = typeof assignments.$inferSelect & {
 };
 
 export class SchedulerStorageError extends Data.TaggedError("SchedulerStorageError")<{
-  operation: "transaction" | "get_alarm" | "set_alarm";
+  operation: "transaction" | "set_alarm";
   cause: unknown;
 }> {}
 
@@ -103,11 +107,6 @@ export class SchedulerLifecycle {
       this.#emitTransition(event, result);
       if (event.action === "queued" && result.outcome === "accepted") {
         yield* this.#setAlarm(now + this.schedulerTick);
-      }
-      if (event.action === "in_progress" && result.outcome === "recorded") {
-        const deadline = now + this.runtimeTimeout;
-        const alarm = yield* this.#getAlarm();
-        if (alarm === null || alarm > deadline) yield* this.#setAlarm(deadline);
       }
       return result;
     });
@@ -500,12 +499,22 @@ export class SchedulerLifecycle {
       const morePending = yield* this.#drainPending(operations);
       yield* this.#expireUnassignedAttempts(operations, now);
       yield* this.#expireRunningAttempts(operations, now);
+      yield* this.#endExitedAttempts(operations, now);
 
-      const wakeAt = morePending ? now + this.schedulerTick : this.#nextDeadline();
+      const wakeAt = morePending ? now + this.schedulerTick : this.#nextWake(now);
       if (wakeAt !== undefined) {
         yield* this.#setAlarm(Math.max(wakeAt, now + this.schedulerTick));
       }
     });
+  }
+
+  // Neither GitHub nor the runner reports an exit reliably, so the sweep checks
+  // every live Runner Container until its attempt ends.
+  #nextWake(now: number): number | undefined {
+    const deadline = this.#nextDeadline();
+    const live = this.#attemptsWhere(inArray(attempts.state, liveContainerStates)).length > 0;
+    if (!live) return deadline;
+    return Math.min(deadline ?? Infinity, now + containerCheckInterval);
   }
 
   #nextDeadline(): number | undefined {
@@ -532,26 +541,79 @@ export class SchedulerLifecycle {
         inArray(attempts.state, viableAttemptStates),
         sql`${attempts.assignmentDeadline} <= ${now}`,
       );
-      const expired = this.#expiredAttempts(unassigned);
+      const expired = this.#attemptsWhere(unassigned);
 
       for (const row of expired) {
         const { workflowJobId, runnerName } = row;
         const stillExpired = yield* this.#transaction(() => {
           if (!this.#markExpired(runnerName, unassigned)) return false;
-          this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
-          this.#db
-            .update(jobs)
-            .set({ state: "queued", updatedAt: now })
-            .where(
-              and(
-                eq(jobs.workflowJobId, workflowJobId),
-                inArray(jobs.state, ["queued", "provisioning", "waiting_for_assignment"]),
-              ),
-            )
-            .run();
+          this.#requeueUnassigned(workflowJobId, now);
           return true;
         });
         if (stillExpired) yield* this.#reclaimExpired(operations, row, "assignment_deadline");
+      }
+    });
+  }
+
+  #requeueUnassigned(workflowJobId: number, now: number): void {
+    this.#db.delete(pending).where(eq(pending.workflowJobId, workflowJobId)).run();
+    this.#db
+      .update(jobs)
+      .set({ state: "queued", updatedAt: now })
+      .where(
+        and(
+          eq(jobs.workflowJobId, workflowJobId),
+          inArray(jobs.state, ["queued", "provisioning", "waiting_for_assignment"]),
+        ),
+      )
+      .run();
+  }
+
+  #endExitedAttempts(
+    operations: RunnerAttemptOperations,
+    now: number,
+  ): Effect.Effect<void, SchedulerStorageError> {
+    return Effect.gen({ self: this }, function* () {
+      const live = inArray(attempts.state, liveContainerStates);
+      for (const row of this.#attemptsWhere(live)) {
+        // A failed check proves nothing, and reclaiming would destroy a live runner.
+        const running = yield* operations.isRunning(row).pipe(Effect.orElseSucceed(() => true));
+        if (running) continue;
+
+        const ended = yield* this.#transaction(() => {
+          const current = this.#db
+            .select({ state: attempts.state })
+            .from(attempts)
+            .where(and(eq(attempts.runnerName, row.runnerName), live))
+            .all()[0];
+          if (current === undefined) return false;
+          this.#db
+            .update(attempts)
+            .set({ state: "stopped" })
+            .where(eq(attempts.runnerName, row.runnerName))
+            .run();
+          if (current.state === "waiting_for_assignment") {
+            this.#requeueUnassigned(row.workflowJobId, now);
+          }
+          return true;
+        });
+        if (!ended) continue;
+
+        const { installationId, repositoryId, workflowJobId, attempt, runnerName, containerName } =
+          row;
+        yield* Effect.sync(() =>
+          emit({
+            event: "runner_container_exited",
+            installationId,
+            repositoryId,
+            workflowJobId,
+            attempt,
+            runnerName,
+            containerName,
+            deploymentId: this.deploymentId,
+          }),
+        );
+        yield* this.#reclaim(operations, row);
       }
     });
   }
@@ -565,7 +627,7 @@ export class SchedulerLifecycle {
         eq(attempts.state, "running"),
         sql`${attempts.runtimeDeadline} <= ${now}`,
       );
-      const expired = this.#expiredAttempts(overdue);
+      const expired = this.#attemptsWhere(overdue);
 
       for (const row of expired) {
         const { runnerName } = row;
@@ -608,7 +670,7 @@ export class SchedulerLifecycle {
     );
   }
 
-  #expiredAttempts(condition: ReturnType<typeof and>): ExpiredAttempt[] {
+  #attemptsWhere(condition: ReturnType<typeof and>): AttemptRow[] {
     return this.#db
       .select({ ...getTableColumns(attempts), repositoryId: jobs.repositoryId })
       .from(attempts)
@@ -619,7 +681,7 @@ export class SchedulerLifecycle {
 
   #reclaimExpired(
     operations: RunnerAttemptOperations,
-    row: ExpiredAttempt,
+    row: AttemptRow,
     stopReason: string,
   ): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
@@ -791,13 +853,6 @@ export class SchedulerLifecycle {
     });
   }
 
-  #getAlarm(): Effect.Effect<number | null, SchedulerStorageError> {
-    return Effect.tryPromise({
-      try: () => this.storage.getAlarm(),
-      catch: (cause) => new SchedulerStorageError({ operation: "get_alarm", cause }),
-    });
-  }
-
   #setAlarm(scheduledTime: number): Effect.Effect<void, SchedulerStorageError> {
     return Effect.tryPromise({
       try: () => this.storage.setAlarm(scheduledTime),
@@ -838,7 +893,7 @@ export class SchedulerLifecycle {
   }
 }
 
-type ExpiredAttempt = typeof attempts.$inferSelect & { repositoryId: number };
+type AttemptRow = typeof attempts.$inferSelect & { repositoryId: number };
 
 type SchedulerSchema = {
   deliveries: typeof deliveries;

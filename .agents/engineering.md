@@ -169,6 +169,10 @@ the version tag and GitHub release, then publishes the matching runner image as
 public `latest` image tag points to the newest release, but deployments use the
 versioned tag.
 
+Releases are batched. Leave the release PR open while it collects changes, and
+merge it only when the maintainer asks. Prove unreleased work with a
+[prerelease](#prereleases) instead.
+
 The repository must enable **Settings → Actions → General → Allow GitHub Actions
 to create and approve pull requests** so the built-in `GITHUB_TOKEN` can open
 the PR. Despite the setting's combined name, Jitney grants no workflow an

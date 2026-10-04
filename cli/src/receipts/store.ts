@@ -1,4 +1,4 @@
-import { Array as Arr, Data, DateTime, Duration, Effect, Option, Schema } from "effect";
+import { Array as Arr, Data, DateTime, Duration, Effect, Option, Schedule, Schema } from "effect";
 import {
   DeploymentReceiptSchema,
   type DeploymentOperation,
@@ -27,6 +27,10 @@ class InvalidReceiptError extends Data.TaggedError("InvalidReceiptError")<{
 
 class ReceiptNotFoundError extends Data.TaggedError("ReceiptNotFoundError")<{
   name: string;
+}> {}
+
+class StaleReceiptRead extends Data.TaggedError("StaleReceiptRead")<{
+  observed: Option.Option<DeploymentReceipt>;
 }> {}
 
 export class ReceiptAlreadyExistsError extends Data.TaggedError("ReceiptAlreadyExistsError")<{
@@ -86,6 +90,8 @@ export interface LeaseContext {
   readonly name: string;
   readonly lease: OperationLease;
   readonly now: DateTime.Utc;
+  /** When the holder last wrote the receipt. A read older than this is stale. */
+  readonly updatedAt: DateTime.Utc;
 }
 
 export interface OperationUpdate {
@@ -110,6 +116,14 @@ export interface ReceiptStoreOptions {
    * @default 1 minute
    */
   readonly namespaceRemovalDelay?: Duration.Input;
+  /**
+   * Wait between reads while KV still serves a receipt older than the
+   * caller's own last write. KV can lag a write for about a minute, so reads
+   * repeat 45 times before the caller acts on what it sees.
+   *
+   * @default 2 seconds
+   */
+  readonly propagationPoll?: Duration.Input;
 }
 
 export interface ReceiptStore {
@@ -215,6 +229,7 @@ export function makeReceiptStore(
   options?: ReceiptStoreOptions,
 ): ReceiptStore {
   const namespaceRemovalDelay = options?.namespaceRemovalDelay ?? Duration.minutes(1);
+  const propagationPoll = options?.propagationPoll ?? Duration.seconds(2);
 
   const get: ReceiptStore["get"] = (name) =>
     backend
@@ -227,15 +242,36 @@ export function makeReceiptStore(
         ),
       );
 
-  const getRequired = (name: string) =>
-    get(name).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.fail(new ReceiptNotFoundError({ name })),
-          onSome: Effect.succeed,
-        }),
-      ),
+  const required = (name: string) =>
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.fail(new ReceiptNotFoundError({ name })),
+        onSome: (receipt: DeploymentReceipt) => Effect.succeed(receipt),
+      }),
     );
+
+  const getRequired = (name: string) => get(name).pipe(required(name));
+
+  // KV may keep serving the value from before a write. Read until the receipt
+  // is at least as new as the caller's own last write, then return whatever
+  // is there so the caller's ownership checks decide.
+  const getSince = (name: string, since: DateTime.Utc) =>
+    get(name).pipe(
+      Effect.flatMap((observed) =>
+        Option.isSome(observed) &&
+        DateTime.toEpochMillis(observed.value.updatedAt) >= DateTime.toEpochMillis(since)
+          ? Effect.succeed(observed)
+          : Effect.fail(new StaleReceiptRead({ observed })),
+      ),
+      Effect.retry({
+        while: (error) => error._tag === "StaleReceiptRead",
+        schedule: Schedule.max([Schedule.spaced(propagationPoll), Schedule.recurs(44)]),
+      }),
+      Effect.catchTag("StaleReceiptRead", ({ observed }) => Effect.succeed(observed)),
+    );
+
+  const getRequiredSince = (name: string, since: DateTime.Utc) =>
+    getSince(name, since).pipe(required(name));
 
   const putAndConfirmLease = (
     receipt: DeploymentReceipt,
@@ -243,7 +279,7 @@ export function makeReceiptStore(
   ): Effect.Effect<DeploymentReceipt, ReceiptStoreError> =>
     Effect.gen(function* () {
       yield* backend.put(receipt.name, encodeReceipt(receipt));
-      const observedReceipt = yield* get(receipt.name);
+      const observedReceipt = yield* getSince(receipt.name, receipt.updatedAt);
       if (Option.isNone(observedReceipt)) {
         return yield* new LeaseRaceError({
           name: receipt.name,
@@ -280,7 +316,7 @@ export function makeReceiptStore(
           });
         }
         yield* backend.put(receipt.name, encodeReceipt(receipt));
-        const observed = yield* get(receipt.name);
+        const observed = yield* getSince(receipt.name, receipt.updatedAt);
         if (Option.isNone(observed) || observed.value.id !== receipt.id) {
           return yield* new ReceiptCreationRaceError({
             name: receipt.name,
@@ -319,7 +355,7 @@ export function makeReceiptStore(
           ],
         };
         yield* backend.put(receipt.name, encodeReceipt(attempted));
-        const observed = yield* get(receipt.name);
+        const observed = yield* getSince(receipt.name, now);
         if (Option.isNone(observed) || observed.value.id !== receipt.id) {
           return yield* new ReceiptCreationRaceError({
             name: receipt.name,
@@ -374,7 +410,7 @@ export function makeReceiptStore(
       }),
     renewLease: (context) =>
       Effect.gen(function* () {
-        const receipt = yield* getRequired(context.name);
+        const receipt = yield* getRequiredSince(context.name, context.updatedAt);
         yield* requireLease(context, receipt);
         const renewed = {
           ...context.lease,
@@ -387,7 +423,7 @@ export function makeReceiptStore(
       }),
     updateOperation: (context, update) =>
       Effect.gen(function* () {
-        const receipt = yield* getRequired(context.name);
+        const receipt = yield* getRequiredSince(context.name, context.updatedAt);
         yield* requireLease(context, receipt);
         const next: DeploymentReceipt = {
           ...receipt,
@@ -402,7 +438,7 @@ export function makeReceiptStore(
       }),
     finishOperation: (context, completion) =>
       Effect.gen(function* () {
-        const receipt = yield* getRequired(context.name);
+        const receipt = yield* getRequiredSince(context.name, context.updatedAt);
         yield* requireLease(context, receipt);
         const next: DeploymentReceipt = {
           ...receipt,
@@ -417,7 +453,7 @@ export function makeReceiptStore(
           history: finishLatestHistory(receipt, context.lease, context.now, completion.outcome),
         };
         yield* backend.put(context.name, encodeReceipt(next));
-        return yield* getRequired(context.name);
+        return yield* getRequiredSince(context.name, context.now);
       }),
     releaseExpiredLeaseForRepair: (name, actor, now) =>
       Effect.gen(function* () {
@@ -450,11 +486,11 @@ export function makeReceiptStore(
           ),
         };
         yield* backend.put(name, encodeReceipt(next));
-        return yield* getRequired(name);
+        return yield* getRequiredSince(name, now);
       }),
     deleteReceipt: (context, deploymentId) =>
       Effect.gen(function* () {
-        const receipt = yield* getRequired(context.name);
+        const receipt = yield* getRequiredSince(context.name, context.updatedAt);
         yield* requireLease(context, receipt);
         if (receipt.id !== deploymentId) {
           return yield* new DeploymentOwnershipError({

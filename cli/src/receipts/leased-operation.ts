@@ -72,6 +72,7 @@ const makeHeldOperation = (
       name,
       lease: receipt.lease,
       now,
+      updatedAt: receipt.updatedAt,
     });
 
     const renew = Effect.gen(function* () {

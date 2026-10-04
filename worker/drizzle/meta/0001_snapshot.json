@@ -39,10 +39,7 @@
       "indexes": {
         "assignments_attempt_unique": {
           "name": "assignments_attempt_unique",
-          "columns": [
-            "triggering_workflow_job_id",
-            "attempt"
-          ],
+          "columns": ["triggering_workflow_job_id", "attempt"],
           "isUnique": true
         }
       },
@@ -51,12 +48,8 @@
           "name": "assignments_workflow_job_id_jobs_workflow_job_id_fk",
           "tableFrom": "assignments",
           "tableTo": "jobs",
-          "columnsFrom": [
-            "workflow_job_id"
-          ],
-          "columnsTo": [
-            "workflow_job_id"
-          ],
+          "columnsFrom": ["workflow_job_id"],
+          "columnsTo": ["workflow_job_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -64,14 +57,8 @@
           "name": "assignments_triggering_workflow_job_id_attempt_attempts_workflow_job_id_attempt_fk",
           "tableFrom": "assignments",
           "tableTo": "attempts",
-          "columnsFrom": [
-            "triggering_workflow_job_id",
-            "attempt"
-          ],
-          "columnsTo": [
-            "workflow_job_id",
-            "attempt"
-          ],
+          "columnsFrom": ["triggering_workflow_job_id", "attempt"],
+          "columnsTo": ["workflow_job_id", "attempt"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -157,32 +144,22 @@
       "indexes": {
         "attempts_runner_name_unique": {
           "name": "attempts_runner_name_unique",
-          "columns": [
-            "runner_name"
-          ],
+          "columns": ["runner_name"],
           "isUnique": true
         },
         "attempts_container_name_unique": {
           "name": "attempts_container_name_unique",
-          "columns": [
-            "container_name"
-          ],
+          "columns": ["container_name"],
           "isUnique": true
         },
         "attempts_state_assignment_deadline_idx": {
           "name": "attempts_state_assignment_deadline_idx",
-          "columns": [
-            "state",
-            "assignment_deadline"
-          ],
+          "columns": ["state", "assignment_deadline"],
           "isUnique": false
         },
         "attempts_state_runtime_deadline_idx": {
           "name": "attempts_state_runtime_deadline_idx",
-          "columns": [
-            "state",
-            "runtime_deadline"
-          ],
+          "columns": ["state", "runtime_deadline"],
           "isUnique": false
         }
       },
@@ -191,22 +168,15 @@
           "name": "attempts_workflow_job_id_jobs_workflow_job_id_fk",
           "tableFrom": "attempts",
           "tableTo": "jobs",
-          "columnsFrom": [
-            "workflow_job_id"
-          ],
-          "columnsTo": [
-            "workflow_job_id"
-          ],
+          "columnsFrom": ["workflow_job_id"],
+          "columnsTo": ["workflow_job_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
         "attempts_workflow_job_id_attempt_pk": {
-          "columns": [
-            "workflow_job_id",
-            "attempt"
-          ],
+          "columns": ["workflow_job_id", "attempt"],
           "name": "attempts_workflow_job_id_attempt_pk"
         }
       },
@@ -265,12 +235,8 @@
           "name": "conclusion_checks_workflow_job_id_jobs_workflow_job_id_fk",
           "tableFrom": "conclusion_checks",
           "tableTo": "jobs",
-          "columnsFrom": [
-            "workflow_job_id"
-          ],
-          "columnsTo": [
-            "workflow_job_id"
-          ],
+          "columnsFrom": ["workflow_job_id"],
+          "columnsTo": ["workflow_job_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -386,14 +352,8 @@
           "name": "pending_workflow_job_id_attempt_attempts_workflow_job_id_attempt_fk",
           "tableFrom": "pending",
           "tableTo": "attempts",
-          "columnsFrom": [
-            "workflow_job_id",
-            "attempt"
-          ],
-          "columnsTo": [
-            "workflow_job_id",
-            "attempt"
-          ],
+          "columnsFrom": ["workflow_job_id", "attempt"],
+          "columnsTo": ["workflow_job_id", "attempt"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }

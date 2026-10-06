@@ -4,7 +4,7 @@ import { Context, Effect, Schedule } from "effect";
 import {
   deploymentIdFromOwnershipEnvironment,
   ownershipEnvironmentName,
-} from "@jitney/shared/ownership-marker";
+} from "../../shared/contract.js";
 import { InstallerError, tryPromise } from "./errors.js";
 import type { GitHubAppCredentials } from "./github-app.js";
 import type { GitHubInstallation } from "./receipts/schema.js";

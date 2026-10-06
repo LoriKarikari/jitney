@@ -1,9 +1,6 @@
-import { Effect, Layer, Ref } from "effect";
+import { Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
-import {
-  makeOrasRemoteImageMethods,
-  RegistryImageCopier,
-} from "../src/alchemy/oras-remote-images.js";
+import { makeOrasRemoteImageMethods } from "../src/alchemy/oras-remote-images.js";
 
 describe("Alchemy remote container images", () => {
   it("copies a tagged remote image with ORAS instead of Docker", async () => {
@@ -18,10 +15,9 @@ describe("Alchemy remote container images", () => {
             password: string;
           }[]
         >([]);
-        const copier = Layer.succeed(RegistryImageCopier, {
-          copy: (input) => Ref.update(calls, (current) => [...current, input]),
-        });
-        const image = yield* makeOrasRemoteImageMethods.pipe(Effect.provide(copier));
+        const image = yield* makeOrasRemoteImageMethods((input) =>
+          Ref.update(calls, (current) => [...current, input]),
+        );
 
         yield* image.pull("ghcr.io/lorikarikari/jitney:0.3.0", "linux/amd64");
         yield* image.tag(

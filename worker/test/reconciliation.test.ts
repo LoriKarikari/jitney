@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it, vi } from "vitest";
+import { attemptsOf, jobOf } from "./scheduler-state";
 import type { QueuedJobCandidate } from "../src/domain";
 import { DiscoveryError } from "../src/github";
 import { reconcile, type ReconciliationSubmission } from "../src/reconciliation";
@@ -47,7 +48,7 @@ describe("reconciliation", () => {
       ),
     );
 
-    expect(await scheduler.getAttempts(8002)).toHaveLength(1);
+    expect(await attemptsOf(scheduler, 8002)).toHaveLength(1);
     expect(completedRecords(logged)[1]).toMatchObject({
       discovered: 1,
       submitted: 0,
@@ -72,8 +73,8 @@ describe("reconciliation", () => {
     });
 
     expect(await scheduler.reconcile(queued)).toMatchObject({ outcome: "duplicate" });
-    expect(await scheduler.getJob(8006)).toMatchObject({ state: "failed", pending: false });
-    expect(await scheduler.getAttempts(8006)).toHaveLength(1);
+    expect(await jobOf(scheduler, 8006)).toMatchObject({ state: "failed", pending: false });
+    expect(await attemptsOf(scheduler, 8006)).toHaveLength(1);
   });
 
   it("does not requeue a running job", async () => {
@@ -96,8 +97,8 @@ describe("reconciliation", () => {
       outcome: "duplicate",
       runnerName: accepted.runnerName,
     });
-    expect(await scheduler.getJob(8007)).toMatchObject({ state: "running" });
-    expect(await scheduler.getAttempts(8007)).toHaveLength(1);
+    expect(await jobOf(scheduler, 8007)).toMatchObject({ state: "running" });
+    expect(await attemptsOf(scheduler, 8007)).toHaveLength(1);
   });
 
   it("ignores public repositories and unsupported labels", async () => {
@@ -120,9 +121,9 @@ describe("reconciliation", () => {
       ),
     );
 
-    expect(await scheduler.getJob(8003)).toBeUndefined();
-    expect(await scheduler.getJob(8004)).toBeUndefined();
-    expect(await scheduler.getJob(8005)).toBeUndefined();
+    expect(await jobOf(scheduler, 8003)).toBeUndefined();
+    expect(await jobOf(scheduler, 8004)).toBeUndefined();
+    expect(await jobOf(scheduler, 8005)).toBeUndefined();
     expect(completedRecords(logged)).toMatchObject([
       { discovered: 3, submitted: 0, suppressed: 0, ignored: 3 },
     ]);

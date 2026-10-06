@@ -1,20 +1,16 @@
 import { Effect, Ref } from "effect";
 import { describe, expect, it } from "vitest";
-import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
-import {
-  UninstallPlatform,
-  authorizeUninstall,
-  executeUninstall,
-  type UninstallReceipt,
-} from "../src/uninstall";
+import { mintOperationSecret } from "../../shared/contract.js";
+import type { Receipt } from "../src/lifecycle-status";
+import { UninstallPlatform, authorizeUninstall, executeUninstall } from "../src/uninstall";
 
-const receipt: UninstallReceipt = {
+const receipt: Receipt = {
   id: "01JVQ8B95TQZD1P6DE00DE0001",
   github: {
     installations: [
       {
         id: 42,
-        repositories: [{ fullName: "LoriKarikari/api" }],
+        repositories: [{ id: 7, fullName: "LoriKarikari/api" }],
       },
     ],
   },

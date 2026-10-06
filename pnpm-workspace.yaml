@@ -1,7 +1,6 @@
 packages:
   - cli
   - worker
-  - shared
   - e2e
 
 catalog:

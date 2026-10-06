@@ -1,7 +1,7 @@
 import { deploy as alchemyDeploy } from "alchemy/Deploy";
 import { randomBytes } from "node:crypto";
 import { Effect, Layer, Redacted, Schedule } from "effect";
-import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
+import { mintOperationSecret } from "../../shared/contract.js";
 import {
   GitHubAppOperationError,
   GitHubAppOperations,

@@ -1,6 +1,7 @@
 import { env, listDurableObjectIds, runInDurableObject } from "cloudflare:test";
 import { Effect, Fiber } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { assignmentOf, attemptsOf, jobOf } from "./scheduler-state";
 import type { WorkflowEvent } from "../src/domain";
 import { runnerContainerInactivityTimeoutMs, SchedulerLifecycle } from "../src/lifecycle";
 import {
@@ -71,11 +72,11 @@ describe("Scheduler admission", () => {
 
     await scheduler.suspendIntake();
     expect(await scheduler.accept(event)).toEqual({ outcome: "accepted" });
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+    expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({
       state: "queued",
       pending: false,
     });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toEqual([]);
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toEqual([]);
 
     await scheduler.resumeIntake();
     const { action: _action, deliveryId: _deliveryId, ...candidate } = event;
@@ -94,7 +95,7 @@ describe("Scheduler admission", () => {
     expect(await scheduler.accept({ ...event, deliveryId: "delivery-2" })).toMatchObject({
       outcome: "duplicate",
     });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toHaveLength(1);
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toHaveLength(1);
   });
 
   it("creates one new attempt after every previous attempt becomes non-viable", async () => {
@@ -119,7 +120,7 @@ describe("Scheduler admission", () => {
       outcome: "duplicate",
       runnerName: "jitney-456-1002-2",
     });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toHaveLength(2);
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toHaveLength(2);
   });
 
   it.each([
@@ -140,11 +141,11 @@ describe("Scheduler admission", () => {
     expect(await scheduler.accept({ ...event, deliveryId: "delivery-delayed" })).toMatchObject({
       outcome: "duplicate",
     });
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+    expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({
       state: expectedState,
       pending: false,
     });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "created" }]);
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toMatchObject([{ state: "created" }]);
   });
 
   it("rejects work durably when pending-work capacity is exhausted", async () => {
@@ -157,11 +158,11 @@ describe("Scheduler admission", () => {
 
     const rejected = queuedEvent(2011, "delivery-11");
     expect(await scheduler.accept(rejected)).toEqual({ outcome: "capacity_limited" });
-    expect(await scheduler.getJob(rejected.workflowJobId)).toMatchObject({
+    expect(await jobOf(scheduler, rejected.workflowJobId)).toMatchObject({
       state: "capacity_limited",
       pending: false,
     });
-    expect(await scheduler.getAttempts(rejected.workflowJobId)).toEqual([]);
+    expect(await attemptsOf(scheduler, rejected.workflowJobId)).toEqual([]);
   });
 
   it("rejects work durably when active-attempt capacity is exhausted", async () => {
@@ -174,7 +175,7 @@ describe("Scheduler admission", () => {
 
     const rejected = queuedEvent(4026, "delivery-26");
     expect(await scheduler.accept(rejected)).toEqual({ outcome: "capacity_limited" });
-    expect(await scheduler.getAttempts(rejected.workflowJobId)).toEqual([]);
+    expect(await attemptsOf(scheduler, rejected.workflowJobId)).toEqual([]);
 
     let privilegedCalls = 0;
     await withLifecycle(scheduler, (lifecycle) =>
@@ -207,14 +208,14 @@ describe("Scheduler admission", () => {
       runnerName,
     });
 
-    expect(await scheduler.getAssignment(jobB.workflowJobId)).toMatchObject({
+    expect(await assignmentOf(scheduler, jobB.workflowJobId)).toMatchObject({
       workflowJobId: 4602,
       triggeringWorkflowJobId: 4601,
       runnerName,
       containerName: "attempt-456-4601-1",
     });
-    expect(await scheduler.getJob(jobA.workflowJobId)).toMatchObject({ state: "queued" });
-    expect(await scheduler.getJob(jobB.workflowJobId)).toMatchObject({
+    expect(await jobOf(scheduler, jobA.workflowJobId)).toMatchObject({ state: "queued" });
+    expect(await jobOf(scheduler, jobB.workflowJobId)).toMatchObject({
       state: "running",
       runnerName,
     });
@@ -225,8 +226,8 @@ describe("Scheduler admission", () => {
       conclusion: "success",
       deliveryId: "delivery-b-completed",
     });
-    expect(await scheduler.getAttempts(jobA.workflowJobId)).toMatchObject([{ state: "stopped" }]);
-    expect(await scheduler.getAttempts(jobB.workflowJobId)).toMatchObject([{ state: "stopped" }]);
+    expect(await attemptsOf(scheduler, jobA.workflowJobId)).toMatchObject([{ state: "stopped" }]);
+    expect(await attemptsOf(scheduler, jobB.workflowJobId)).toMatchObject([{ state: "stopped" }]);
   });
 
   it("reclaims a started runner left idle by a cross-assignment", async () => {
@@ -338,8 +339,8 @@ describe("Scheduler admission", () => {
       }),
     );
 
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({ state: "running" });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "running" }]);
+    expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({ state: "running" });
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toMatchObject([{ state: "running" }]);
   });
 
   it("records a typed provisioning failure without rendering its cause", async () => {
@@ -358,11 +359,11 @@ describe("Scheduler admission", () => {
       ),
     );
 
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+    expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({
       state: "queued",
       pending: false,
     });
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "failed" }]);
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toMatchObject([{ state: "failed" }]);
     expect(String(logged.mock.calls[0]?.[0])).not.toContain(canary);
     logged.mockRestore();
   });
@@ -421,8 +422,8 @@ describe("Scheduler admission", () => {
 
     expect(reclaimed).toEqual(["jitney-456-6001-1"]);
     expect(expirationReasons(logged)).toEqual(["assignment_deadline"]);
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toMatchObject([{ state: "expired" }]);
+    expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({
       state: "queued",
       pending: false,
     });
@@ -453,7 +454,7 @@ describe("Scheduler admission", () => {
       }),
     );
 
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toMatchObject([{ state: "expired" }]);
     const failures = logged.mock.calls
       .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
       .filter((record) => record.event === "runner_reclaim_failed");
@@ -496,7 +497,7 @@ describe("Scheduler admission", () => {
     );
 
     expect(reclaimed).toEqual(["jitney-456-6101-1"]);
-    expect(await scheduler.getAttempts(second.workflowJobId)).toMatchObject([{ state: "running" }]);
+    expect(await attemptsOf(scheduler, second.workflowJobId)).toMatchObject([{ state: "running" }]);
   });
 
   it("keeps a job completed while the sweep reclaims another runtime expiry", async () => {
@@ -539,7 +540,7 @@ describe("Scheduler admission", () => {
     );
 
     expect(reclaimed).toEqual(["jitney-456-6201-1"]);
-    expect(await scheduler.getJob(second.workflowJobId)).toMatchObject({ state: "completed" });
+    expect(await jobOf(scheduler, second.workflowJobId)).toMatchObject({ state: "completed" });
   });
 
   it("stops a running assignment past its runtime deadline and leaves its Job to GitHub", async () => {
@@ -573,8 +574,8 @@ describe("Scheduler admission", () => {
 
     expect(reclaimed).toEqual(["jitney-456-7001-1"]);
     expect(expirationReasons(logged)).toEqual(["runtime_deadline"]);
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "expired" }]);
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toMatchObject([{ state: "expired" }]);
+    expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({
       state: "running",
       pending: false,
     });
@@ -590,7 +591,7 @@ describe("Scheduler admission", () => {
         deliveryId: "delivery-late-completed",
       }),
     ).toMatchObject({ outcome: "recorded" });
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+    expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({
       state: "completed",
       conclusion: "success",
     });
@@ -634,8 +635,8 @@ describe("Runner Container exits", () => {
     );
 
     expect(reclaimed).toEqual(["jitney-456-8001-1"]);
-    expect(await scheduler.getAttempts(8001)).toMatchObject([{ state: "stopped" }]);
-    expect(await scheduler.getAttempts(8002)).toMatchObject([{ state: "waiting_for_assignment" }]);
+    expect(await attemptsOf(scheduler, 8001)).toMatchObject([{ state: "stopped" }]);
+    expect(await attemptsOf(scheduler, 8002)).toMatchObject([{ state: "waiting_for_assignment" }]);
     expect(await scheduler.activeAttemptCount()).toBe(24);
     const { action: _action, deliveryId: _deliveryId, ...candidate } = waiting;
     expect(await scheduler.reconcile(candidate)).toMatchObject({ outcome: "accepted" });
@@ -660,8 +661,8 @@ describe("Runner Container exits", () => {
       ),
     );
 
-    expect(await scheduler.getAttempts(event.workflowJobId)).toMatchObject([{ state: "stopped" }]);
-    expect(await scheduler.getJob(event.workflowJobId)).toMatchObject({
+    expect(await attemptsOf(scheduler, event.workflowJobId)).toMatchObject([{ state: "stopped" }]);
+    expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({
       state: "queued",
       pending: false,
     });
@@ -710,7 +711,7 @@ describe("Job conclusions from GitHub", () => {
 
     await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now));
     expect(reads).toBe(1);
-    expect(await scheduler.getJob(9002)).toMatchObject({ state: "running" });
+    expect(await jobOf(scheduler, 9002)).toMatchObject({ state: "running" });
     await runInDurableObject(scheduler, async (_instance, state) => {
       const alarm = await state.storage.getAlarm();
       expect(alarm).not.toBeNull();
@@ -722,7 +723,7 @@ describe("Job conclusions from GitHub", () => {
 
     await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now + 31_000));
     expect(reads).toBe(2);
-    expect(await scheduler.getJob(9002)).toMatchObject({
+    expect(await jobOf(scheduler, 9002)).toMatchObject({
       state: "failed",
       conclusion: "failure",
     });
@@ -753,7 +754,7 @@ describe("Job conclusions from GitHub", () => {
       ),
     );
 
-    expect(await scheduler.getJob(workflowJobId)).toMatchObject({ state, conclusion });
+    expect(await jobOf(scheduler, workflowJobId)).toMatchObject({ state, conclusion });
     logged.mockRestore();
   });
 
@@ -784,7 +785,7 @@ describe("Job conclusions from GitHub", () => {
     });
 
     expect(reads).toBe(1);
-    expect(await scheduler.getJob(9201)).toMatchObject({ state: "failed", conclusion: "failure" });
+    expect(await jobOf(scheduler, 9201)).toMatchObject({ state: "failed", conclusion: "failure" });
     logged.mockRestore();
   });
 
@@ -811,7 +812,7 @@ describe("Job conclusions from GitHub", () => {
 
     expect(reads).toContain(9302);
     expect(reads).not.toContain(9301);
-    expect(await scheduler.getJob(9302)).toMatchObject({ state: "completed" });
+    expect(await jobOf(scheduler, 9302)).toMatchObject({ state: "completed" });
     logged.mockRestore();
   });
 
@@ -833,8 +834,8 @@ describe("Job conclusions from GitHub", () => {
       ),
     );
 
-    expect(await scheduler.getAttempts(9401)).toMatchObject([{ state: "stopped" }]);
-    expect(await scheduler.getJob(9401)).toMatchObject({
+    expect(await attemptsOf(scheduler, 9401)).toMatchObject([{ state: "stopped" }]);
+    expect(await jobOf(scheduler, 9401)).toMatchObject({
       state: "completed",
       conclusion: "success",
     });
@@ -865,8 +866,8 @@ describe("Job conclusions from GitHub", () => {
     );
 
     expect(reclaimed).toEqual([]);
-    expect(await scheduler.getAttempts(9501)).toMatchObject([{ state: "running" }]);
-    expect(await scheduler.getJob(9501)).toMatchObject({ state: "running", runnerName });
+    expect(await attemptsOf(scheduler, 9501)).toMatchObject([{ state: "running" }]);
+    expect(await jobOf(scheduler, 9501)).toMatchObject({ state: "running", runnerName });
     logged.mockRestore();
   });
 
@@ -901,8 +902,8 @@ describe("Job conclusions from GitHub", () => {
     );
 
     expect(reclaimed).toEqual([runnerName]);
-    expect(await scheduler.getAttempts(9502)).toMatchObject([{ state: "expired" }]);
-    expect(await scheduler.getJob(9502)).toMatchObject({ state: "cancelled" });
+    expect(await attemptsOf(scheduler, 9502)).toMatchObject([{ state: "expired" }]);
+    expect(await jobOf(scheduler, 9502)).toMatchObject({ state: "cancelled" });
     logged.mockRestore();
   });
 
@@ -920,14 +921,14 @@ describe("Job conclusions from GitHub", () => {
     const now = Date.now();
 
     await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now));
-    expect(await scheduler.getJob(9601)).toMatchObject({ state: "running" });
+    expect(await jobOf(scheduler, 9601)).toMatchObject({ state: "running" });
     expect(failed.mock.calls.map(([line]) => JSON.parse(String(line)).event)).toContain(
       "job_status_failed",
     );
 
     await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now + 31_000));
     expect(reads).toBe(2);
-    expect(await scheduler.getJob(9601)).toMatchObject({ state: "completed" });
+    expect(await jobOf(scheduler, 9601)).toMatchObject({ state: "completed" });
     logged.mockRestore();
     failed.mockRestore();
   });
@@ -946,7 +947,7 @@ describe("Job conclusions from GitHub", () => {
     await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(checking, now + 31_000));
 
     expect(reads).toBe(1);
-    expect(await scheduler.getJob(9701)).toMatchObject({ state: "failed", conclusion: "unknown" });
+    expect(await jobOf(scheduler, 9701)).toMatchObject({ state: "failed", conclusion: "unknown" });
     logged.mockRestore();
   });
 
@@ -966,7 +967,7 @@ describe("Job conclusions from GitHub", () => {
       ),
     );
 
-    expect(await scheduler.getJob(9801)).toMatchObject({
+    expect(await jobOf(scheduler, 9801)).toMatchObject({
       state: "cancelled",
       conclusion: "cancelled",
     });

@@ -1,5 +1,7 @@
 import { and, desc, eq, getTableColumns, inArray, ne, sql } from "drizzle-orm";
 import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
+import { migrate } from "drizzle-orm/durable-sqlite/migrator";
+import migrations from "../drizzle/migrations";
 import { Data, Effect, Result } from "effect";
 import { assignments, attempts, conclusionChecks, deliveries, jobs, pending } from "./schema";
 import { isAdmissible, type QueuedJobCandidate, type WorkflowEvent } from "./domain";
@@ -87,6 +89,10 @@ export class SchedulerLifecycle {
     this.#db = drizzle(storage, {
       schema: { deliveries, jobs, attempts, assignments, pending, conclusionChecks },
     });
+  }
+
+  migrate(): Promise<void> {
+    return migrate(this.#db, migrations);
   }
 
   accept(event: WorkflowEvent): Effect.Effect<AcceptResult, SchedulerStorageError> {

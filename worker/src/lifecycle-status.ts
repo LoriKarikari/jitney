@@ -4,9 +4,9 @@ import { Array as Arr, Context, Data, Effect, Option, Result, Schema } from "eff
 import {
   deploymentIdFromOwnershipEnvironment,
   ownershipEnvironmentName,
-} from "@jitney/shared/ownership-marker";
+} from "../../shared/contract.js";
 
-const Receipt = Schema.Struct({
+export const Receipt = Schema.Struct({
   id: Schema.String,
   github: Schema.Struct({
     installations: Schema.Array(
@@ -35,7 +35,7 @@ export const LifecycleStatus = Schema.Struct({
 
 export type LifecycleStatus = typeof LifecycleStatus.Type;
 
-type Receipt = typeof Receipt.Type;
+export type Receipt = typeof Receipt.Type;
 
 export interface LifecycleInstallation {
   readonly id: number;
@@ -230,18 +230,20 @@ export const OwnershipRewriteRequest = Schema.Struct({
   ),
 });
 
+export const readReceipt = (env: Env) =>
+  Effect.tryPromise({
+    try: () => env.JITNEY_RECEIPTS.get(env.JITNEY_RECEIPT_NAME, "json"),
+    catch: (cause) => cause,
+  }).pipe(
+    Effect.flatMap((value) =>
+      Effect.try({ try: () => Schema.decodeUnknownSync(Receipt)(value), catch: (cause) => cause }),
+    ),
+  );
+
 const readOwnReceipt = (env: Env) =>
-  Effect.gen(function* () {
-    const value = yield* Effect.tryPromise({
-      try: () => env.JITNEY_RECEIPTS.get(env.JITNEY_RECEIPT_NAME, "json"),
-      catch: (cause) => cause,
-    });
-    const receipt = yield* Effect.try({
-      try: () => Schema.decodeUnknownSync(Receipt)(value),
-      catch: (cause) => cause,
-    });
-    return { receipt, matches: receipt.id === env.JITNEY_DEPLOYMENT };
-  });
+  readReceipt(env).pipe(
+    Effect.map((receipt) => ({ receipt, matches: receipt.id === env.JITNEY_DEPLOYMENT })),
+  );
 
 export const rewriteLifecycleOwnership = Effect.fn("GitHub.rewriteLifecycleOwnership")(function* (
   env: Env,

@@ -13,14 +13,10 @@ export class CommandError extends Data.TaggedError("CommandError")<{
 export function run(
   command: string,
   args: readonly string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv; echo?: boolean } = {},
+  options: { echo?: boolean } = {},
 ): Effect.Effect<CommandResult, CommandError> {
   return Effect.callback<CommandResult, CommandError>((resume) => {
-    const child = spawn(command, args, {
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      stdio: ["inherit", "pipe", "pipe"],
-    });
+    const child = spawn(command, args, { stdio: ["inherit", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let settled = false;

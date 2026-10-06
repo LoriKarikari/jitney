@@ -13,8 +13,7 @@ import {
   type GitHubAppIdentity,
 } from "./github-app.js";
 import { confirmInTerminal } from "./prompt.js";
-import { ownershipEnvironmentName } from "@jitney/shared/ownership-marker";
-import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
+import { mintOperationSecret, ownershipEnvironmentName } from "../../shared/contract.js";
 import type { DeploymentReceipt, DestroyResidue } from "./receipts/schema.js";
 import {
   DeploymentReceiptSchema,

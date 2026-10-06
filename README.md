@@ -36,9 +36,9 @@ a runner.
 Docker doesn't work inside jobs. The image has the Docker client but no
 daemon, so `docker build`, service containers, and container actions fail.
 
-Jitney only takes jobs from private repositories. A public repository lets
-anyone open a pull request that runs code on your machines, and Jitney doesn't
-guard against that yet.
+Jitney only takes jobs from private repositories. On a public repository,
+anyone can open a pull request from a fork and run code on your runners, and
+Jitney isn't built to contain that.
 
 ## Requirements
 
@@ -130,7 +130,9 @@ A Worker receives GitHub's webhooks, checks their signatures, and hands each
 event to the Scheduler. The Scheduler is a Durable Object that keeps every
 job's state in SQLite. For each job it creates the one-time runner
 registration and starts a container through another Durable Object. Inside
-the container, a small Go supervisor runs GitHub's runner and exits with it.
+the container, a small Go supervisor takes the registration out of the
+environment, so job steps can't read it, then runs GitHub's runner and exits
+with it.
 
 [CONTEXT.md](CONTEXT.md) has the full design and its vocabulary.
 [.agents/operations/](.agents/operations/) has notes from live tests.

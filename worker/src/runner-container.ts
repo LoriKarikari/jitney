@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { Data, Effect } from "effect";
+import { Data, Duration, Effect, Schedule } from "effect";
 import { runnerContainerInactivityTimeoutMs } from "./lifecycle";
 import { emit, type RunnerCorrelation } from "./log";
 
@@ -9,32 +9,57 @@ class RunnerContainerError extends Data.TaggedError("RunnerContainerError")<{
   cause: unknown;
 }> {}
 
+type ContainerHandle = Pick<Container, "running" | "start" | "setInactivityTimeout">;
+
+export function controlRunner(container: ContainerHandle, inactivityTimeoutMs: number) {
+  // An instance starts without a timeout, including after a deploy restarts it.
+  let armed = false;
+  const arm = Effect.tryPromise({
+    try: () => container.setInactivityTimeout(inactivityTimeoutMs),
+    catch: (cause) => new RunnerContainerError({ cause }),
+  }).pipe(Effect.tap(() => Effect.sync(() => (armed = true))));
+
+  const start = (env: Record<string, string>) =>
+    Effect.gen(function* () {
+      if (!container.running) {
+        yield* Effect.try({
+          try: () => container.start({ env, enableInternet: true }),
+          catch: (cause) => new RunnerContainerError({ cause }),
+        });
+      }
+      if (!armed) yield* arm;
+    }).pipe(
+      // A runner that is up may already be running a Job. Never report it as failed.
+      Effect.catch((error) => (container.running ? Effect.void : Effect.fail(error))),
+      Effect.retry({ schedule: Schedule.spaced(Duration.seconds(2)), times: 14 }),
+    );
+
+  const isRunning = Effect.gen(function* () {
+    if (container.running && !armed) yield* Effect.ignore(arm);
+    return container.running;
+  });
+
+  return { start, isRunning };
+}
+
 export class RunnerContainer extends DurableObject<Env> {
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    // A restarted instance loses the inactivity timeout, and Cloudflare then stops the container.
-    const container = ctx.container;
-    if (container?.running) void ctx.blockConcurrencyWhile(() => this.#keepAlive(container));
-  }
+  #runner = this.ctx.container
+    ? controlRunner(
+        this.ctx.container,
+        runnerContainerInactivityTimeoutMs(Number(this.env.RUNTIME_TIMEOUT_MS) || undefined),
+      )
+    : undefined;
 
   startAttempt(request: StartAttempt): Promise<void> {
     const { jitConfig, ...correlation } = request;
     return Effect.runPromise(
       Effect.gen({ self: this }, function* () {
-        const container = this.ctx.container;
-        if (container === undefined) {
+        if (this.#runner === undefined) {
           return yield* new RunnerContainerError({
             cause: new Error("RunnerContainer has no container binding"),
           });
         }
-        if (container.running) return;
-        yield* Effect.tryPromise({
-          try: () => {
-            container.start({ env: { JIT_CONFIG: jitConfig }, enableInternet: true });
-            return this.#keepAlive(container);
-          },
-          catch: (cause) => new RunnerContainerError({ cause }),
-        });
+        yield* this.#runner.start({ JIT_CONFIG: jitConfig });
         yield* Effect.sync(() =>
           emit({
             event: "runner_container_started",
@@ -47,17 +72,13 @@ export class RunnerContainer extends DurableObject<Env> {
     );
   }
 
-  isRunning(): boolean {
-    return this.ctx.container?.running === true;
+  isRunning(): Promise<boolean> {
+    return this.#runner === undefined
+      ? Promise.resolve(false)
+      : Effect.runPromise(this.#runner.isRunning);
   }
 
   async destroy(): Promise<void> {
     if (this.ctx.container?.running) await this.ctx.container.destroy();
-  }
-
-  #keepAlive(container: Container): Promise<void> {
-    return container.setInactivityTimeout(
-      runnerContainerInactivityTimeoutMs(Number(this.env.RUNTIME_TIMEOUT_MS) || undefined),
-    );
   }
 }

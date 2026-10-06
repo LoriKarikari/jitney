@@ -41,7 +41,14 @@ events() { jq -r 'select(.logs) | .logs[].message[0]' "$1" 2>/dev/null | jq -c '
 
 route_off() {
   original_route=$(cf_script GET subdomain | jq -c '.result')
+  # A killed script never runs its trap, so restore the route on a timer that outlives it.
+  setsid bash -c "sleep 2400; source '$root/e2e/lib.sh'; cf_script POST subdomain '$original_route'" \
+    >/dev/null 2>&1 </dev/null &
+  route_watchdog=$!
   echo "route off: $(cf_script POST subdomain '{"enabled":false,"previews_enabled":false}' | jq -c '.result')"
   sleep 30
 }
-restore_route() { echo "route restored: $(cf_script POST subdomain "$original_route" | jq -c '.result')"; }
+restore_route() {
+  echo "route restored: $(cf_script POST subdomain "$original_route" | jq -c '.result')"
+  pkill -s "$route_watchdog" 2>/dev/null
+}

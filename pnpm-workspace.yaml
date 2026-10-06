@@ -2,6 +2,7 @@ packages:
   - cli
   - worker
   - shared
+  - e2e
 
 catalog:
   "@octokit/auth-app": ^8.3.1

@@ -909,6 +909,42 @@ describe("Job conclusions from GitHub", () => {
     logged.mockRestore();
   });
 
+  it("reclaims a runner at the assignment deadline when GitHub says its Job already ended", async () => {
+    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("conclusion-deadline-ended");
+    const event = queuedEvent(9502, "delivery-queued");
+    const { runnerName } = await scheduler.accept(event);
+    if (runnerName === undefined) throw new Error("missing runner name");
+    await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
+    await scheduler.accept({
+      ...event,
+      action: "completed",
+      conclusion: "cancelled",
+      deliveryId: "delivery-cancelled",
+    });
+    const reclaimed: string[] = [];
+
+    await withLifecycle(scheduler, (lifecycle) =>
+      lifecycle.sweep(
+        operations(
+          () => Effect.void,
+          (request) => {
+            reclaimed.push(request.runnerName);
+            return Effect.void;
+          },
+          () => Effect.succeed(true),
+          () => Effect.succeed({ status: "completed", conclusion: "cancelled", runnerName }),
+        ),
+        Date.now() + 6 * 60_000,
+      ),
+    );
+
+    expect(reclaimed).toEqual([runnerName]);
+    expect(await scheduler.getAttempts(9502)).toMatchObject([{ state: "expired" }]);
+    expect(await scheduler.getJob(9502)).toMatchObject({ state: "cancelled" });
+    logged.mockRestore();
+  });
+
   it("keeps the check and reads again later when a read fails", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const failed = vi.spyOn(console, "error").mockImplementation(() => undefined);

@@ -6,6 +6,7 @@ on:
       - "cli/**"
       - "worker/**"
       - "shared/**"
+      - "e2e/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -16,6 +17,7 @@ on:
       - "cli/**"
       - "worker/**"
       - "shared/**"
+      - "e2e/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
@@ -39,7 +41,7 @@ jobs:
           - name: Generated types
             command: pnpm --filter jitney-worker types && git diff --exit-code -- worker/worker-configuration.d.ts
           - name: Typecheck
-            command: pnpm --filter jitney-worker typecheck
+            command: pnpm --filter jitney-worker --filter jitney-e2e typecheck
           - name: Formatting
             command: pnpm fmt:check
           - name: Oxlint

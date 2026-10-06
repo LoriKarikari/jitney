@@ -3,11 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "fmt": "oxfmt --write cli worker shared",
-    "fmt:check": "oxfmt --check cli worker shared",
-    "lint": "oxlint --type-aware --deny-warnings cli worker shared",
-    "lint:fix": "oxlint --type-aware --fix cli worker shared",
+    "fmt": "oxfmt --write cli worker shared e2e",
+    "fmt:check": "oxfmt --check cli worker shared e2e",
+    "lint": "oxlint --type-aware --deny-warnings cli worker shared e2e",
+    "lint:fix": "oxlint --type-aware --fix cli worker shared e2e",
     "knip": "knip",
+    "e2e": "varlock run -- pnpm --filter jitney-e2e e2e",
     "check": "pnpm fmt:check && pnpm lint && pnpm knip && pnpm -r check"
   },
   "devDependencies": {

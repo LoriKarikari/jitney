@@ -249,10 +249,11 @@ The project uses five triage labels:
 
 ## Testing
 
-- Prove behavior end to end first. The live checks in `e2e/` run against the
-  fixture Deployment and leave a `result=PASS` or `result=FAIL` artifact in
-  `e2e/results/`. A change that a live run can show gets a live run, extended
-  or added in `e2e/` when none covers it.
+- Prove behavior end to end first. The live checks in `e2e/` are TypeScript
+  vitest files run with `pnpm e2e <name>` against the fixture Deployment. Each
+  writes its checks and evidence to `e2e/results/<name>.json`. A change that a
+  live run can show gets a live run, extended or added in `e2e/` when none
+  covers it. Assert on the Worker's `LifecycleRecord` events, not log text.
 - Write a unit test only for a failure mode a live run cannot reach cheaply,
   such as a race, a security boundary, a failure path, or an input edge case.
 - Before writing a unit test or the code it covers, list every way the change
@@ -263,7 +264,7 @@ The project uses five triage labels:
   guards no listed failure mode.
 - Test external behavior, not implementation details, through the highest seam
   available.
-- Run the full unit suite before opening a PR, and the matching `e2e/` script
+- Run the full unit suite before opening a PR, and the matching `e2e/` check
   on a prerelease before closing the issue.
 
 ## Tooling

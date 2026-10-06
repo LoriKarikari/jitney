@@ -550,7 +550,7 @@ export class SchedulerLifecycle {
         const { workflowJobId, repositoryId, runnerName } = row;
         // A lost in_progress delivery makes a busy runner look unassigned.
         const status = yield* this.#readJob(operations, this.#checkFor(row, workflowJobId, now));
-        if (status?.runnerName === runnerName && status.status !== "queued") {
+        if (status?.runnerName === runnerName && status.status === "in_progress") {
           yield* this.#transaction(() => {
             const current = this.#db
               .select({ runnerName: attempts.runnerName })

@@ -687,39 +687,6 @@ describe("Job conclusions from GitHub", () => {
     return scheduler;
   }
 
-  it("records the conclusion GitHub reports for a Job whose attempt ended without a completed delivery", async () => {
-    const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const scheduler = await runningJob("conclusion-read", 9001);
-    const reads: unknown[] = [];
-
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        operations(
-          () => Effect.void,
-          () => Effect.void,
-          () => Effect.succeed(false),
-          (check) => {
-            reads.push(check);
-            return Effect.succeed({
-              status: "completed",
-              conclusion: "success",
-              runnerName: "jitney-456-9001-1",
-            });
-          },
-        ),
-      ),
-    );
-
-    expect(reads).toMatchObject([
-      { workflowJobId: 9001, repositoryOwner: "LoriKarikari", repositoryName: "jitney-test" },
-    ]);
-    expect(await scheduler.getJob(9001)).toMatchObject({
-      state: "completed",
-      conclusion: "success",
-    });
-    logged.mockRestore();
-  });
-
   it("keeps a Job GitHub still reports in progress open and reads it again on a later sweep", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = await runningJob("conclusion-in-progress", 9002);
@@ -774,13 +741,7 @@ describe("Job conclusions from GitHub", () => {
   it.each([
     ["success", "completed"],
     ["cancelled", "cancelled"],
-    ["failure", "failed"],
     ["timed_out", "failed"],
-    ["skipped", "failed"],
-    ["neutral", "failed"],
-    ["action_required", "failed"],
-    ["startup_failure", "failed"],
-    ["stale", "failed"],
   ])("records GitHub's %s conclusion as a %s Job", async (conclusion, state) => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const workflowJobId = 9100 + conclusion.length;

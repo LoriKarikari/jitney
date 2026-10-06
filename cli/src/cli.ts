@@ -3,6 +3,7 @@
 import { parseArgs } from "node:util";
 import { Cause, Effect, Exit, Option } from "effect";
 import { adoptCommand } from "./adopt-command.js";
+import { parseConcurrencyBudget } from "./config.js";
 import { deploy } from "./deploy.js";
 import { destroyCommand } from "./destroy-command.js";
 import { InstallerError, isInstallFailure, renderFailure, trySync } from "./errors.js";
@@ -20,6 +21,7 @@ const program = Effect.gen(function* () {
         options: {
           name: { type: "string", default: "jitney" },
           organization: { type: "string" },
+          budget: { type: "string" },
           "keep-partial": { type: "boolean" },
           json: { type: "boolean" },
           yes: { type: "boolean", short: "y" },
@@ -48,6 +50,7 @@ Commands:
 Options:
   --name <name>                Cloudflare Worker name (default: jitney)
   --organization <login>       Register the GitHub App under an organization
+  --budget <vcpus>             vCPUs runners may use at once (deploy, upgrade; default 20)
   --keep-partial               Keep an installing receipt instead of rolling back
   --json                       Print list output as JSON
   --yes, -y                    Apply the repair or destroy plan without confirming
@@ -60,8 +63,27 @@ Options:
     return;
   }
 
+  const concurrencyBudget =
+    values.budget === undefined
+      ? undefined
+      : yield* trySync("argument_parsing", "The Concurrency Budget is invalid", () =>
+          parseConcurrencyBudget(values.budget!),
+        );
+
+  if (positionals[0] === "rollback" && concurrencyBudget !== undefined) {
+    return yield* new InstallerError({
+      step: "argument_parsing",
+      message:
+        "rollback restores the previous version only. Change the budget with upgrade --budget",
+    });
+  }
+
   if ((positionals[0] === "upgrade" || positionals[0] === "rollback") && positionals.length === 2) {
-    return yield* upgradeCommand({ name: positionals[1]!, operation: positionals[0] });
+    return yield* upgradeCommand({
+      name: positionals[1]!,
+      operation: positionals[0],
+      ...(concurrencyBudget === undefined ? {} : { concurrencyBudget }),
+    });
   }
 
   if (positionals[0] === "adopt" && positionals.length === 2) {
@@ -103,6 +125,7 @@ Options:
     workerName: values.name,
     ...(values.organization === undefined ? {} : { organization: values.organization }),
     ...(values["keep-partial"] === undefined ? {} : { keepPartial: values["keep-partial"] }),
+    ...(concurrencyBudget === undefined ? {} : { concurrencyBudget }),
   });
 });
 

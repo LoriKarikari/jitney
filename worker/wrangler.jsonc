@@ -18,6 +18,7 @@
     "JITNEY_RECEIPT_NAME": "jitney",
     // Kill running jobs after this long. Overridable per deployment for live probes.
     "RUNTIME_TIMEOUT_MS": "3600000",
+    "CONCURRENCY_BUDGET": "20",
     // Delay before an accepted job is provisioned. Tests lengthen this to avoid wall-clock alarms.
     "SCHEDULER_TICK_MS": "1000",
   },
@@ -43,7 +44,7 @@
       "image": "../runner/Dockerfile",
       "image_build_context": "..",
       "instance_type": "standard-2",
-      "max_instances": 5,
+      "max_instances": 20,
     },
   ],
   "observability": {

@@ -44,17 +44,37 @@ function operations(
   reclaim: RunnerAttemptOperations["reclaim"] = () => Effect.void,
   isRunning: RunnerAttemptOperations["isRunning"] = () => Effect.succeed(true),
   jobStatus: RunnerAttemptOperations["jobStatus"] = () =>
-    Effect.succeed({ status: "in_progress", conclusion: null, runnerName: null }),
+    Effect.succeed({ status: "queued", conclusion: null, runnerName: null }),
 ): RunnerAttemptOperations {
   return { provision, reclaim, isRunning, jobStatus };
 }
 
-function queuedEvent(workflowJobId: number, deliveryId: string): WorkflowEvent {
+function withBudget<Result, Error>(
+  scheduler: DurableObjectStub<Scheduler>,
+  budget: number,
+  use: (lifecycle: SchedulerLifecycle) => Effect.Effect<Result, Error>,
+): Promise<Result> {
+  return runInDurableObject(scheduler, (_instance, state) =>
+    Effect.runPromise(
+      use(
+        new SchedulerLifecycle(
+          state.storage,
+          "deployment-test",
+          60 * 60_000,
+          testSchedulerTick,
+          budget,
+        ),
+      ),
+    ),
+  );
+}
+
+function queuedEvent(workflowJobId: number, deliveryId: string, repositoryId = 456): WorkflowEvent {
   return {
     deliveryId,
     action: "queued",
     installationId: 123,
-    repositoryId: 456,
+    repositoryId,
     repositoryOwner: "LoriKarikari",
     repositoryName: "jitney-test",
     repositoryPrivate: true,
@@ -71,19 +91,19 @@ describe("Scheduler admission", () => {
     const event = queuedEvent(1000, "delivery-drain");
 
     await scheduler.suspendIntake();
-    expect(await scheduler.accept(event)).toEqual({ outcome: "accepted" });
+    expect(await scheduler.accept(event)).toEqual({ outcome: "waiting" });
     expect(await jobOf(scheduler, event.workflowJobId)).toMatchObject({
       state: "queued",
-      pending: false,
+      waiting: true,
     });
     expect(await attemptsOf(scheduler, event.workflowJobId)).toEqual([]);
 
+    const failed = vi.spyOn(console, "error").mockImplementation(() => undefined);
     await scheduler.resumeIntake();
-    const { action: _action, deliveryId: _deliveryId, ...candidate } = event;
-    expect(await scheduler.reconcile(candidate)).toEqual({
-      outcome: "accepted",
-      runnerName: "jitney-456-1000-1",
-    });
+    await vi.waitFor(async () =>
+      expect(await attemptsOf(scheduler, event.workflowJobId)).toHaveLength(1),
+    );
+    failed.mockRestore();
   });
 
   it("suppresses delivery replay and manual redelivery while an attempt is viable", async () => {
@@ -146,50 +166,6 @@ describe("Scheduler admission", () => {
       pending: false,
     });
     expect(await attemptsOf(scheduler, event.workflowJobId)).toMatchObject([{ state: "created" }]);
-  });
-
-  it("rejects work durably when pending-work capacity is exhausted", async () => {
-    const scheduler = env.SCHEDULER.getByName("capacity");
-    for (let job = 1; job <= 10; job++) {
-      expect(await scheduler.accept(queuedEvent(2000 + job, `delivery-${job}`))).toMatchObject({
-        outcome: "accepted",
-      });
-    }
-
-    const rejected = queuedEvent(2011, "delivery-11");
-    expect(await scheduler.accept(rejected)).toEqual({ outcome: "capacity_limited" });
-    expect(await jobOf(scheduler, rejected.workflowJobId)).toMatchObject({
-      state: "capacity_limited",
-      pending: false,
-    });
-    expect(await attemptsOf(scheduler, rejected.workflowJobId)).toEqual([]);
-  });
-
-  it("rejects work durably when active-attempt capacity is exhausted", async () => {
-    const scheduler = env.SCHEDULER.getByName("active-capacity");
-    for (let job = 1; job <= 25; job++) {
-      const event = queuedEvent(4000 + job, `delivery-${job}`);
-      expect(await scheduler.accept(event)).toMatchObject({ outcome: "accepted" });
-      await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
-    }
-
-    const rejected = queuedEvent(4026, "delivery-26");
-    expect(await scheduler.accept(rejected)).toEqual({ outcome: "capacity_limited" });
-    expect(await attemptsOf(scheduler, rejected.workflowJobId)).toEqual([]);
-
-    let privilegedCalls = 0;
-    await withLifecycle(scheduler, (lifecycle) =>
-      lifecycle.sweep(
-        operations(
-          () => {
-            privilegedCalls++;
-            return Effect.void;
-          },
-          () => Effect.void,
-        ),
-      ),
-    );
-    expect(privilegedCalls).toBe(0);
   });
 
   it("binds a job to a Runner Attempt triggered by another job", async () => {
@@ -605,20 +581,25 @@ describe("Runner Container exits", () => {
   it("ends the attempt of an exited Runner Container on the next sweep and frees its capacity", async () => {
     const logged = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const scheduler = env.SCHEDULER.getByName("container-exit");
-    for (let job = 1; job <= 25; job++) {
-      await scheduler.accept(queuedEvent(8000 + job, `delivery-${job}`));
-      await withLifecycle(scheduler, (lifecycle) => lifecycle.sweep(operations()));
-    }
-    await scheduler.accept({
-      ...queuedEvent(8001, "delivery-in-progress"),
-      action: "in_progress",
-      runnerName: "jitney-456-8001-1",
-    });
-    const waiting = queuedEvent(8026, "delivery-26");
-    expect(await scheduler.accept(waiting)).toEqual({ outcome: "capacity_limited" });
+    await withBudget(scheduler, 2, (lifecycle) =>
+      Effect.gen(function* () {
+        for (const job of [8001, 8002]) {
+          yield* lifecycle.accept(queuedEvent(job, `delivery-${job}`));
+          yield* lifecycle.sweep(operations());
+        }
+        yield* lifecycle.accept({
+          ...queuedEvent(8001, "delivery-in-progress"),
+          action: "in_progress",
+          runnerName: "jitney-456-8001-1",
+        });
+        expect(yield* lifecycle.accept(queuedEvent(8003, "delivery-8003"))).toEqual({
+          outcome: "waiting",
+        });
+      }),
+    );
 
     const reclaimed: string[] = [];
-    await withLifecycle(scheduler, (lifecycle) =>
+    await withBudget(scheduler, 2, (lifecycle) =>
       lifecycle.sweep(
         operations(
           () => Effect.void,
@@ -637,9 +618,7 @@ describe("Runner Container exits", () => {
     expect(reclaimed).toEqual(["jitney-456-8001-1"]);
     expect(await attemptsOf(scheduler, 8001)).toMatchObject([{ state: "stopped" }]);
     expect(await attemptsOf(scheduler, 8002)).toMatchObject([{ state: "waiting_for_assignment" }]);
-    expect(await scheduler.activeAttemptCount()).toBe(24);
-    const { action: _action, deliveryId: _deliveryId, ...candidate } = waiting;
-    expect(await scheduler.reconcile(candidate)).toMatchObject({ outcome: "accepted" });
+    expect(await attemptsOf(scheduler, 8003)).toHaveLength(1);
     logged.mockRestore();
   });
 
@@ -972,6 +951,245 @@ describe("Job conclusions from GitHub", () => {
       conclusion: "cancelled",
     });
     logged.mockRestore();
+  });
+});
+
+describe("Concurrency Budget", () => {
+  afterEach(disarmSchedulerAlarms);
+
+  const finish = (lifecycle: SchedulerLifecycle, workflowJobId: number, repositoryId = 456) =>
+    Effect.gen(function* () {
+      const event = queuedEvent(workflowJobId, `delivery-${workflowJobId}`, repositoryId);
+      yield* lifecycle.accept({
+        ...event,
+        action: "in_progress",
+        deliveryId: `${event.deliveryId}-running`,
+        runnerName: `jitney-${repositoryId}-${workflowJobId}-1`,
+      });
+      yield* lifecycle.accept({
+        ...event,
+        action: "completed",
+        conclusion: "success",
+        deliveryId: `${event.deliveryId}-completed`,
+      });
+    });
+
+  const provisionAll = (lifecycle: SchedulerLifecycle, sweeps: number) =>
+    Effect.repeat(lifecycle.sweep(operations()), { times: sweeps - 1 });
+
+  it("starts a burst up to the budget, queues the rest, and starts the next as each runner ends", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("budget-burst");
+    const jobs = Array.from({ length: 10 }, (_, index) => 9901 + index);
+
+    const outcomes = await withBudget(scheduler, 4, (lifecycle) =>
+      Effect.forEach(jobs, (job) =>
+        lifecycle.accept(queuedEvent(job, `delivery-${job}`)).pipe(Effect.map((r) => r.outcome)),
+      ),
+    );
+    expect(outcomes).toEqual([...Array(4).fill("accepted"), ...Array(6).fill("waiting")]);
+    await withBudget(scheduler, 4, (lifecycle) => provisionAll(lifecycle, 4));
+    expect(await scheduler.activeAttemptCount()).toBe(4);
+
+    const before = Date.now();
+    await withBudget(scheduler, 4, (lifecycle) => finish(lifecycle, 9901));
+    await runInDurableObject(scheduler, async (_instance, state) => {
+      expect(await state.storage.getAlarm()).toBeLessThanOrEqual(
+        before + testSchedulerTick + 1_000,
+      );
+    });
+    await withBudget(scheduler, 4, (lifecycle) => lifecycle.sweep(operations()));
+    expect(await scheduler.activeAttemptCount()).toBe(4);
+    expect(await attemptsOf(scheduler, 9905)).toHaveLength(1);
+    expect(await jobOf(scheduler, 9906)).toMatchObject({ state: "queued", waiting: true });
+
+    await withBudget(scheduler, 4, (lifecycle) =>
+      lifecycle.sweep(
+        operations(
+          () => Effect.void,
+          () => Effect.void,
+          (request) => Effect.succeed(request.workflowJobId !== 9902),
+          (check) =>
+            Effect.succeed(
+              check.workflowJobId === 9902
+                ? { status: "completed", conclusion: "success", runnerName: null }
+                : { status: "queued", conclusion: null, runnerName: null },
+            ),
+        ),
+      ),
+    );
+    expect(await scheduler.activeAttemptCount()).toBe(4);
+    expect(await attemptsOf(scheduler, 9906)).toHaveLength(1);
+    expect(await jobOf(scheduler, 9907)).toMatchObject({ waiting: true });
+    vi.restoreAllMocks();
+  });
+
+  it("starts another repository's Job at the next free capacity, ahead of a longer queue", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("budget-fairness");
+
+    await withBudget(scheduler, 2, (lifecycle) =>
+      Effect.gen(function* () {
+        for (const job of [9951, 9952, 9953, 9954, 9955]) {
+          yield* lifecycle.accept(queuedEvent(job, `delivery-${job}`));
+        }
+        yield* lifecycle.accept(queuedEvent(9961, "delivery-9961", 789));
+        yield* provisionAll(lifecycle, 2);
+        yield* finish(lifecycle, 9951);
+        yield* lifecycle.sweep(operations());
+      }),
+    );
+
+    expect(await attemptsOf(scheduler, 9961)).toHaveLength(1);
+    expect(await jobOf(scheduler, 9953)).toMatchObject({ waiting: true });
+    vi.restoreAllMocks();
+  });
+
+  it("records a Job beyond 256 waiting as capacity limited and admits it once the queue drains", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("budget-overflow");
+    const waiting = Array.from({ length: 256 }, (_, index) => 20_001 + index);
+    const overflow = queuedEvent(30_000, "delivery-overflow");
+
+    const result = await withBudget(scheduler, 1, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.accept(queuedEvent(20_000, "delivery-first"));
+        for (const job of waiting) yield* lifecycle.accept(queuedEvent(job, `delivery-${job}`));
+        const limited = yield* lifecycle.accept(overflow);
+        for (const job of waiting) {
+          yield* lifecycle.accept({
+            ...queuedEvent(job, `delivery-${job}-completed`),
+            action: "completed",
+            conclusion: "cancelled",
+          });
+        }
+        const { action: _action, deliveryId: _deliveryId, ...candidate } = overflow;
+        return { limited, reconciled: yield* lifecycle.reconcile(candidate) };
+      }),
+    );
+
+    expect(result.limited).toEqual({ outcome: "capacity_limited" });
+    expect(result.reconciled).toEqual({ outcome: "waiting" });
+    expect(await jobOf(scheduler, 30_000)).toMatchObject({ state: "queued", waiting: true });
+    vi.restoreAllMocks();
+  });
+
+  it("drops a waiting Job whose completed delivery arrives before it starts", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("budget-completed-delivery");
+
+    await withBudget(scheduler, 1, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.accept(queuedEvent(9971, "delivery-9971"));
+        yield* lifecycle.accept(queuedEvent(9972, "delivery-9972"));
+        yield* lifecycle.accept({
+          ...queuedEvent(9972, "delivery-9972-completed"),
+          action: "completed",
+          conclusion: "cancelled",
+        });
+        yield* provisionAll(lifecycle, 1);
+        yield* finish(lifecycle, 9971);
+        yield* lifecycle.sweep(operations());
+      }),
+    );
+
+    expect(await jobOf(scheduler, 9972)).toMatchObject({ state: "cancelled", waiting: false });
+    expect(await attemptsOf(scheduler, 9972)).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  it("drops a waiting Job GitHub reports finished instead of starting a runner for it", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("budget-completed-read");
+
+    await withBudget(scheduler, 1, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.accept(queuedEvent(9981, "delivery-9981"));
+        yield* lifecycle.accept(queuedEvent(9982, "delivery-9982"));
+        yield* provisionAll(lifecycle, 1);
+        yield* finish(lifecycle, 9981);
+        yield* lifecycle.sweep(
+          operations(
+            () => Effect.void,
+            () => Effect.void,
+            () => Effect.succeed(true),
+            () =>
+              Effect.succeed({ status: "completed", conclusion: "cancelled", runnerName: null }),
+          ),
+        );
+      }),
+    );
+
+    expect(await attemptsOf(scheduler, 9982)).toEqual([]);
+    expect(await jobOf(scheduler, 9982)).toMatchObject({ state: "cancelled", waiting: false });
+    vi.restoreAllMocks();
+  });
+
+  it("starts a waiting Job when the GitHub read before it fails", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("budget-read-fails");
+
+    await withBudget(scheduler, 1, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.accept(queuedEvent(9991, "delivery-9991"));
+        yield* lifecycle.accept(queuedEvent(9992, "delivery-9992"));
+        yield* provisionAll(lifecycle, 1);
+        yield* finish(lifecycle, 9991);
+        yield* lifecycle.sweep(
+          operations(
+            () => Effect.void,
+            () => Effect.void,
+            () => Effect.succeed(true),
+            () => Effect.fail(new RunnerAttemptFailure({ step: "job_status", cause: "down" })),
+          ),
+        );
+      }),
+    );
+
+    expect(await attemptsOf(scheduler, 9992)).toHaveLength(1);
+    vi.restoreAllMocks();
+  });
+
+  it("keeps one place in the queue for a redelivered or reconciled waiting Job", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("budget-duplicates");
+    const event = queuedEvent(9702, "delivery-9702");
+    const { action: _action, deliveryId: _deliveryId, ...candidate } = event;
+
+    const outcomes = await withBudget(scheduler, 1, (lifecycle) =>
+      Effect.gen(function* () {
+        yield* lifecycle.accept(queuedEvent(9701, "delivery-9701"));
+        yield* lifecycle.accept(event);
+        return [
+          (yield* lifecycle.accept({ ...event, deliveryId: "delivery-9702-again" })).outcome,
+          (yield* lifecycle.reconcile(candidate)).outcome,
+        ];
+      }),
+    );
+
+    expect(outcomes).toEqual(["duplicate", "duplicate"]);
+    expect(await attemptsOf(scheduler, 9702)).toEqual([]);
+    vi.restoreAllMocks();
+  });
+
+  it("queues Jobs while intake is suspended and starts them only once it resumes", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const scheduler = env.SCHEDULER.getByName("budget-suspended");
+
+    await withBudget(scheduler, 2, (lifecycle) =>
+      Effect.gen(function* () {
+        expect(yield* lifecycle.defer(queuedEvent(9801, "delivery-9801"))).toEqual({
+          outcome: "waiting",
+        });
+        yield* lifecycle.sweep(operations(), Date.now(), { admit: false });
+      }),
+    );
+    expect(await attemptsOf(scheduler, 9801)).toEqual([]);
+
+    await withBudget(scheduler, 2, (lifecycle) => lifecycle.sweep(operations()));
+    expect(await attemptsOf(scheduler, 9801)).toHaveLength(1);
+    vi.restoreAllMocks();
   });
 });
 

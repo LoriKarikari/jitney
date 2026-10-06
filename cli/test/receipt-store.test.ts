@@ -71,6 +71,17 @@ describe("deployment receipt store", () => {
     expect(Option.getOrThrow(result).residue).toEqual([]);
   });
 
+  it("gives a receipt written before Concurrency Budgets the default budget of 20", async () => {
+    const backend = await makeMemoryBackend();
+    const store = makeReceiptStore(backend.service);
+    const { concurrencyBudget: _, ...legacy } = fixtureReceipt();
+    await Effect.runPromise(backend.service.put("staging", JSON.stringify(legacy)));
+
+    const result = await Effect.runPromise(store.get("staging"));
+
+    expect(Option.getOrThrow(result).concurrencyBudget).toBe(20);
+  });
+
   it("does not persist fields outside the receipt schema", async () => {
     const backend = await makeMemoryBackend();
     const store = makeReceiptStore(backend.service);

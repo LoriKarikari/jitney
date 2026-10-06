@@ -113,6 +113,7 @@ export interface OperationUpdate {
   readonly github?: DeploymentReceipt["github"];
   readonly autoUpgrade?: DeploymentReceipt["autoUpgrade"];
   readonly residue?: DeploymentReceipt["residue"];
+  readonly concurrencyBudget?: number;
 }
 
 export interface OperationCompletion extends OperationUpdate {
@@ -437,6 +438,9 @@ export function makeReceiptStore(
           ...(update.github === undefined ? {} : { github: update.github }),
           ...(update.autoUpgrade === undefined ? {} : { autoUpgrade: update.autoUpgrade }),
           ...(update.residue === undefined ? {} : { residue: update.residue }),
+          ...(update.concurrencyBudget === undefined
+            ? {}
+            : { concurrencyBudget: update.concurrencyBudget }),
           updatedAt: context.now,
         };
         return yield* putAndConfirmLease(next, context.lease);
@@ -452,6 +456,9 @@ export function makeReceiptStore(
           ...(completion.github === undefined ? {} : { github: completion.github }),
           ...(completion.autoUpgrade === undefined ? {} : { autoUpgrade: completion.autoUpgrade }),
           ...(completion.residue === undefined ? {} : { residue: completion.residue }),
+          ...(completion.concurrencyBudget === undefined
+            ? {}
+            : { concurrencyBudget: completion.concurrencyBudget }),
           updatedAt: context.now,
           phase: completion.phase,
           lease: null,

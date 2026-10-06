@@ -92,6 +92,12 @@ version. It stops taking new jobs, waits for running ones to finish, deploys,
 and checks the new version's health. If the check fails, it switches back.
 `npx get-jitney rollback jitney` returns to the version you had before.
 
+`npx get-jitney upgrade jitney --budget 40` changes how many vCPUs your
+runners may use at once. Every runner counts as one vCPU for now, so that's
+the number of jobs that run in parallel. Jobs past the budget wait in
+Jitney's queue and start as runners finish, spread evenly across
+repositories. `deploy --budget` sets it from the start.
+
 `npx get-jitney repair jitney` is for when something went wrong, such as a
 command killed halfway that left the deployment locked. It shows what it would
 change and asks first. `--yes` skips the question.
@@ -116,12 +122,35 @@ runner gives its slot to the next job right away.
 A runner that no job claims within five minutes is removed. A job that runs
 past the time limit is stopped.
 
+## Splitting a test suite
+
+A long test suite finishes sooner split across runners. Most test runners can
+run one slice of the suite, so a job matrix does the rest:
+
+```yaml
+jobs:
+  test:
+    runs-on: jitney
+    strategy:
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v7
+      - run: npm ci
+      - run: npx vitest run --shard=${{ matrix.shard }}/8
+```
+
+Playwright takes the same `--shard=1/8` flag, and Jest has `--shard` too. With
+a budget below eight, the extra shards wait in the queue and start as the
+first ones finish.
+
 ## Defaults
 
 | Setting | Default |
 | --- | --- |
 | Job time limit | 1 hour |
-| Runner containers at once | 5 |
+| Concurrency Budget | 20 vCPUs, so 20 jobs at once |
+| Jobs waiting past the budget | Up to 256 |
 | Container size | `standard-2`: 1 vCPU, 6 GiB memory, 12 GB disk |
 
 ## How it works

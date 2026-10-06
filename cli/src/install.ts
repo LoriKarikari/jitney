@@ -32,6 +32,7 @@ export interface InstallInput {
   readonly actor: string;
   readonly organization?: string;
   readonly keepPartial?: boolean;
+  readonly concurrencyBudget?: number;
 }
 
 interface InstallResult {
@@ -91,6 +92,9 @@ export const installDeployment = Effect.fn(function* (input: InstallInput) {
     name: input.name,
     version: input.version,
     now: startedAt,
+    ...(input.concurrencyBudget === undefined
+      ? {}
+      : { concurrencyBudget: input.concurrencyBudget }),
     cloudflare: {
       accountId: input.accountId,
       workerName: input.name,

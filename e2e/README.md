@@ -22,13 +22,14 @@ pnpm e2e webhook-down
 pnpm e2e unclaimed-runner deploy-during-job
 ```
 
-| Check               | Proves                                                                                                                                                                         | Takes         |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- |
-| `webhook-down`      | With no webhook, jobs finish, each Job's end state comes from GitHub, and a runner busy past the assignment deadline is kept.                                                  | 20 min        |
-| `deploy-during-job` | A Worker deployed during a 15-minute job does not stop its runner.                                                                                                             | 17 min        |
-| `unclaimed-runner`  | A runner no job claims stops at the assignment deadline.                                                                                                                       | 7 min         |
-| `start-latency`     | Each canary job starts within 60 seconds. `E2E_RUNS` sets the run count (default 5), and `E2E_VERSION` the version the canary upgrades to (default the fixture's current one). | 3 min per run |
-| `confirm-prompt`    | The `repair` and `destroy` prompt with closed, piped, and empty input. Needs no fixture.                                                                                       | 10 s          |
+| Check                | Proves                                                                                                                                                                                                                                                                                   | Takes         |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `webhook-down`       | With no webhook, jobs finish, each Job's end state comes from GitHub, and a runner busy past the assignment deadline is kept.                                                                                                                                                            | 20 min        |
+| `deploy-during-job`  | A Worker deployed during a 15-minute job does not stop its runner.                                                                                                                                                                                                                       | 17 min        |
+| `unclaimed-runner`   | A runner no job claims stops at the assignment deadline.                                                                                                                                                                                                                                 | 7 min         |
+| `concurrency-budget` | With a budget of 4, an 8-shard matrix runs every shard, never more than 4 at once, every shard admitted by webhook, and a median handoff under 15 s. It sets the budget with `upgrade --budget` and restores it afterwards. `E2E_VERSION` picks the CLI version (default the fixture's). | 15 min        |
+| `start-latency`      | Each canary job starts within 60 seconds. `E2E_RUNS` sets the run count (default 5), and `E2E_VERSION` the version the canary upgrades to (default the fixture's current one).                                                                                                           | 3 min per run |
+| `confirm-prompt`     | The `repair` and `destroy` prompt with closed, piped, and empty input. Needs no fixture.                                                                                                                                                                                                 | 10 s          |
 
 `webhook-down` switches the Worker's `workers.dev` route off and restores it
 when it ends. A detached watchdog restores it after 40 minutes if the run is

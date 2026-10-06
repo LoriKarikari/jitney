@@ -89,6 +89,7 @@ export const deployReceiptStack = (input: {
         workerName: receipt.cloudflare.workerName,
         workerBundlePath: input.bundlePath,
         version,
+        concurrencyBudget: receipt.concurrencyBudget,
         manageGitHubApp: app !== null,
         // An adopted Worker already holds its App's secrets, though the receipt
         // learns which App it is only after this deploy.

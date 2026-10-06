@@ -74,6 +74,31 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
   const held = yield* beginLeasedOperation(receipts, input.name, input.operation, input.actor);
   const original = yield* held.receipt();
   let drained = false;
+  let copiedTag: string | undefined;
+
+  const otherReceiptTags = receipts.list().pipe(
+    Effect.mapError(orStepError("receipt_store", "Could not inspect image ownership")),
+    Effect.map(
+      (all) =>
+        new Set(
+          all
+            .filter((receipt) => receipt.id !== original.id)
+            .flatMap((receipt) => recordedImageTags(receipt.cloudflare)),
+        ),
+    ),
+  );
+
+  // Best effort, so a cleanup failure never hides why the upgrade failed.
+  const removeCopiedTag = Effect.suspend(() => {
+    const tag = copiedTag;
+    if (tag === undefined || recordedImageTags(original.cloudflare).includes(tag)) {
+      return Effect.void;
+    }
+    return otherReceiptTags.pipe(
+      Effect.flatMap((protectedTags) => platform.prune(original, tag, protectedTags)),
+      Effect.ignore,
+    );
+  });
 
   const operation = Effect.gen(function* () {
     if (
@@ -85,6 +110,7 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
     }
 
     const target = yield* targetFor(original, input);
+    if (input.operation === "upgrade") copiedTag = target.tag;
     const desiredVersions = {
       current: target.version,
       previous: original.versions.current,
@@ -106,13 +132,7 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
     yield* platform.activate(desired, target.version);
 
     if (input.operation === "upgrade" && original.cloudflare.tags.previous !== null) {
-      const protectedTags = new Set(
-        (yield* receipts
-          .list()
-          .pipe(Effect.mapError(orStepError("receipt_store", "Could not inspect image ownership"))))
-          .filter((receipt) => receipt.id !== original.id)
-          .flatMap((receipt) => recordedImageTags(receipt.cloudflare)),
-      );
+      const protectedTags = yield* otherReceiptTags;
       yield* platform.prune(desired, original.cloudflare.tags.previous, protectedTags);
     }
 
@@ -135,14 +155,17 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
           cloudflare: original.cloudflare,
         });
         if (!drained || original.versions.current === null) {
-          return restoreReceipt.pipe(Effect.andThen(Effect.failCause(cause)));
+          return restoreReceipt.pipe(
+            Effect.andThen(removeCopiedTag),
+            Effect.andThen(Effect.failCause(cause)),
+          );
         }
         const rollback = platform
           .activate(original, original.versions.current)
           .pipe(Effect.andThen(platform.resume(original)), Effect.andThen(restoreReceipt));
         return rollback.pipe(
           Effect.matchEffect({
-            onSuccess: () => Effect.failCause(cause),
+            onSuccess: () => removeCopiedTag.pipe(Effect.andThen(Effect.failCause(cause))),
             onFailure: (rollbackCause) =>
               Effect.fail(
                 new UpgradeRollbackError({

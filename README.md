@@ -1,7 +1,7 @@
 <h1 align="center">Jitney</h1>
 
 <p align="center">
-  <strong>Ephemeral GitHub Actions runners on Cloudflare Containers.</strong>
+  <strong>GitHub Actions runners on Cloudflare Containers, one per job.</strong>
 </p>
 
 <p align="center">
@@ -10,10 +10,8 @@
   <a href="worker/package.json"><img alt="Node version" src="https://img.shields.io/badge/node-%E2%89%A524-brightgreen"></a>
 </p>
 
-Jitney runs GitHub Actions jobs on containers in your own Cloudflare account.
-When a job with `runs-on: jitney` is queued, Jitney starts a fresh container
-and registers it as a runner for that one job. When the job ends, the
-container goes away. Nothing sits idle between builds.
+Jitney runs your GitHub Actions jobs on containers in your own Cloudflare
+account. Point a job at it with `runs-on: jitney`:
 
 ```yaml
 jobs:
@@ -24,29 +22,31 @@ jobs:
       - run: echo "running on a throwaway Cloudflare container"
 ```
 
-## What you get
+When that job is queued, Jitney starts a container, registers it as a runner
+for that one job, and throws it away when the job ends. Nothing runs between
+builds, so you pay for the minutes your jobs actually use. The next job never
+sees what the last one left on disk.
 
-- Every job runs in a new container with a single-use runner registration. The
-  runner never sees the GitHub App's credentials or webhook secret.
-- Jitney asks GitHub for queued jobs every five minutes, so a lost webhook
-  doesn't strand a job. If the webhook that reports a finished job is lost,
-  Jitney reads the result from GitHub.
-- A finished runner frees its slot within 30 seconds. Runners that never get a
-  job stop after five minutes, and jobs stop at the time limit.
+Each runner gets a registration that works once, for one repository. The
+GitHub App's private key and webhook secret stay in the Worker and never reach
+a runner.
 
-## What you don't get (yet)
+## Limits
 
-- Docker doesn't work inside jobs. The image has the Docker client but no
-  daemon, so `docker build`, service containers, and container actions fail.
-- Jitney only accepts jobs from private repositories.
-- There's no hosted version. Jitney runs in your Cloudflare account.
+Docker doesn't work inside jobs. The image has the Docker client but no
+daemon, so `docker build`, service containers, and container actions fail.
+
+Jitney only takes jobs from private repositories. A public repository lets
+anyone open a pull request that runs code on your machines, and Jitney doesn't
+guard against that yet.
 
 ## Requirements
 
-- A Cloudflare account on [Workers Paid](https://developers.cloudflare.com/durable-objects/platform/pricing/),
-  which includes Durable Objects and Containers
-- A GitHub account or organization where you can create a GitHub App
-- Node.js 24 or newer on macOS or Linux, Intel or ARM64
+You need a Cloudflare account on
+[Workers Paid](https://developers.cloudflare.com/durable-objects/platform/pricing/),
+which includes Durable Objects and Containers, and a GitHub account or
+organization where you can create a GitHub App. The CLI runs on Node.js 24 or
+newer, on macOS or Linux.
 
 ## Setup
 
@@ -55,75 +55,84 @@ npx get-jitney deploy
 ```
 
 The CLI opens a browser to sign in to Cloudflare if it needs to. Before it
-creates anything, it writes a receipt, a record in your Cloudflare account of
-what this deployment owns. Then it copies the runner image and creates the
-Worker, container application, and Durable Objects. You don't need Docker.
+creates anything, it writes a receipt: a record in your Cloudflare account of
+everything this deployment owns. Every later command works from that receipt.
+Then it copies the runner image and creates the Worker, the container
+application, and the Durable Objects. You don't need Docker on your machine.
 
-Next, GitHub opens so you can create and install the App. Its ID, private key,
-and webhook secret go straight into Worker secrets. Nothing is saved in your
-project. If setup fails, Jitney removes what it created. Pass `--keep-partial`
-to keep it for debugging.
+GitHub opens next, so you can create the App and pick the repositories it may
+use. The App's credentials go straight into Worker secrets and are never
+written to your project. If anything fails along the way, the CLI removes what
+it created. Pass `--keep-partial` if you want to look at the wreckage first.
 
-To have an organization own the GitHub App instead of your personal account:
+If an organization should own the App instead of your personal account:
 
 ```bash
 npx get-jitney deploy --organization YOUR_ORG
 ```
 
-Then add `runs-on: jitney` to a workflow in one of the repositories you
-selected and push. A runner usually starts within ten seconds. Jitney won't
-take over a repository that another deployment already uses.
+Then push a workflow with `runs-on: jitney` to one of those repositories. A
+runner usually starts within ten seconds.
 
 To run the CLI without a browser, for example in CI, set
 `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The token needs edit
 access to Workers Scripts, Containers, and Workers KV Storage.
 
-## Manage a deployment
+## Running it
 
-Each command takes the deployment's name. That's the Worker name, `jitney` by
-default.
+Each command takes the deployment's name, which is the Worker name. That's
+`jitney` unless you passed `--name` to `deploy`.
 
-```bash
-npx get-jitney list                     # compare receipts with what's live
-npx get-jitney@<version> upgrade jitney # move to that CLI version
-npx get-jitney rollback jitney          # go back to the version before
-npx get-jitney repair jitney            # fix drift from the receipt
-npx get-jitney adopt jitney             # record a receipt for an older deployment
-npx get-jitney destroy jitney           # remove it all
-```
+`npx get-jitney list` compares each receipt with what's actually in Cloudflare
+and GitHub. It reports missing resources, settings that changed behind its
+back, and leftovers that no receipt owns. Add `--json` for scripts.
 
-`list` reports missing resources, changed settings, and leftovers no receipt
-owns. Add `--json` for a machine-readable report.
+`npx get-jitney@<version> upgrade jitney` moves a deployment to that CLI
+version. It stops taking new jobs, waits for running ones to finish, deploys,
+and checks the new version's health. If the check fails, it switches back.
+`npx get-jitney rollback jitney` returns to the version you had before.
 
-`upgrade` waits for running jobs to finish first. If the new version fails its
-health check, Jitney switches back to the old one.
+`npx get-jitney repair jitney` is for when something went wrong, such as a
+command killed halfway that left the deployment locked. It shows what it would
+change and asks first. `--yes` skips the question.
 
-`repair` shows its plan and asks before it changes anything. It handles cases
-like a lock left behind by an interrupted command. Pass `--yes` to skip the
-question.
+`npx get-jitney adopt jitney` writes a receipt for a deployment made before
+receipts existed. It keeps the Worker, the GitHub App, and the job history.
 
-`destroy` checks afterwards that nothing is left. `--dry-run` shows what it
-would remove, and `--now` doesn't wait for running jobs.
+`npx get-jitney destroy jitney` removes the deployment and then checks that
+nothing is left. Try `--dry-run` first.
 
-## Deployment defaults
+## When things go wrong
 
-| Setting | Default | Meaning |
-| --- | --- | --- |
-| Job timeout | 1 hour | Jobs that run longer are stopped |
-| Maximum instances | 5 | Runner containers at once |
-| Instance type | `standard-2` | 1 vCPU, 6 GiB memory, 12 GB disk |
+GitHub's webhooks are reliable, but not perfectly. Jitney assumes some will
+get lost.
+
+Every five minutes it asks GitHub for queued jobs, so a job whose webhook never
+arrived still gets a runner. If the webhook that reports a finished job goes
+missing, Jitney asks GitHub how the job ended rather than guessing. Every 30
+seconds it checks that each runner's container is still up, so a finished
+runner gives its slot to the next job right away.
+
+A runner that no job claims within five minutes is removed. A job that runs
+past the time limit is stopped.
+
+## Defaults
+
+| Setting | Default |
+| --- | --- |
+| Job time limit | 1 hour |
+| Runner containers at once | 5 |
+| Container size | `standard-2`: 1 vCPU, 6 GiB memory, 12 GB disk |
 
 ## How it works
 
-A Worker checks each webhook's signature and passes the event to the
-Scheduler, a Durable Object that keeps every job's state in SQLite. For each
-job the Scheduler creates a runner registration limited to one repository and
-starts a container. A runner has five minutes to get a job and an hour to
-finish it. Every 30 seconds the Scheduler checks that each runner's container
-is still up. A job's result always comes from GitHub, through its webhook or,
-when that's lost, by asking.
+A Worker receives GitHub's webhooks, checks their signatures, and hands each
+event to the Scheduler. The Scheduler is a Durable Object that keeps every
+job's state in SQLite. For each job it creates the one-time runner
+registration and starts a container through another Durable Object. Inside
+the container, a small Go supervisor runs GitHub's runner and exits with it.
 
-[CONTEXT.md](CONTEXT.md) explains the design, and
+[CONTEXT.md](CONTEXT.md) has the full design and its vocabulary.
 [.agents/operations/](.agents/operations/) has notes from live tests.
 
 ## Development
@@ -136,13 +145,9 @@ task test:race      # supervisor tests with the race detector
 pnpm e2e <check>    # live checks against a deployment, see e2e/README.md
 ```
 
-| Directory | Contents |
-| --- | --- |
-| `cli/` | `get-jitney`, the command-line tool |
-| `worker/` | The Worker, the Scheduler, and the Durable Object behind each runner |
-| `shared/` | The contract between the CLI and the Worker |
-| `runner/` | The runner container image |
-| `supervisor/` | The Go process that runs the GitHub runner inside the container |
-| `e2e/` | Live checks against a test deployment |
+`cli/` is `get-jitney`. `worker/` is the Worker and both Durable Objects.
+`shared/` holds the few types and functions the CLI and Worker must agree on.
+`runner/` builds the container image, and `supervisor/` is the Go process
+inside it. `e2e/` runs live checks against a test deployment.
 
 Engineering conventions are in [.agents/engineering.md](.agents/engineering.md).

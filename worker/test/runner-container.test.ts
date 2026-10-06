@@ -82,5 +82,4 @@ describe("Runner Container start", () => {
 
     expect(state).toMatchObject({ starts: 0, arms: 1 });
   });
-
 });

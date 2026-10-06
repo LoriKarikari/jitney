@@ -1,48 +1,78 @@
 import { Effect } from "effect";
 import { expect, it } from "vitest";
-import { cancel, dispatch, job, record, selfHostedRunners, tailWorker } from "./src/fixture.js";
+import {
+  cancel,
+  dispatch,
+  job,
+  poll,
+  record,
+  selfHostedRunners,
+  tailWorker,
+} from "./src/fixture.js";
 
 it("stops a runner no job claims at the assignment deadline", async () => {
-  const { jobId, events, exceptions, runnersLeft } = await Effect.runPromise(
+  const evidence = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const tail = yield* tailWorker;
-        const dispatchedAt = Date.now();
-        const run = yield* dispatch("long-job.yml", `e2e-unclaimed-${dispatchedAt}`, {
+        const run = yield* dispatch("long-job.yml", `e2e-unclaimed-${Date.now()}`, {
           seconds: "600",
         });
-        // Cancel before the new runner can claim the job.
-        yield* Effect.sleep(Math.max(0, dispatchedAt + 6_000 - Date.now()));
+        const { id: jobId } = yield* job(run);
+        const ourEvents = () =>
+          tail
+            .events()
+            .filter((event) => "workflowJobId" in event && event.workflowJobId === jobId);
+        // Cancel the moment the Worker accepts the job, before its runner can start and claim it.
+        yield* poll(
+          "Worker accepts the job",
+          Effect.sync(() =>
+            ourEvents().find(
+              (event) => event.event === "scheduler_transition" && event.outcome === "accepted",
+            ),
+          ),
+          "200 millis",
+          300,
+        );
         yield* cancel(run);
-        const cancelled = yield* job(run);
-        yield* Effect.sleep("6 minutes");
+        const expired = yield* poll(
+          "attempt expires",
+          Effect.sync(() => ourEvents().find((event) => event.event === "runner_attempt_expired")),
+          "10 seconds",
+          45,
+        ).pipe(Effect.option);
+        yield* Effect.sleep("30 seconds");
         return {
-          jobId: cancelled.id,
-          events: tail.events(),
-          exceptions: tail.exceptions(),
+          jobId,
+          expired,
+          claimed: ourEvents().some(
+            (event) => event.event === "webhook_classified" && event.action === "in_progress",
+          ),
           runnersLeft: yield* selfHostedRunners,
+          events: ourEvents(),
+          exceptions: tail.exceptions(),
+          stream: tail.stream(),
         };
       }),
     ),
   );
+  const { expired, claimed, runnersLeft } = evidence;
 
   const checks = record(
     "unclaimed-runner",
     {
-      expiredAtAssignmentDeadline: events.some(
-        (event) =>
-          event.event === "runner_attempt_expired" &&
-          event.workflowJobId === jobId &&
-          event.stopReason === "assignment_deadline",
-      ),
+      runnerNeverClaimedTheJob: !claimed,
+      expiredAtAssignmentDeadline:
+        expired._tag === "Some" &&
+        expired.value.event === "runner_attempt_expired" &&
+        expired.value.stopReason === "assignment_deadline",
       noRunnerLeft: runnersLeft.length === 0,
     },
-    {
-      job: jobId,
-      runnersLeft,
-      exceptions,
-      events: events.filter((event) => "workflowJobId" in event && event.workflowJobId === jobId),
-    },
+    evidence,
   );
-  expect(checks).toEqual({ expiredAtAssignmentDeadline: true, noRunnerLeft: true });
+  expect(checks).toEqual({
+    runnerNeverClaimedTheJob: true,
+    expiredAtAssignmentDeadline: true,
+    noRunnerLeft: true,
+  });
 });

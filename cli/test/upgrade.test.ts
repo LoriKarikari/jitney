@@ -72,7 +72,13 @@ async function memoryBackend(receipt: DeploymentReceipt) {
   };
 }
 
-async function fakePlatform(options?: { failTarget?: boolean; failRollback?: boolean }) {
+async function fakePlatform(options?: {
+  failTarget?: boolean;
+  failRollback?: boolean;
+  failDrain?: boolean;
+  failPrune?: boolean;
+  copiedTag?: string;
+}) {
   const calls = await Effect.runPromise(Ref.make<string[]>([]));
   const call = (event: string) => Ref.update(calls, (current) => [...current, event]);
   const activate = (version: string) =>
@@ -90,11 +96,27 @@ async function fakePlatform(options?: { failTarget?: boolean; failRollback?: boo
     calls,
     service: UpgradePlatform.of({
       prepare: (_receipt, operation: VersionChangeOperation, version, existingTag) =>
-        call(`prepare:${operation}:${version}`).pipe(Effect.as(existingTag ?? "target-tag")),
-      drain: () => call("drain"),
+        call(`prepare:${operation}:${version}`).pipe(
+          Effect.as(existingTag ?? options?.copiedTag ?? "target-tag"),
+        ),
+      drain: () =>
+        call("drain").pipe(
+          Effect.andThen(
+            options?.failDrain === true
+              ? Effect.fail(new InstallerError({ step: "upgrade", message: "drain timed out" }))
+              : Effect.void,
+          ),
+        ),
       activate: (_receipt, version) => activate(version),
       resume: () => call("resume"),
-      prune: (_receipt, tag) => call(`prune:${tag}`),
+      prune: (_receipt, tag) =>
+        call(`prune:${tag}`).pipe(
+          Effect.andThen(
+            options?.failPrune === true
+              ? Effect.fail(new InstallerError({ step: "registry_cleanup", message: "no" }))
+              : Effect.void,
+          ),
+        ),
     }),
   };
 }
@@ -170,6 +192,7 @@ describe("deployment version changes", () => {
       "activate:0.4.0",
       "activate:0.3.0",
       "resume",
+      "prune:target-tag",
     ]);
     expect(await backend.receipt()).toMatchObject({
       phase: "active",
@@ -211,6 +234,42 @@ describe("deployment version changes", () => {
       versions: { current: "0.4.0", previous: "0.3.0" },
     });
     expect(await Effect.runPromise(Ref.get(platform.calls))).not.toContain("resume");
+    expect(await Effect.runPromise(Ref.get(platform.calls))).not.toContain("prune:target-tag");
+  });
+
+  it("removes the copied tag when the upgrade fails before draining finishes", async () => {
+    const backend = await memoryBackend(fixtureReceipt());
+    const platform = await fakePlatform({ failDrain: true });
+
+    await expect(run(backend, platform, "upgrade")).rejects.toMatchObject({
+      message: "drain timed out",
+    });
+
+    expect(await Effect.runPromise(Ref.get(platform.calls))).toContain("prune:target-tag");
+    expect(await backend.receipt()).toMatchObject({
+      cloudflare: { tags: { current: "current-tag", previous: "previous-tag" } },
+    });
+  });
+
+  it("keeps a copied tag the deployment still records when the upgrade fails", async () => {
+    const backend = await memoryBackend(fixtureReceipt());
+    const platform = await fakePlatform({ failTarget: true, copiedTag: "previous-tag" });
+
+    await expect(run(backend, platform, "upgrade")).rejects.toBeDefined();
+
+    expect(
+      (await Effect.runPromise(Ref.get(platform.calls))).filter((c) => c.startsWith("prune")),
+    ).toEqual([]);
+  });
+
+  it("returns the upgrade failure even when removing the copied tag fails", async () => {
+    const backend = await memoryBackend(fixtureReceipt());
+    const platform = await fakePlatform({ failTarget: true, failPrune: true });
+
+    await expect(run(backend, platform, "upgrade")).rejects.toMatchObject({
+      message: "0.4.0 is unhealthy",
+    });
+    expect(await Effect.runPromise(Ref.get(platform.calls))).toContain("prune:target-tag");
   });
 
   it("swaps current and previous without pruning during an explicit rollback", async () => {

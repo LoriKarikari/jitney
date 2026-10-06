@@ -35,17 +35,19 @@ const env = (name: string) => {
   if (value === undefined) throw new Error(`${name} is not set. Run through \`pnpm e2e\`.`);
   return value;
 };
-const cloudflareBase = () =>
-  `https://api.cloudflare.com/client/v4/accounts/${env("CLOUDFLARE_ACCOUNT_ID")}/workers/scripts/${workerName}`;
+const accountBase = () =>
+  `https://api.cloudflare.com/client/v4/accounts/${env("CLOUDFLARE_ACCOUNT_ID")}`;
+const cloudflareBase = () => `${accountBase()}/workers/scripts/${workerName}`;
+const authorization = () => ({ Authorization: `Bearer ${env("CLOUDFLARE_API_TOKEN")}` });
 
 const cloudflare = <A>(method: string, path: string, body?: unknown) =>
+  account<A>(method, `workers/scripts/${workerName}/${path}`, body);
+
+const account = <A>(method: string, path: string, body?: unknown) =>
   attempt(`cloudflare ${method} ${path}`, async () => {
-    const response = await fetch(`${cloudflareBase()}/${path}`, {
+    const response = await fetch(`${accountBase()}/${path}`, {
       method,
-      headers: {
-        Authorization: `Bearer ${env("CLOUDFLARE_API_TOKEN")}`,
-        "Content-Type": "application/json",
-      },
+      headers: { ...authorization(), "Content-Type": "application/json" },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     const json = (await response.json()) as { success: boolean; result: A; errors: unknown };
@@ -247,3 +249,43 @@ export const record = <Checks extends Record<string, boolean>>(
   );
   return checks;
 };
+
+type Receipt = { concurrencyBudget?: number; cloudflare: { applicationName: string } };
+
+export const receipt = Effect.gen(function* () {
+  const namespaces = yield* account<{ id: string; title: string }[]>(
+    "GET",
+    "storage/kv/namespaces?per_page=100",
+  );
+  const namespace = namespaces.find((candidate) => candidate.title === "jitney-receipts");
+  if (namespace === undefined) {
+    return yield* new E2eError({ step: "receipt", cause: "no jitney-receipts namespace" });
+  }
+  return yield* attempt("receipt", async () => {
+    const response = await fetch(
+      `${accountBase()}/storage/kv/namespaces/${namespace.id}/values/${workerName}`,
+      { headers: authorization() },
+    );
+    return (await response.json()) as Receipt;
+  });
+});
+
+export const runnerApplication = (name: string) =>
+  account<{ name: string; max_instances: number }[]>("GET", "containers/applications").pipe(
+    Effect.map((applications) => applications.find((application) => application.name === name)),
+  );
+
+// Runs the published CLI at a version, the way a user would.
+export const getJitney = (version: string, args: readonly string[]) =>
+  attempt(`get-jitney ${args.join(" ")}`, async () => {
+    const child = spawn("npx", ["--yes", `get-jitney@${version}`, ...args], {
+      env: { ...process.env, CI: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => (output += chunk));
+    child.stderr.on("data", (chunk: Buffer) => (output += chunk));
+    const code = await new Promise<number | null>((resolve) => child.on("close", resolve));
+    if (code !== 0) throw new Error(`exit ${code}: ${output.slice(-2_000)}`);
+    return output;
+  });

@@ -9,11 +9,9 @@ import * as Layer from "effect/Layer";
 import * as MutableHashMap from "effect/MutableHashMap";
 import * as Path from "effect/Path";
 import { GitHubAppOperations, GitHubAppProvider } from "./github-app.js";
-import { OrasRemoteImages, RegistryImageCopierLive } from "./oras-remote-images.js";
+import { OrasRemoteImages } from "./oras-remote-images.js";
 
-const DockerlessRemoteImages = OrasRemoteImages.pipe(
-  Layer.provide(Layer.merge(DockerLive, RegistryImageCopierLive)),
-);
+const DockerlessRemoteImages = OrasRemoteImages.pipe(Layer.provide(DockerLive));
 
 // Alchemy's selected live Worker and Container providers require this local
 // runtime state even during live deploys, but beta.63 does not export its tag.

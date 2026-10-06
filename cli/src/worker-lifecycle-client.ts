@@ -1,7 +1,7 @@
 import * as Workers from "@distilled.cloud/cloudflare/workers";
 import { Effect, Option, Ref } from "effect";
 import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
-import type { UninstallAction } from "@jitney/shared/uninstall-protocol";
+import type { UninstallAction } from "../../shared/contract.js";
 import { InstallerError, orStepError, type InstallerStep } from "./errors.js";
 import { workerAddress } from "./lifecycle-status-client.js";
 import type { DeploymentReceipt } from "./receipts/schema.js";

@@ -1,9 +1,17 @@
 import { createAppAuth } from "@octokit/auth-app";
 import { Octokit } from "octokit";
 import { Context, Data, Effect, Predicate, Schema } from "effect";
-import { ownershipEnvironmentName } from "@jitney/shared/ownership-marker";
-import { isLiveSecret, UNINSTALL_ACTIONS } from "@jitney/shared/uninstall-protocol";
-import { makeLifecycleGitHub, type LifecycleInstallation } from "./lifecycle-status";
+import {
+  isLiveSecret,
+  ownershipEnvironmentName,
+  UNINSTALL_ACTIONS,
+} from "../../shared/contract.js";
+import {
+  makeLifecycleGitHub,
+  readReceipt,
+  type LifecycleInstallation,
+  type Receipt,
+} from "./lifecycle-status";
 
 export const UninstallAction = Schema.Literals([...UNINSTALL_ACTIONS]);
 
@@ -15,19 +23,6 @@ export interface AppIdentity {
 }
 export type UninstallAction = typeof UninstallAction.Type;
 export const UninstallRequest = Schema.Struct({ action: UninstallAction });
-
-export const UninstallReceipt = Schema.Struct({
-  id: Schema.String,
-  github: Schema.Struct({
-    installations: Schema.Array(
-      Schema.Struct({
-        id: Schema.Number,
-        repositories: Schema.Array(Schema.Struct({ fullName: Schema.String })),
-      }),
-    ),
-  }),
-});
-export type UninstallReceipt = typeof UninstallReceipt.Type;
 
 class UninstallOperationError extends Data.TaggedError("UninstallOperationError")<{
   operation:
@@ -47,7 +42,7 @@ export class UninstallPlatform extends Context.Service<
     readonly suspendInstallations: (ids: readonly number[]) => Effect.Effect<void, unknown>;
     readonly activeAttempts: () => Effect.Effect<number, unknown>;
     readonly deleteOwnership: (
-      installations: UninstallReceipt["github"]["installations"],
+      installations: Receipt["github"]["installations"],
     ) => Effect.Effect<void, unknown>;
     readonly deleteInstallations: (ids: readonly number[]) => Effect.Effect<void, unknown>;
     readonly inventory: () => Effect.Effect<
@@ -176,16 +171,8 @@ export const makeUninstallPlatform = (env: Env): UninstallPlatform["Service"] =>
 };
 
 export const readUninstallReceipt = (env: Env) =>
-  Effect.tryPromise({
-    try: () => env.JITNEY_RECEIPTS.get(env.JITNEY_RECEIPT_NAME, "json"),
-    catch: (cause) => new UninstallOperationError({ operation: "receipt", cause }),
-  }).pipe(
-    Effect.flatMap((value) =>
-      Effect.try({
-        try: () => Schema.decodeUnknownSync(UninstallReceipt)(value),
-        catch: (cause) => new UninstallOperationError({ operation: "receipt", cause }),
-      }),
-    ),
+  readReceipt(env).pipe(
+    Effect.mapError((cause) => new UninstallOperationError({ operation: "receipt", cause })),
   );
 
 export const authorizeUninstall = (request: Request, secret: string): boolean => {
@@ -200,7 +187,7 @@ export const authorizeUninstall = (request: Request, secret: string): boolean =>
 };
 
 export const executeUninstall = Effect.fn("GitHub.executeUninstall")(function* (
-  receipt: UninstallReceipt,
+  receipt: Receipt,
   deploymentId: string,
   action: UninstallAction,
 ) {

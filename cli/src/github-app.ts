@@ -107,18 +107,12 @@ export function openGitHubAppDeletionFor(
   ).pipe(Effect.asVoid);
 }
 
-export function openGitHubAppDeletion(
-  credentials: GitHubAppCredentials,
-): Effect.Effect<void, InstallerError> {
-  return openGitHubAppDeletionFor(credentials, "rollback");
-}
-
 export function waitForGitHubAppDeletionFor(
   app: GitHubAppIdentity,
   step: "rollback" | "destroy",
 ): Effect.Effect<void, InstallerError, HttpClient.HttpClient> {
   const pending = new InstallerError({
-    step: "rollback",
+    step,
     message: `GitHub App ${app.slug} still exists`,
   });
   const check = Effect.gen(function* () {
@@ -138,12 +132,6 @@ export function waitForGitHubAppDeletionFor(
   return check.pipe(
     Effect.retry(Schedule.max([Schedule.spaced("5 seconds"), Schedule.recurs(119)])),
   );
-}
-
-export function waitForGitHubAppDeletion(
-  credentials: GitHubAppCredentials,
-): Effect.Effect<void, InstallerError, HttpClient.HttpClient> {
-  return waitForGitHubAppDeletionFor(credentials, "rollback");
 }
 
 export async function listenForManifestCode(

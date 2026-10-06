@@ -21,9 +21,9 @@ import { workerBundlePath } from "./config.js";
 import { InstallerError } from "./errors.js";
 import {
   createGitHubApp,
-  openGitHubAppDeletion,
+  openGitHubAppDeletionFor,
   openInstallation,
-  waitForGitHubAppDeletion,
+  waitForGitHubAppDeletionFor,
   type GitHubAppCredentials,
 } from "./github-app.js";
 import {
@@ -31,7 +31,7 @@ import {
   releaseGitHubRepositories,
   waitForGitHubInstallations,
 } from "./github-installations.js";
-import { mintOperationSecret } from "@jitney/shared/uninstall-protocol";
+import { mintOperationSecret } from "../../shared/contract.js";
 import { InstallPlatform, type InstallInput, type InstallStackOutput } from "./install.js";
 import { deleteRunnerImageTag } from "./runner-image-registry.js";
 
@@ -300,8 +300,8 @@ export const makeInstallPlatform = Effect.fn(function* (
               `Delete the partial GitHub App ${credentials.slug} in the browser to finish rollback.`,
             ),
           );
-          yield* openGitHubAppDeletion(credentials);
-          yield* waitForGitHubAppDeletion(credentials).pipe(
+          yield* openGitHubAppDeletionFor(credentials, "rollback");
+          yield* waitForGitHubAppDeletionFor(credentials, "rollback").pipe(
             Effect.provideService(HttpClient.HttpClient, httpClient),
           );
         }

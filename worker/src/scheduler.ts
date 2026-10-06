@@ -1,20 +1,8 @@
-import { drizzle } from "drizzle-orm/durable-sqlite";
-import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
-import migrations from "../drizzle/migrations";
 import type { QueuedJobCandidate, WorkflowEvent } from "./domain";
-import {
-  SchedulerLifecycle,
-  type AcceptResult,
-  type AssignmentSnapshot,
-  type AttemptSnapshot,
-  type JobSnapshot,
-} from "./lifecycle";
+import { SchedulerLifecycle, type AcceptResult } from "./lifecycle";
 import { createRunnerAttemptOperations } from "./runner-attempt-operations";
-import { assignments, attempts, deliveries, jobs, pending } from "./schema";
-
-export type { AcceptResult, AssignmentSnapshot, AttemptSnapshot, JobSnapshot } from "./lifecycle";
 
 const intakeSuspendedKey = "jitney:intake-suspended";
 
@@ -24,9 +12,6 @@ export class Scheduler extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    const db = drizzle(ctx.storage, {
-      schema: { deliveries, jobs, attempts, assignments, pending },
-    });
     this.#lifecycle = new SchedulerLifecycle(
       ctx.storage,
       env.CF_VERSION_METADATA.id,
@@ -34,7 +19,7 @@ export class Scheduler extends DurableObject<Env> {
       Number(env.SCHEDULER_TICK_MS) || undefined,
     );
     void ctx.blockConcurrencyWhile(async () => {
-      await migrate(db, migrations);
+      await this.#lifecycle.migrate();
       this.#intakeSuspended = (await ctx.storage.get<boolean>(intakeSuspendedKey)) ?? false;
     });
   }
@@ -67,18 +52,6 @@ export class Scheduler extends DurableObject<Env> {
 
   activeAttemptCount(): number {
     return this.#lifecycle.activeAttemptCount();
-  }
-
-  getJob(workflowJobId: number): JobSnapshot | undefined {
-    return this.#lifecycle.getJob(workflowJobId);
-  }
-
-  getAttempts(workflowJobId: number): AttemptSnapshot[] {
-    return this.#lifecycle.getAttempts(workflowJobId);
-  }
-
-  getAssignment(workflowJobId: number): AssignmentSnapshot | undefined {
-    return this.#lifecycle.getAssignment(workflowJobId);
   }
 
   override alarm(): Promise<void> {

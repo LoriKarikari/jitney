@@ -1,6 +1,8 @@
 {
   "$schema": "./node_modules/knip/schema.json",
-  "ignoreBinaries": ["varlock"],
+  "ignoreBinaries": [
+    "varlock"
+  ],
   "workspaces": {
     "cli": {
       "entry": [
@@ -29,9 +31,10 @@
         "cloudflare"
       ]
     },
-    "shared": {
+    ".": {
+      "entry": [],
       "project": [
-        "**/*.ts"
+        "shared/**/*.ts"
       ]
     }
   }

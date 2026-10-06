@@ -53,7 +53,6 @@
     "ulid": "3.0.2"
   },
   "devDependencies": {
-    "@jitney/shared": "workspace:*",
     "@types/node": "catalog:",
     "tsup": "^8.5.1",
     "typescript": "catalog:",

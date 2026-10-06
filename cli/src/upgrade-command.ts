@@ -12,6 +12,7 @@ import {
 export const upgradeCommand = (input: {
   readonly name: string;
   readonly operation: VersionChangeOperation;
+  readonly concurrencyBudget?: number;
 }) =>
   runLifecycleCommand(
     "upgrade",
@@ -25,6 +26,9 @@ export const upgradeCommand = (input: {
           actor,
           operation: input.operation,
           ...(input.operation === "upgrade" ? { targetVersion: version } : {}),
+          ...(input.concurrencyBudget === undefined
+            ? {}
+            : { concurrencyBudget: input.concurrencyBudget }),
         }).pipe(
           Effect.provideService(DeploymentReceipts, receipts),
           Effect.provideService(UpgradePlatform, platform),
@@ -32,7 +36,7 @@ export const upgradeCommand = (input: {
         yield* Effect.sync(() =>
           console.log(
             input.operation === "upgrade"
-              ? `${input.name} is now ${receipt.versions.current}.`
+              ? `${input.name} is now ${receipt.versions.current} with a budget of ${receipt.concurrencyBudget} vCPUs.`
               : `${input.name} rolled back to ${receipt.versions.current}.`,
           ),
         );

@@ -11,6 +11,7 @@ export interface VersionChangeInput {
   readonly actor: string;
   readonly operation: VersionChangeOperation;
   readonly targetVersion?: string;
+  readonly concurrencyBudget?: number;
 }
 
 interface PreparedVersion {
@@ -100,13 +101,24 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
     );
   });
 
+  const concurrencyBudget = input.concurrencyBudget ?? original.concurrencyBudget;
+
   const operation = Effect.gen(function* () {
     if (
       input.operation === "upgrade" &&
       input.targetVersion !== undefined &&
       input.targetVersion === original.versions.current
     ) {
-      return yield* held.finish({ phase: "active", outcome: "succeeded" });
+      if (concurrencyBudget === original.concurrencyBudget) {
+        return yield* held.finish({ phase: "active", outcome: "succeeded" });
+      }
+      // Same version, so the images and their rotation stay as they are.
+      const desired = yield* held.record(() => ({ concurrencyBudget }));
+      yield* platform.drain(desired);
+      drained = true;
+      yield* platform.activate(desired, input.targetVersion);
+      yield* platform.resume(desired);
+      return yield* held.finish({ phase: "active", outcome: "succeeded", concurrencyBudget });
     }
 
     const target = yield* targetFor(original, input);
@@ -125,6 +137,7 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
     const desired = yield* held.record(() => ({
       versions: desiredVersions,
       cloudflare: desiredCloudflare,
+      concurrencyBudget,
     }));
 
     yield* platform.drain(desired);
@@ -142,6 +155,7 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
       outcome: "succeeded",
       versions: desiredVersions,
       cloudflare: desiredCloudflare,
+      concurrencyBudget,
     });
   });
 
@@ -153,6 +167,7 @@ export const changeDeploymentVersion = Effect.fn(function* (input: VersionChange
           outcome: "failed",
           versions: original.versions,
           cloudflare: original.cloudflare,
+          concurrencyBudget: original.concurrencyBudget,
         });
         if (!drained || original.versions.current === null) {
           return restoreReceipt.pipe(

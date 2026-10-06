@@ -12,3 +12,11 @@ export function validateWorkerName(name: string): string {
   }
   return name;
 }
+
+export function parseConcurrencyBudget(value: string): number {
+  const budget = Number(value);
+  if (value.trim() === "" || !Number.isInteger(budget) || budget < 1) {
+    throw new Error("--budget must be a whole number of vCPUs, at least 1");
+  }
+  return budget;
+}

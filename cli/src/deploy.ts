@@ -29,6 +29,7 @@ export function deploy(options: {
   workerName: string;
   organization?: string;
   keepPartial?: boolean;
+  concurrencyBudget?: number;
 }): Effect.Effect<void, InstallFailure> {
   return Effect.gen(function* () {
     const name = yield* trySync("argument_parsing", "The Worker name is invalid", () =>
@@ -85,6 +86,9 @@ export function deploy(options: {
       actor,
       ...(options.organization === undefined ? {} : { organization: options.organization }),
       ...(options.keepPartial === undefined ? {} : { keepPartial: options.keepPartial }),
+      ...(options.concurrencyBudget === undefined
+        ? {}
+        : { concurrencyBudget: options.concurrencyBudget }),
     }).pipe(
       Effect.provideService(DeploymentReceipts, receipts),
       Effect.provideService(InstallPlatform, platform),

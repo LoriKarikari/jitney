@@ -1,6 +1,8 @@
 import { DateTime, Effect, Schema } from "effect";
 import { ulid } from "ulid";
 
+export const DEFAULT_CONCURRENCY_BUDGET = 20;
+
 const DeploymentId = Schema.String.check(Schema.isPattern(/^[0-9A-HJKMNP-TV-Z]{26}$/));
 
 export const DeploymentPhase = Schema.Literals([
@@ -98,6 +100,9 @@ export const DeploymentReceiptSchema = Schema.Struct({
   autoUpgrade: AutoUpgrade,
   history: Schema.Array(ReceiptHistoryEntry).check(Schema.isMaxLength(20)),
   residue: Schema.Array(DestroyResidue).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+  concurrencyBudget: Schema.Int.check(Schema.isGreaterThan(0)).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(DEFAULT_CONCURRENCY_BUDGET)),
+  ),
 });
 
 export type DeploymentReceipt = typeof DeploymentReceiptSchema.Type;
@@ -114,6 +119,7 @@ export type NewDeploymentReceipt = Pick<
 > & {
   readonly version: string;
   readonly now: DateTime.Utc;
+  readonly concurrencyBudget?: number;
 };
 
 /** The image tags this receipt keeps alive: current and previous, when set. */
@@ -143,7 +149,7 @@ export function recordedRepositories(
 }
 
 export function createDeploymentReceipt(input: NewDeploymentReceipt): DeploymentReceipt {
-  const { now, version, ...resources } = input;
+  const { now, version, concurrencyBudget, ...resources } = input;
   return {
     schemaVersion: 1,
     ...resources,
@@ -154,6 +160,7 @@ export function createDeploymentReceipt(input: NewDeploymentReceipt): Deployment
     versions: { current: version, previous: null },
     history: [],
     residue: [],
+    concurrencyBudget: concurrencyBudget ?? DEFAULT_CONCURRENCY_BUDGET,
   };
 }
 

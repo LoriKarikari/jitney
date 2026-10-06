@@ -103,6 +103,9 @@ export const makeInstallPlatform = Effect.fn(function* (
         workerName: input.name,
         workerBundlePath: workerBundlePath(),
         version: input.version,
+        ...(input.concurrencyBudget === undefined
+          ? {}
+          : { concurrencyBudget: input.concurrencyBudget }),
         manageGitHubApp: credentials !== undefined,
         uninstallSecret,
         ...(input.organization === undefined ? {} : { organization: input.organization }),

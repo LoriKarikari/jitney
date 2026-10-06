@@ -12,6 +12,7 @@ import {
   runnerApplicationName,
 } from "../cloudflare-inventory.js";
 import { RECEIPT_NAMESPACE_TITLE } from "../receipts/cloudflare.js";
+import { DEFAULT_CONCURRENCY_BUDGET } from "../receipts/schema.js";
 import { GitHubApp, type GitHubAppResource } from "./github-app.js";
 
 export interface JitneyStackInput {
@@ -19,6 +20,8 @@ export interface JitneyStackInput {
   workerName: string;
   workerBundlePath: string;
   version: string;
+  /** vCPUs the Deployment's runners may use at once. Each runner counts as 1. */
+  concurrencyBudget?: number;
   organization?: string;
   manageGitHubApp?: boolean;
   githubConfigured?: boolean;
@@ -58,7 +61,7 @@ export function jitneyStack(
         name: runnerApplicationName(input.workerName),
         image: `ghcr.io/lorikarikari/jitney:${input.version}`,
         instances: 0,
-        maxInstances: 5,
+        maxInstances: input.concurrencyBudget ?? DEFAULT_CONCURRENCY_BUDGET,
         instanceType: "standard-2",
       } satisfies Cloudflare.Containers.RemoteContainerProps;
       const adoptExisting = adopt(input.adoptExisting === true);
@@ -96,6 +99,7 @@ export function jitneyStack(
           JITNEY_VERSION: input.version,
           CF_VERSION_METADATA: Cloudflare.Workers.VersionMetadata(),
           RUNTIME_TIMEOUT_MS: "3600000",
+          CONCURRENCY_BUDGET: String(input.concurrencyBudget ?? DEFAULT_CONCURRENCY_BUDGET),
           SCHEDULER_TICK_MS: "1000",
           JITNEY_UNINSTALL_SECRET: input.uninstallSecret,
           ...(input.githubCredentials === undefined

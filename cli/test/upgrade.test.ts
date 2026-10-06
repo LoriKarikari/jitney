@@ -77,15 +77,19 @@ async function fakePlatform(options?: {
   failRollback?: boolean;
   failDrain?: boolean;
   failPrune?: boolean;
+  failBudget?: number;
   copiedTag?: string;
 }) {
   const calls = await Effect.runPromise(Ref.make<string[]>([]));
+  const budgets = await Effect.runPromise(Ref.make<number[]>([]));
   const call = (event: string) => Ref.update(calls, (current) => [...current, event]);
-  const activate = (version: string) =>
+  const activate = (version: string, budget: number) =>
     call(`activate:${version}`).pipe(
+      Effect.andThen(Ref.update(budgets, (current) => [...current, budget])),
       Effect.andThen(
         (version === "0.4.0" && options?.failTarget === true) ||
-          (version === "0.3.0" && options?.failRollback === true)
+          (version === "0.3.0" && options?.failRollback === true) ||
+          budget === options?.failBudget
           ? Effect.fail(
               new InstallerError({ step: "health_check", message: `${version} is unhealthy` }),
             )
@@ -94,6 +98,7 @@ async function fakePlatform(options?: {
     );
   return {
     calls,
+    budgets,
     service: UpgradePlatform.of({
       prepare: (_receipt, operation: VersionChangeOperation, version, existingTag) =>
         call(`prepare:${operation}:${version}`).pipe(
@@ -107,7 +112,7 @@ async function fakePlatform(options?: {
               : Effect.void,
           ),
         ),
-      activate: (_receipt, version) => activate(version),
+      activate: (receipt, version) => activate(version, receipt.concurrencyBudget),
       resume: () => call("resume"),
       prune: (_receipt, tag) =>
         call(`prune:${tag}`).pipe(
@@ -125,13 +130,17 @@ const run = async (
   backend: Awaited<ReturnType<typeof memoryBackend>>,
   platform: Awaited<ReturnType<typeof fakePlatform>>,
   operation: VersionChangeOperation,
+  change: { targetVersion?: string; concurrencyBudget?: number } = {},
 ) =>
   Effect.runPromise(
     changeDeploymentVersion({
       name: "jitney",
       actor: "lori@mbp",
       operation,
-      ...(operation === "upgrade" ? { targetVersion: "0.4.0" } : {}),
+      ...(operation === "upgrade" ? { targetVersion: change.targetVersion ?? "0.4.0" } : {}),
+      ...(change.concurrencyBudget === undefined
+        ? {}
+        : { concurrencyBudget: change.concurrencyBudget }),
     }).pipe(
       Effect.provideService(
         DeploymentReceipts,
@@ -270,6 +279,50 @@ describe("deployment version changes", () => {
       message: "0.4.0 is unhealthy",
     });
     expect(await Effect.runPromise(Ref.get(platform.calls))).toContain("prune:target-tag");
+  });
+
+  it("changes the Concurrency Budget on the current version without touching its images", async () => {
+    const backend = await memoryBackend(fixtureReceipt());
+    const platform = await fakePlatform();
+
+    const receipt = await run(backend, platform, "upgrade", {
+      targetVersion: "0.3.0",
+      concurrencyBudget: 4,
+    });
+
+    expect(await Effect.runPromise(Ref.get(platform.calls))).toEqual([
+      "drain",
+      "activate:0.3.0",
+      "resume",
+    ]);
+    expect(await Effect.runPromise(Ref.get(platform.budgets))).toEqual([4]);
+    expect(receipt).toMatchObject({
+      concurrencyBudget: 4,
+      versions: { current: "0.3.0", previous: "0.2.0" },
+      cloudflare: { tags: { current: "current-tag", previous: "previous-tag" } },
+    });
+  });
+
+  it("records a new Concurrency Budget along with a new version", async () => {
+    const backend = await memoryBackend(fixtureReceipt());
+    const platform = await fakePlatform();
+
+    const receipt = await run(backend, platform, "upgrade", { concurrencyBudget: 4 });
+
+    expect(await Effect.runPromise(Ref.get(platform.budgets))).toEqual([4]);
+    expect(receipt).toMatchObject({ concurrencyBudget: 4, versions: { current: "0.4.0" } });
+  });
+
+  it("restores the previous Concurrency Budget when the change fails", async () => {
+    const backend = await memoryBackend(fixtureReceipt());
+    const platform = await fakePlatform({ failBudget: 4 });
+
+    await expect(
+      run(backend, platform, "upgrade", { targetVersion: "0.3.0", concurrencyBudget: 4 }),
+    ).rejects.toBeDefined();
+
+    expect(await Effect.runPromise(Ref.get(platform.budgets))).toEqual([4, 20]);
+    expect(await backend.receipt()).toMatchObject({ phase: "active", concurrencyBudget: 20 });
   });
 
   it("swaps current and previous without pruning during an explicit rollback", async () => {

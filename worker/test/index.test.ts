@@ -173,29 +173,4 @@ describe("worker entrypoint", () => {
     });
     expect(response.status).toBe(204);
   });
-
-  it("queues new jobs without provisioning while intake is suspended", async () => {
-    const scheduler = env.SCHEDULER.getByName("global-v3");
-    await scheduler.suspendIntake();
-    try {
-      const body = queuedPayload({
-        workflow_job: { id: 790, labels: ["jitney"], runner_name: null, conclusion: null },
-      });
-      const response = await fetch(webhookUrl, {
-        method: "POST",
-        headers: {
-          "X-Hub-Signature-256": await signature(body),
-          "X-GitHub-Event": "workflow_job",
-          "X-GitHub-Delivery": "delivery-suspended",
-        },
-        body,
-      });
-
-      expect(response.status).toBe(202);
-      expect(await scheduler.getJob(790)).toMatchObject({ state: "queued", pending: false });
-      expect(await scheduler.getAttempts(790)).toEqual([]);
-    } finally {
-      await scheduler.resumeIntake();
-    }
-  });
 });

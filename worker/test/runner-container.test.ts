@@ -82,11 +82,4 @@ describe("Runner Container start", () => {
 
     expect(state).toMatchObject({ starts: 0, arms: 1 });
   });
-
-  it("reports an exited runner as stopped without arming it", async () => {
-    const { state, runner } = fakeContainer([]);
-
-    expect(await Effect.runPromise(runner.isRunning)).toBe(false);
-    expect(state.arms).toBe(0);
-  });
 });

@@ -3,7 +3,15 @@ import { drizzle, type DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlit
 import { migrate } from "drizzle-orm/durable-sqlite/migrator";
 import migrations from "../drizzle/migrations";
 import { Data, Effect, Result } from "effect";
-import { assignments, attempts, conclusionChecks, deliveries, jobs, pending } from "./schema";
+import {
+  assignments,
+  attempts,
+  conclusionChecks,
+  deliveries,
+  jobs,
+  pending,
+  waiting,
+} from "./schema";
 import { isAdmissible, type QueuedJobCandidate, type WorkflowEvent } from "./domain";
 import type {
   JobStatus,
@@ -13,8 +21,9 @@ import type {
 } from "./runner-attempt-operations";
 import { emit } from "./log";
 
-const maxPendingJobs = 10;
-const maxActiveAttempts = 25;
+const defaultConcurrencyBudget = 20;
+// The most Jobs one GitHub job matrix can create.
+const maxWaitingJobs = 256;
 const assignmentTimeout = 5 * 60_000;
 const defaultRuntimeTimeout = 60 * 60_000;
 const defaultSchedulerTick = 1_000;
@@ -34,6 +43,7 @@ export function runnerContainerInactivityTimeoutMs(runtimeTimeout = defaultRunti
 export type AcceptResult = {
   outcome:
     | "accepted"
+    | "waiting"
     | "recorded"
     | "duplicate"
     | "capacity_limited"
@@ -50,6 +60,7 @@ export type JobSnapshot = {
   conclusion: string | null;
   runnerName?: string;
   pending: boolean;
+  waiting: boolean;
 };
 
 export type AttemptSnapshot = {
@@ -85,9 +96,10 @@ export class SchedulerLifecycle {
     private readonly deploymentId?: string,
     private readonly runtimeTimeout = defaultRuntimeTimeout,
     private readonly schedulerTick = defaultSchedulerTick,
+    private readonly concurrencyBudget = defaultConcurrencyBudget,
   ) {
     this.#db = drizzle(storage, {
-      schema: { deliveries, jobs, attempts, assignments, pending, conclusionChecks },
+      schema: { deliveries, jobs, attempts, assignments, pending, conclusionChecks, waiting },
     });
   }
 
@@ -112,7 +124,8 @@ export class SchedulerLifecycle {
       });
 
       this.#emitTransition(event, result);
-      if (event.action === "queued" && result.outcome === "accepted") {
+      const capacityFreed = event.action === "completed" && this.#waitingCount() > 0;
+      if ((event.action === "queued" && result.outcome === "accepted") || capacityFreed) {
         yield* this.#setAlarm(now + this.schedulerTick);
       }
       return result;
@@ -220,24 +233,106 @@ export class SchedulerLifecycle {
   }
 
   #recordDeferred(event: QueuedJobCandidate, now: number): AcceptResult {
-    const viableAttempt = this.#viableAttempt(event.workflowJobId);
+    return this.#queuedDuplicate(event.workflowJobId) ?? this.#enqueue(event, now);
+  }
+
+  #queuedDuplicate(workflowJobId: number): AcceptResult | undefined {
+    const viableAttempt = this.#viableAttempt(workflowJobId);
     if (viableAttempt !== undefined) {
       return { outcome: "duplicate", runnerName: viableAttempt.runnerName };
     }
+    return this.#isWaiting(workflowJobId) ? { outcome: "duplicate" } : undefined;
+  }
+
+  #isWaiting(workflowJobId: number): boolean {
+    return (
+      this.#db
+        .select({ workflowJobId: waiting.workflowJobId })
+        .from(waiting)
+        .where(eq(waiting.workflowJobId, workflowJobId))
+        .all().length > 0
+    );
+  }
+
+  #admitWaiting(
+    operations: RunnerAttemptOperations,
+    now: number,
+  ): Effect.Effect<void, SchedulerStorageError> {
+    return Effect.gen({ self: this }, function* () {
+      while (this.activeAttemptCount() < this.concurrencyBudget) {
+        const next = this.#nextWaiting();
+        if (next === undefined) return;
+        // A waiting Job may have been cancelled or taken by another runner.
+        const status = yield* this.#readJob(operations, { ...next, checkAt: now });
+        yield* this.#transaction(() => {
+          if (!this.#isWaiting(next.workflowJobId)) return;
+          this.#db.delete(waiting).where(eq(waiting.workflowJobId, next.workflowJobId)).run();
+          if (status?.status === "completed" || status?.status === "not_found") {
+            this.#conclude(next.workflowJobId, status.conclusion ?? "unknown", now);
+          } else if (status?.status !== "in_progress") {
+            this.#createAttempt(next, null, now);
+          }
+        });
+      }
+    });
+  }
+
+  // The oldest waiting Job from the repository with the fewest active runners.
+  #nextWaiting() {
+    const active = new Map(
+      this.#db
+        .select({ repositoryId: jobs.repositoryId, count: sql<number>`count(*)` })
+        .from(attempts)
+        .innerJoin(jobs, eq(jobs.workflowJobId, attempts.workflowJobId))
+        .where(inArray(attempts.state, activeAttemptStates))
+        .groupBy(jobs.repositoryId)
+        .all()
+        .map(({ repositoryId, count }) => [repositoryId, count]),
+    );
+    const queue = this.#db.select().from(waiting).orderBy(waiting.queuedAt).all();
+    const load = (row: (typeof queue)[number]) => active.get(row.repositoryId) ?? 0;
+    return queue.reduce<(typeof queue)[number] | undefined>(
+      (best, row) => (best === undefined || load(row) < load(best) ? row : best),
+      undefined,
+    );
+  }
+
+  #enqueue(job: JobTarget, now: number): AcceptResult {
+    if (this.#waitingCount() >= maxWaitingJobs) {
+      this.#recordCapacityLimit(job, now);
+      return { outcome: "capacity_limited" };
+    }
+    const { workflowJobId, installationId, repositoryId, repositoryOwner, repositoryName } = job;
     this.#db
       .insert(jobs)
-      .values({
-        workflowJobId: event.workflowJobId,
-        state: "queued",
-        repositoryId: event.repositoryId,
-        updatedAt: now,
-      })
+      .values({ workflowJobId, state: "queued", repositoryId, updatedAt: now })
       .onConflictDoUpdate({
         target: jobs.workflowJobId,
-        set: { state: "queued", repositoryId: event.repositoryId, updatedAt: now },
+        set: { state: "queued", repositoryId, updatedAt: now },
       })
       .run();
-    return { outcome: "accepted" };
+    this.#db
+      .insert(waiting)
+      .values({
+        workflowJobId,
+        installationId,
+        repositoryId,
+        repositoryOwner,
+        repositoryName,
+        queuedAt: now,
+      })
+      .onConflictDoNothing()
+      .run();
+    return { outcome: "waiting" };
+  }
+
+  #waitingCount(): number {
+    return (
+      this.#db
+        .select({ count: sql<number>`count(*)` })
+        .from(waiting)
+        .all()[0]?.count ?? 0
+    );
   }
 
   #viableAttempt(workflowJobId: number) {
@@ -254,15 +349,12 @@ export class SchedulerLifecycle {
   }
 
   #acceptQueued(event: QueuedJobCandidate, deliveryId: string | null, now: number): AcceptResult {
-    const viableAttempt = this.#viableAttempt(event.workflowJobId);
-    if (viableAttempt !== undefined) {
-      return { outcome: "duplicate", runnerName: viableAttempt.runnerName };
+    const duplicate = this.#queuedDuplicate(event.workflowJobId);
+    if (duplicate !== undefined) return duplicate;
+    // Jobs already waiting go first.
+    if (this.#waitingCount() > 0 || this.activeAttemptCount() >= this.concurrencyBudget) {
+      return this.#enqueue(event, now);
     }
-    if (!this.#hasCapacity()) {
-      this.#recordCapacityLimit(event, now);
-      return { outcome: "capacity_limited" };
-    }
-
     const runnerName = this.#createAttempt(event, deliveryId, now);
     return { outcome: "accepted", runnerName };
   }
@@ -277,16 +369,7 @@ export class SchedulerLifecycle {
     );
   }
 
-  #hasCapacity(): boolean {
-    const pendingCount =
-      this.#db
-        .select({ count: sql<number>`count(*)` })
-        .from(pending)
-        .all()[0]?.count ?? 0;
-    return pendingCount < maxPendingJobs && this.activeAttemptCount() < maxActiveAttempts;
-  }
-
-  #recordCapacityLimit(event: QueuedJobCandidate, now: number): void {
+  #recordCapacityLimit(event: JobTarget, now: number): void {
     const { workflowJobId, repositoryId } = event;
     this.#db
       .insert(jobs)
@@ -298,7 +381,7 @@ export class SchedulerLifecycle {
       .run();
   }
 
-  #createAttempt(event: QueuedJobCandidate, deliveryId: string | null, now: number): string {
+  #createAttempt(event: JobTarget, deliveryId: string | null, now: number): string {
     const { installationId, repositoryId, repositoryOwner, repositoryName, workflowJobId } = event;
     const previousAttempt = this.#db
       .select({ attempt: attempts.attempt })
@@ -459,6 +542,7 @@ export class SchedulerLifecycle {
       repositoryId,
       conclusion,
       pending: pendingRow !== undefined,
+      waiting: this.#isWaiting(workflowJobId),
       ...(runnerName && { runnerName }),
     };
   }
@@ -500,13 +584,15 @@ export class SchedulerLifecycle {
   sweep(
     operations: RunnerAttemptOperations,
     now = Date.now(),
+    { admit = true }: { readonly admit?: boolean } = {},
   ): Effect.Effect<void, SchedulerStorageError> {
     return Effect.gen({ self: this }, function* () {
-      const morePending = yield* this.#drainPending(operations);
       yield* this.#expireUnassignedAttempts(operations, now);
       yield* this.#expireRunningAttempts(operations, now);
       yield* this.#endExitedAttempts(operations, now);
       yield* this.#readConclusions(operations, now);
+      if (admit) yield* this.#admitWaiting(operations, now);
+      const morePending = yield* this.#drainPending(operations);
 
       const wakeAt = morePending ? now + this.schedulerTick : this.#nextWake(now);
       if (wakeAt !== undefined) {
@@ -688,6 +774,7 @@ export class SchedulerLifecycle {
   }
 
   #conclude(workflowJobId: number, conclusion: string | null, now: number): void {
+    this.#db.delete(waiting).where(eq(waiting.workflowJobId, workflowJobId)).run();
     const state =
       conclusion === "cancelled" ? "cancelled" : conclusion === "success" ? "completed" : "failed";
     this.#db
@@ -1032,9 +1119,15 @@ type SchedulerSchema = {
   assignments: typeof assignments;
   pending: typeof pending;
   conclusionChecks: typeof conclusionChecks;
+  waiting: typeof waiting;
 };
 
 type ConclusionCheck = typeof conclusionChecks.$inferSelect;
+
+type JobTarget = Pick<
+  QueuedJobCandidate,
+  "workflowJobId" | "installationId" | "repositoryId" | "repositoryOwner" | "repositoryName"
+>;
 
 type PendingRow = RunnerAttemptRequest & {
   attempt: number;

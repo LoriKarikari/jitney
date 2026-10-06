@@ -89,3 +89,18 @@ export const conclusionChecks = sqliteTable("conclusion_checks", {
   repositoryName: text("repository_name").notNull(),
   checkAt: integer("check_at").notNull(),
 });
+
+export const waiting = sqliteTable(
+  "waiting",
+  {
+    workflowJobId: integer("workflow_job_id")
+      .primaryKey()
+      .references(() => jobs.workflowJobId, { onDelete: "cascade" }),
+    installationId: integer("installation_id").notNull(),
+    repositoryId: integer("repository_id").notNull(),
+    repositoryOwner: text("repository_owner").notNull(),
+    repositoryName: text("repository_name").notNull(),
+    queuedAt: integer("queued_at").notNull(),
+  },
+  (table) => [index("waiting_queued_at_idx").on(table.queuedAt)],
+);

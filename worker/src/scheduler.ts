@@ -17,6 +17,7 @@ export class Scheduler extends DurableObject<Env> {
       env.CF_VERSION_METADATA.id,
       Number(env.RUNTIME_TIMEOUT_MS) || undefined,
       Number(env.SCHEDULER_TICK_MS) || undefined,
+      Number(env.CONCURRENCY_BUDGET) || undefined,
     );
     void ctx.blockConcurrencyWhile(async () => {
       await this.#lifecycle.migrate();
@@ -48,6 +49,7 @@ export class Scheduler extends DurableObject<Env> {
   async resumeIntake(): Promise<void> {
     await this.ctx.storage.delete(intakeSuspendedKey);
     this.#intakeSuspended = false;
+    await this.ctx.storage.setAlarm(Date.now());
   }
 
   activeAttemptCount(): number {
@@ -55,6 +57,10 @@ export class Scheduler extends DurableObject<Env> {
   }
 
   override alarm(): Promise<void> {
-    return Effect.runPromise(this.#lifecycle.sweep(createRunnerAttemptOperations(this.env)));
+    return Effect.runPromise(
+      this.#lifecycle.sweep(createRunnerAttemptOperations(this.env), Date.now(), {
+        admit: !this.#intakeSuspended,
+      }),
+    );
   }
 }

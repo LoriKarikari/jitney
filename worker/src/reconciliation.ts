@@ -39,7 +39,7 @@ export const reconcile: <Error>(
   let ignored = 0;
   for (const candidate of candidates) {
     const { outcome } = yield* submit(candidate);
-    if (outcome === "accepted") submitted++;
+    if (outcome === "accepted" || outcome === "waiting") submitted++;
     else if (outcome === "ignored") ignored++;
     else suppressed++;
   }

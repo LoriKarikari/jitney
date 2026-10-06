@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.0](https://github.com/LoriKarikari/jitney/compare/v0.4.2...v0.5.0) (2026-10-06)
+
+
+### Features
+
+* **worker:** run Runner Containers on the Durable Object Container API ([#178](https://github.com/LoriKarikari/jitney/issues/178)) ([4c47211](https://github.com/LoriKarikari/jitney/commit/4c472118c66d46dfe84e46a513cdb633308e6b4d))
+* **worker:** take a Job's end state only from GitHub ([#181](https://github.com/LoriKarikari/jitney/issues/181)) ([c1fc4cd](https://github.com/LoriKarikari/jitney/commit/c1fc4cdd8bf658863fdc5782f85c4a83761b18c1))
+
+
+### Bug Fixes
+
+* **cli:** remove the image tag a failed upgrade copied ([#187](https://github.com/LoriKarikari/jitney/issues/187)) ([8d53daa](https://github.com/LoriKarikari/jitney/commit/8d53daa2c890d439a531c462e5e166a95a4e366c))
+* **worker:** never report a running runner's start as failed ([#182](https://github.com/LoriKarikari/jitney/issues/182)) ([82f608f](https://github.com/LoriKarikari/jitney/commit/82f608fa88e9ce1bfefcba60053a16580742f270))
+
 ## [0.4.2](https://github.com/LoriKarikari/jitney/compare/v0.4.1...v0.4.2) (2026-10-04)
 
 

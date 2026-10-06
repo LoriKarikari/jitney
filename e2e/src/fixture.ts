@@ -134,8 +134,15 @@ export const tailWorker = Effect.acquireRelease(
     const tail = yield* cloudflare<{ id: string; url: string }>("POST", "tails", { filters: [] });
     const events: SchedulerEvent[] = [];
     const exceptions: { at: number; entrypoint?: string; name: string; message: string }[] = [];
+    const stream = {
+      traces: 0,
+      lastTraceAt: 0,
+      closed: null as { code: number; reason: string } | null,
+    };
     const socket = new WebSocket(tail.url, "trace-v1");
+    socket.onclose = ({ code, reason }) => (stream.closed = { code, reason });
     socket.onmessage = async (message) => {
+      stream.traces++;
       const text =
         typeof message.data === "string" ? message.data : await new Response(message.data).text();
       const trace = JSON.parse(text) as {
@@ -144,6 +151,7 @@ export const tailWorker = Effect.acquireRelease(
         logs?: { message: unknown[] }[];
         exceptions?: { name: string; message: string }[];
       };
+      stream.lastTraceAt = Math.max(stream.lastTraceAt, trace.eventTimestamp);
       for (const { name, message } of trace.exceptions ?? []) {
         exceptions.push({
           at: trace.eventTimestamp,
@@ -163,9 +171,10 @@ export const tailWorker = Effect.acquireRelease(
       }
     };
     yield* attempt("open tail", () => new Promise((resolve) => (socket.onopen = resolve)));
+    socket.send(JSON.stringify({ debug: false }));
     // A new tail drops events for its first few seconds.
     yield* Effect.sleep("5 seconds");
-    return { tail, socket, events, exceptions };
+    return { tail, socket, events, exceptions, stream };
   }),
   ({ tail, socket }) =>
     Effect.sync(() => socket.close()).pipe(
@@ -173,9 +182,10 @@ export const tailWorker = Effect.acquireRelease(
       Effect.ignore,
     ),
 ).pipe(
-  Effect.map(({ events, exceptions }) => ({
+  Effect.map(({ events, exceptions, stream }) => ({
     events: () => [...events],
     exceptions: () => [...exceptions],
+    stream: () => ({ ...stream, lastTraceAt: new Date(stream.lastTraceAt).toISOString() }),
   })),
 );
 

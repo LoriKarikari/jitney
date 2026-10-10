@@ -12,7 +12,7 @@
     "check": "pnpm fmt:check && pnpm lint && pnpm knip && pnpm -r check"
   },
   "devDependencies": {
-    "knip": "^6.39.0",
+    "knip": "^6.40.0",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:"

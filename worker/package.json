@@ -21,7 +21,7 @@
     "octokit": "^5.0.5"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
     "@types/node": "catalog:",
     "drizzle-kit": "^0.31.11",
     "typescript": "catalog:",

@@ -16,12 +16,12 @@
   "dependencies": {
     "@octokit/auth-app": "catalog:",
     "@octokit/webhooks-methods": "^6.0.0",
-    "drizzle-orm": "^0.45.3",
+    "drizzle-orm": "^0.45.4",
     "effect": "catalog:",
     "octokit": "^5.0.5"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.22.0",
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
     "@types/node": "catalog:",
     "drizzle-kit": "^0.31.11",
     "typescript": "catalog:",

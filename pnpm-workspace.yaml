@@ -5,15 +5,15 @@ packages:
 
 catalog:
   "@octokit/auth-app": ^8.3.1
-  "@types/node": ^26.6.3
+  "@types/node": ^26.6.5
   # Alchemy and Effect are pre-GA and must move together.
   effect: 4.0.0-beta.102
-  oxfmt: ^0.71.0
-  oxlint: ^1.86.0
-  oxlint-tsgolint: ^7.0.2003
+  oxfmt: ^0.74.0
+  oxlint: ^1.89.0
+  oxlint-tsgolint: ^7.0.2004
   typescript: ^7.0.2
-  vitest: ^4.1.11
-  wrangler: ^4.146.0
+  vitest: ^4.1.12
+  wrangler: ^4.151.3
 
 peerDependencyRules:
   allowedVersions:
